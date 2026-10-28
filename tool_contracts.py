@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from .game.observation import Observation
 
@@ -21,7 +21,35 @@ class ToolExecutionError(RuntimeError):
         self.details = details or {}
 
 
+class ReceiptLost(RuntimeError):
+    """A write may have been applied but its reply never arrived; retry with the same idempotency key."""
+
+    def __init__(self, idempotency_key: str) -> None:
+        super().__init__("Write receipt lost; retry the same changeset with its idempotency key.")
+        self.idempotency_key = idempotency_key
+
+
 ToolHandler = Callable[[dict[str, Any]], Awaitable[Mapping[str, Any] | Observation]]
+
+
+@runtime_checkable
+class GameWritePort(Protocol):
+    """Write and event methods of the game port. Reads stay on ToolHandler."""
+
+    async def dry_run(self, changeset: Mapping[str, Any]) -> Mapping[str, Any]: ...
+
+    async def commit(self, changeset: Mapping[str, Any]) -> Mapping[str, Any]: ...
+
+    async def undo(self, token: str) -> Mapping[str, Any]: ...
+
+    async def events(self, since: int = 0) -> list[Mapping[str, Any]]:
+        """Events with seq greater than since, oldest first. Every event carries an increasing seq;
+        the caller keeps the cursor, so reading never consumes events."""
+        ...
+
+    async def push_policy(self, policy: Mapping[str, Any]) -> Mapping[str, Any]: ...
+
+    async def set_paused(self, paused: bool, *, role: str) -> Mapping[str, Any]: ...
 
 
 @dataclass(frozen=True, slots=True)
