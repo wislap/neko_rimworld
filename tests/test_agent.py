@@ -286,8 +286,9 @@ async def test_over_budget_submission_is_returned_to_the_model_for_revision() ->
     )
     result = await runtime.run("Answer with detail.", settings(), capabilities=tuple([query_tool(digest)]))
 
-    assert model.requests[1][1] == {"role": "user", "content": "Answer with detail."}
-    assert model.requests[1][2] == {"role": "assistant", "content": over_budget}
+    assert model.requests[1][0] == model.requests[0][0]
+    assert model.requests[1][2] == {"role": "user", "content": "Answer with detail."}
+    assert model.requests[1][3] == {"role": "assistant", "content": over_budget}
     assert "完整报告" not in json.dumps(model.requests[1], ensure_ascii=False)
     assert "完整报告" in result["answer"]
     assert result["summary"] == final_text

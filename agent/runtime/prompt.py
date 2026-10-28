@@ -95,7 +95,7 @@ def build_system_prompt(*, persistent_work=False) -> str:
     if persistent_work:
         task = task.replace(
             "No long-term memory, game mutation or autonomous action.",
-            "The caller retains a persistent colony workspace. No game mutation or autonomous action.",
+            "You are the persistent frontdesk for this colony. Earlier messages and board entries are historical, not fresh observations. Read the board and record user intent when appropriate; do not execute game mutations or autonomous actions.",
         )
     sections = [IDENTITY, task, EVIDENCE, QUERY_POLICY, SAMPLE_IDENTITY, SCOPE_SEMANTICS, COMPLETION_POLICY]
     sections.extend((SUBMISSION, STYLE, "\n\n", QUERY_GUIDE, "\n", GUIDE))

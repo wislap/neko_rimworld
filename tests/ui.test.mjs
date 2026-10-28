@@ -290,6 +290,24 @@ test("debug remains a top-level destination from advice, history and settings",a
   }finally{await h.close()}
 });
 
+test("run budgets reject fractional counts and save independent input and request limits",async()=>{
+  const h=setup();try{
+    await h.tab("设置");
+    const inputFor=label=>[...h.root.querySelectorAll('label')].find(node=>node.textContent.startsWith(label))?.querySelector('input');
+    await h.type(inputFor("单次运行模型请求上限"),"2.5");
+    assert.ok(h.button("保存模型设置").disabled);
+    assert.match(h.root.textContent,/请求次数必须为整数/);
+    assert.ok(h.calls.every(call=>call.id!=="begin_settings_save"));
+    await h.type(inputFor("单次运行模型请求上限"),"8");
+    await h.type(inputFor("单次运行累计输入上限"),"12345");
+    await h.click("保存模型设置");
+    const saved=h.calls.find(call=>call.id==="begin_settings_save");
+    assert.equal(saved.args.budgets.max_model_calls,8);
+    assert.equal(saved.args.budgets.max_input_tokens,12345);
+    assert.equal(saved.args.budgets.run_budget_seconds,900);
+  }finally{await h.close()}
+});
+
 test("output budget is editable and length errors display actual limits",async()=>{
   const h=setup();try{
     await h.tab("设置");
@@ -745,7 +763,7 @@ test("English and fallback locales render translated settings, guidance and trou
   const h=setup(locale);try{
    await flush();assert.match(h.root.textContent,/Get started with RimWorld advice/)
    await h.click("Settings",'[role="tab"]');assert.match(h.root.textContent,/Save model settings/)
-   assert.match(h.root.textContent,/Advanced: time and output limits/)
+   assert.match(h.root.textContent,/Advanced: run and model limits/)
    assert.doesNotMatch(h.root.textContent,/[\u4e00-\u9fff]|settings\.[a-z]|debug\.[a-z]/)
    await h.click("Troubleshooting",'[role="tab"]');assert.match(h.root.textContent,/Original readings/)
    assert.doesNotMatch(h.root.textContent,/[\u4e00-\u9fff]|debug\.[a-z]/)

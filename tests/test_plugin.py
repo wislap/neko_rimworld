@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import asyncio
 import copy
 import json
@@ -720,14 +722,14 @@ async def test_output_budget_save_validate_and_context():
 
 
 @pytest.mark.asyncio
-async def test_consult_returns_only_independent_agent_result() -> None:
+async def test_consult_returns_only_independent_agent_result(tmp_path) -> None:
     class FakeAgentRuntime:
         def __init__(self) -> None:
             self.calls: list[tuple[str, AgentModelSettings]] = []
 
-        async def run(self, question: str, settings: AgentModelSettings, *, capabilities=()) -> dict[str, Any]:
-            self.calls.append((question, settings))
-            assert [tool.name for tool in capabilities] == ["workspace_history"]
+        async def execute(self, session, settings: AgentModelSettings) -> dict[str, Any]:
+            self.calls.append((session.question, settings))
+            assert [tool.name for tool in session.capabilities] == ["frontdesk_board", "recall"]
             return {
                 "status": "ok",
                 "answer": "The colony is stable.",
@@ -746,14 +748,17 @@ async def test_consult_returns_only_independent_agent_result() -> None:
     )
     runtime = FakeAgentRuntime()
     plugin._agent_runtime = runtime
+    plugin.data_path = lambda name: tmp_path / name
+    plugin._bridge = SimpleNamespace(session=SimpleNamespace(colony_id="colony", load_epoch="epoch", game_tick=1))
 
     result = await plugin.rimworld_consult(question="  How is the colony?  ")
 
     assert result.value["answer"] == "The colony is stable."
-    assert result.value["summary"] == "Standalone consultation; no ongoing workspace attached. The colony is stable."
+    assert "The colony is stable." in result.value["summary"]
     assert result.value["reply"] == result.value["summary"]
-    assert result.value["continuity"]["reason"] == "caller_identity_unavailable"
-    assert runtime.calls == [("How is the colony?", plugin._agent_settings)]
+    assert result.value["workspace"]["history_saved"]
+    assert runtime.calls == [("  How is the colony?  ", plugin._agent_settings)]
+    await plugin._workspace_service.close()
 
 
 def test_agent_handoff_does_not_derive_agent_text_from_degraded_fields() -> None:
@@ -777,7 +782,7 @@ def test_agent_handoff_does_not_derive_agent_text_from_degraded_fields() -> None
 
 
 @pytest.mark.asyncio
-async def test_pending_agent_model_call_does_not_block_dashboard_context() -> None:
+async def test_pending_agent_model_call_does_not_block_dashboard_context(tmp_path) -> None:
     started = asyncio.Event()
 
     class WaitingModel:
@@ -802,6 +807,8 @@ async def test_pending_agent_model_call_does_not_block_dashboard_context() -> No
         model_factory=lambda _settings: WaitingModel(),
     )
 
+    plugin.data_path = lambda name: tmp_path / name
+    plugin._bridge = SimpleNamespace(session=SimpleNamespace(colony_id="colony", load_epoch="epoch", game_tick=1), running=True)
     task = asyncio.create_task(plugin.rimworld_consult(question="How is the colony?"))
     await asyncio.wait_for(started.wait(), 2)
     dashboard = await asyncio.wait_for(plugin.dashboard_ui_context(), timeout=0.2)
@@ -812,6 +819,7 @@ async def test_pending_agent_model_call_does_not_block_dashboard_context() -> No
     with pytest.raises(asyncio.CancelledError):
         await task
     assert plugin._agent_runtime.snapshot()["active_count"] == 0
+    await plugin._workspace_service.close()
 
 
 @pytest.mark.asyncio
@@ -913,7 +921,7 @@ async def test_budget_settings_persist_validate_and_keep_existing_credentials():
         base_url="https://example.com/v1",
         model="test",
         ui_nonce=plugin._settings_action_nonce,
-        budgets={"run_budget_seconds": 900},
+        budgets={"run_budget_seconds": 86401},
     )
     assert failed.error.code == "invalid_agent_settings" and len(plugin.config.updates) == updates
     dashboard = await plugin.dashboard_ui_context()

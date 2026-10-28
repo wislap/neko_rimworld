@@ -402,7 +402,7 @@ async def test_integrated_flows_keep_actual_messages_native_evidence_and_full_de
         result = await runtime.run(question, settings())
     else:
         session = AgentRunSession.create(ledger=AgentAuditLedger(question), question=question,
-                                        context_messages=({"role": "user", "content": "Previous consultation; not current facts."},))
+                                        history=({"role": "user", "content": "Previous consultation; not current facts."},))
         result = await runtime.execute(session, settings())
     assert result["status"] == "ok"
     assert len(reads) == len(flow) and result["observations"] == observations

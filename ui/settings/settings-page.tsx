@@ -37,7 +37,7 @@ export function SettingsPage({ c }: { c: SettingsController }) {
       <details><summary style={{ cursor: "pointer", paddingBlock: "8px" }}>{t("settings.advanced")}</summary><Stack>
         <TextBlock text={t("settings.budgetHelp")} />
         <TextBlock text={t("settings.retryHelp")} />
-        <Grid cols={2}>{BUDGET_FIELDS.map(field => <Field key={field.key} label={t(`settings.budget.${field.key}`)} help={t(field.key === "max_output_tokens" ? "settings.tokenRange" : "settings.secondRange", { min: field.min, max: field.max })} required>
+        <Grid cols={2}>{BUDGET_FIELDS.map(field => <Field key={field.key} label={t(`settings.budget.${field.key}`)} help={t(field.unit === "tokens" ? "settings.tokenRange" : field.unit === "calls" ? "settings.callRange" : "settings.secondRange", { min: field.min, max: field.max })} required>
           <NumberInput value={c.budgets[field.key]} min={field.min} max={field.max} step={1} disabled={busy} onChange={value => c.changeBudget(field.key, value === "" ? "" : Number(value))} />
         </Field>)}</Grid>
         {invalidBudget ? <Alert tone="warning">{invalidBudget}</Alert> : null}

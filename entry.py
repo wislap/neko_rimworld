@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import secrets
 import sqlite3
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ from plugin.sdk.plugin import (
 
 from .agent.delivery.handoff import attach_agent_handoff, count_handoff_tokens
 from .agent.model.model_client import (
+    MAX_RUN_BUDGET_SECONDS,
     AgentConfigurationError,
     AgentModelSettings,
     build_agent_model_settings,
@@ -47,8 +49,7 @@ from .game.state import BridgeStateStore, BridgeStatus, DiagnosticRing, json_saf
 from .knowledge import KnowledgeLibrary
 from .reports import ReportError, ReportStore
 from .tool_contracts import ToolExecutionError, ToolSetup
-from .workspace.history_tools import make_history_tool
-from .workspace.service import NoCurrentWork, WorkspaceService
+from .workspace.runtime import FrontdeskService
 from .workspace.views import WorkspaceViews
 
 PLUGIN_VERSION = "3.2.0"
@@ -140,6 +141,7 @@ def _consultation_handoff(result, question):
         code = result.get("audit", {}).get("error_code")
         reasons = {
             "agent_run_budget": ("调查超时，未完整完成。", "Consultation incomplete: time limit."),
+            "agent_request_budget": ("模型请求次数已达上限，调查未完整完成。", "Consultation incomplete: model request limit."),
             "world_changed": ("游戏世界已改变，需重新咨询。", "The game world changed; consult again."),
             "agent_input_budget": ("输入预算已耗尽，调查未完整完成。", "Consultation incomplete: input limit."),
         }
@@ -193,6 +195,7 @@ class NekoRimworldPlugin(NekoPluginBase):
             report_sink=self._save_report,
         )
         self._workspace_service = None
+        self._frontdesk_entry_locks = {}
         self._consultation_tasks = set()
         self._settings_saves = SettingsSaveOperations()
 
@@ -295,6 +298,8 @@ class NekoRimworldPlugin(NekoPluginBase):
                         "stream_idle_timeout_seconds",
                         "request_timeout_seconds",
                         "run_budget_seconds",
+                        "max_model_calls",
+                        "max_input_tokens",
                         "finalization_reserve_seconds",
                         "max_output_tokens",
                     )
@@ -363,7 +368,7 @@ class NekoRimworldPlugin(NekoPluginBase):
         try:
             game = getattr(self._bridge, "session", None)
             view = await asyncio.to_thread(
-                WorkspaceViews(self.data_path("workspaces") / "work.sqlite").read,
+                WorkspaceViews(self.data_path("workspaces") / "events.sqlite").read,
                 action,
                 workspace_id=workspace_id,
                 turn_id=turn_id,
@@ -389,10 +394,7 @@ class NekoRimworldPlugin(NekoPluginBase):
             else:
                 view["active"] = execution(workspace_id)
             if action == "turn":
-                pending = service.agent.pending_result(workspace_id, turn_id) if service is not None else None
                 view["history_saved"] = view["result"] is not None and view["status"] not in {"pending", "running"}
-                if pending is not None:
-                    view["result"] = pending
                 report_id = (view.get("result") or {}).get("report", {}).get("report_id")
                 report_id = report_id or ((view.get("handoff") or {}).get("report") or {}).get("report_id")
                 if report_id:
@@ -747,7 +749,9 @@ class NekoRimworldPlugin(NekoPluginBase):
                         "first_response_timeout_seconds": {"type": "number", "minimum": 1, "maximum": 60},
                         "stream_idle_timeout_seconds": {"type": "number", "minimum": 1, "maximum": 60},
                         "request_timeout_seconds": {"type": "number", "minimum": 3, "maximum": 60},
-                        "run_budget_seconds": {"type": "number", "minimum": 10, "maximum": 90},
+                        "run_budget_seconds": {"type": "number", "minimum": 10, "maximum": 86400},
+                        "max_model_calls": {"type": "integer", "minimum": 1, "maximum": 10000},
+                        "max_input_tokens": {"type": "integer", "minimum": 1, "maximum": 1000000000},
                         "finalization_reserve_seconds": {"type": "number", "minimum": 0, "maximum": 30},
                         "max_output_tokens": {"type": "integer", "minimum": 64, "maximum": 131072},
                     },
@@ -786,6 +790,8 @@ class NekoRimworldPlugin(NekoPluginBase):
             "stream_idle_timeout_seconds",
             "request_timeout_seconds",
             "run_budget_seconds",
+            "max_model_calls",
+            "max_input_tokens",
             "finalization_reserve_seconds",
             "max_output_tokens",
         }
@@ -801,6 +807,8 @@ class NekoRimworldPlugin(NekoPluginBase):
                 api_key=effective_key,
                 request_timeout_seconds=selected_budgets["request_timeout_seconds"],
                 run_budget_seconds=selected_budgets["run_budget_seconds"],
+                max_model_calls=selected_budgets["max_model_calls"],
+                max_input_tokens=selected_budgets["max_input_tokens"],
                 max_output_tokens=selected_budgets["max_output_tokens"],
                 temperature=self._agent_settings.temperature,
                 connect_timeout_seconds=selected_budgets["connect_timeout_seconds"],
@@ -822,6 +830,8 @@ class NekoRimworldPlugin(NekoPluginBase):
                             "api_key": next_settings.api_key,
                             "request_timeout_seconds": next_settings.request_timeout_seconds,
                             "run_budget_seconds": next_settings.run_budget_seconds,
+                            "max_model_calls": next_settings.max_model_calls,
+                            "max_input_tokens": next_settings.max_input_tokens,
                             "max_output_tokens": next_settings.max_output_tokens,
                             "temperature": next_settings.temperature,
                             "connect_timeout_seconds": next_settings.connect_timeout_seconds,
@@ -887,18 +897,28 @@ class NekoRimworldPlugin(NekoPluginBase):
             "additionalProperties": False,
         },
         llm_result_fields=["summary"],
-        timeout=100.0,
+        timeout=MAX_RUN_BUDGET_SECONDS + 10,
         metadata={"llm_result_fields": ["summary"]},
     )
     async def rimworld_consult(self, question: str = "", *, _ctx: object = None):
         task = asyncio.current_task()
         self._consultation_tasks.add(task)
         try:
-            return await self._consultation(question, _ctx)
+            game = getattr(self._bridge, "session", None)
+            if game is None:
+                return await self._consultation(question, _ctx, game)
+            locks = getattr(self, "_frontdesk_entry_locks", None)
+            if locks is None:
+                locks = self._frontdesk_entry_locks = {}
+            async with locks.setdefault(game.colony_id, asyncio.Lock()):
+                current = getattr(self._bridge, "session", None)
+                if current is None or (current.colony_id, current.load_epoch) != (game.colony_id, game.load_epoch):
+                    return Err(SdkError("The active colony changed while waiting; retry in the current colony.", code="world_changed"))
+                return await self._consultation(question, _ctx, game)
         finally:
             self._consultation_tasks.discard(task)
 
-    async def _consultation(self, question, _ctx):
+    async def _consultation(self, question, _ctx, game):
         if not isinstance(question, str) or not question.strip():
             return Err(SdkError("A RimWorld question is required.", code="invalid_question"))
         normalized = question.strip()
@@ -912,68 +932,52 @@ class NekoRimworldPlugin(NekoPluginBase):
                     code="agent_not_configured",
                 )
             )
-        context = _ctx
-        role = context.get("lanlan_name") if isinstance(context, Mapping) else None
-        if not isinstance(role, str) or not role.strip():
-            role = getattr(getattr(self, "_host_ctx", None), "current_lanlan", None)
-        game = getattr(self._bridge, "session", None)
-
-        async def standalone(reason):
-            value = await self._agent_runtime.run(
-                normalized,
-                settings,
-                capabilities=(make_history_tool(report_store=self._reports, question=normalized),),
-            )
-            value["continuity"] = {"bound": False, "reason": reason}
-            return value
-
-        if not isinstance(role, str) or not role.strip():
-            result = await standalone("caller_identity_unavailable")
-        else:
+        if game is None:
+            return Err(SdkError("A connected colony is required for persistent frontdesk work.", code="colony_unavailable"))
+        try:
             service = getattr(self, "_workspace_service", None)
             if service is None or service.closed:
-                service = WorkspaceService(
-                    self.data_path("workspaces") / "work.sqlite",
-                    self._agent_runtime,
+                service = FrontdeskService(
+                    self.data_path("workspaces") / "events.sqlite", self._agent_runtime,
                     game_session=lambda: getattr(self._bridge, "session", None),
-                    report_store=self._reports,
                 )
                 self._workspace_service = service
-            try:
-                result = await service.consult(
-                    role.strip(), game.colony_id if game is not None else None, normalized, settings
-                )
-            except NoCurrentWork:
-                result = await standalone("no_retained_work")
-            except (OSError, sqlite3.Error, ValueError) as exception:
-                incident = self._record_unexpected("workspace", "Persistent work could not be completed.", exception)
-                return Err(
-                    SdkError(
-                        "The ongoing work could not be saved or loaded; retry after checking storage.",
-                        code="workspace_unavailable",
-                        details={"incident_id": incident},
-                    )
-                )
+            await service.settle_pending(game.colony_id)
+            request_id = _ctx.get("run_id") if isinstance(_ctx, Mapping) else None
+            request_id = request_id if isinstance(request_id, str) and request_id else None
+            retained_response = await service.call("retained_response", game.colony_id, game.load_epoch, question, request_id) if request_id else None
+            current = getattr(self._bridge, "session", None)
+            if current is None or (current.colony_id, current.load_epoch) != (game.colony_id, game.load_epoch):
+                return Err(SdkError("The active colony changed during lookup; retry in the current colony.", code="world_changed"))
+            if retained_response is not None and retained_response.get("delivery_payload"):
+                saved_delivery = json.loads(retained_response["delivery_payload"])
+                if saved_delivery.get("handoff") is not None:
+                    return Ok(saved_delivery["handoff"])
+            if retained_response is not None:
+                result = copy.deepcopy(retained_response["payload"]["result"])
+                result["workspace"] = {"workspace_id": game.colony_id, "turn_id": str(retained_response["payload"]["utterance_seq"]), "state": "waiting", "history_saved": True}
+            else:
+                result = await service.consult(game, question, settings, request_id=request_id)
+            if not result["workspace"]["history_saved"]:
+                return Err(SdkError("The completed response could not be saved; retry the same request.", code="workspace_unavailable"))
+        except (OSError, sqlite3.Error, ValueError) as exception:
+            incident = self._record_unexpected("workspace", "Persistent work could not be completed.", exception)
+            return Err(SdkError("The ongoing work could not be saved or loaded; retry after checking storage.", code="workspace_unavailable", details={"incident_id": incident}))
         if result.get("report", {}).get("saved"):
             result["report"]["export"] = await self._export_report(result["report"]["report_id"], _ctx)
         handoff = _consultation_handoff(result, normalized)
         workspace = result.get("workspace")
         if workspace is not None:
             payload = {
-                "summary": handoff["summary"],
-                "delivery": handoff["delivery"],
-                "history_saved": workspace["history_saved"],
-                "report": result.get("report"),
-                "prepared_at": utc_now(),
-                "meaning": "Prepared host response; not a receipt of N.E.K.O consumption.",
+                "utterance_seq": int(workspace["turn_id"]), "summary": handoff["summary"],
+                "delivery": handoff["delivery"], "report": result.get("report"),
+                "prepared_at": utc_now(), "meaning": "Prepared host response; not a receipt of N.E.K.O consumption.", "handoff": handoff,
             }
             try:
-                await service.storage.call(
-                    "record_delivery", workspace["workspace_id"], role.strip(), workspace["turn_id"], payload
-                )
+                await service.call("record", game.colony_id, game.load_epoch, game.game_tick, "frontdesk", "agent.delivery", payload)
                 service.revision += 1
             except (OSError, sqlite3.Error, RuntimeError):
-                handoff["workspace"]["handoff_saved"] = False
+                return Err(SdkError("The prepared response could not be saved; retry the same request.", code="delivery_unavailable"))
         return Ok(handoff)
 
     async def _load_agent_tools(self) -> ToolSetup:

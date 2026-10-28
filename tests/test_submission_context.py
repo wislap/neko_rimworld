@@ -19,7 +19,7 @@ def failed(identifier, patch):
 
 def test_only_current_superseded_drafts_are_removed_and_saved_detail_survives():
     old = failed('historical', {'answer':'Historical proposal.'})
-    session = AgentRunSession.create(ledger=AgentAuditLedger('q'), question='q',context_messages=tuple(old))
+    session = AgentRunSession.create(ledger=AgentAuditLedger('q'), question='q',history=tuple(old))
     source = {'role':'tool','tool_call_id':'observation','content':'Original evidence with load epoch and actors.'}
     session.messages += [source, *failed('first', {'answer':'Old draft','detail':'SAVED DETAIL'}),
                          *failed('latest', {'answer':'Latest draft'})]

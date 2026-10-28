@@ -12,6 +12,7 @@ from ...game.state import redact_text
 from ...message_contracts import AssistantTurn
 from ..runtime.audit import AgentRunState
 from .model_client import ModelClientError
+from .tokenization import tokenizer
 
 MAX_MODEL_ATTEMPTS = 3
 MODEL_RETRY_DELAYS_SECONDS = (0.5, 1.5)
@@ -83,11 +84,20 @@ async def request_model(
         if available <= 0 and not finalizing and reserve > 0:
             finalizing = True
             break
+        if session.model_calls >= settings.max_model_calls:
+            return ModelRequestResult(None, finalizing, ModelClientError("agent_request_budget", "The model request limit was reached."))
+        encoded = json.dumps({"messages": request_messages, "tools": tool_schemas}, ensure_ascii=False, separators=(",", ":"), default=str)
+        encoding = tokenizer()
+        estimate = len(encoding.encode(encoded, disallowed_special=())) if encoding else len(encoded.encode("utf-8"))
+        if session.input_tokens_estimated + estimate > settings.max_input_tokens:
+            return ModelRequestResult(None, finalizing, ModelClientError("agent_input_budget", "The local cumulative input token estimate would exceed its limit."))
+        session.input_tokens_estimated += estimate
         request_timeout = min(
             settings.request_timeout_seconds,
             max(0.001, available),
         )
         request_event = {
+            "input_budget": {"tokens": estimate, "cumulative": session.input_tokens_estimated, "method": encoding.name if encoding else "utf8_bytes_upper_bound"},
             "model": settings.model,
             "base_url": settings.base_url,
             "timeout_seconds": request_timeout,

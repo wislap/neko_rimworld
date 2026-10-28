@@ -17,7 +17,12 @@ from ...message_contracts import AssistantTurn, ToolCall
 from .streaming import SSEDecoder, StreamAssembler, StreamProtocolError
 
 DEFAULT_MODEL_TIMEOUT_SECONDS = 60.0
-DEFAULT_RUN_BUDGET_SECONDS = 90.0
+DEFAULT_RUN_BUDGET_SECONDS = 900.0
+DEFAULT_MAX_MODEL_CALLS = 60
+DEFAULT_MAX_INPUT_TOKENS = 2_000_000
+MAX_RUN_BUDGET_SECONDS = 86_400.0
+MAX_MODEL_CALLS = 10_000
+MAX_INPUT_TOKENS = 1_000_000_000
 DEFAULT_MAX_OUTPUT_TOKENS = 32768
 DEFAULT_TEMPERATURE = 0.2
 MAX_MODEL_RESPONSE_BYTES = 8 * 1024 * 1024
@@ -47,6 +52,8 @@ class AgentModelSettings:
     api_key: str = field(default="", repr=False)
     request_timeout_seconds: float = DEFAULT_MODEL_TIMEOUT_SECONDS
     run_budget_seconds: float = DEFAULT_RUN_BUDGET_SECONDS
+    max_model_calls: int = DEFAULT_MAX_MODEL_CALLS
+    max_input_tokens: int = DEFAULT_MAX_INPUT_TOKENS
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
     temperature: float = DEFAULT_TEMPERATURE
     connect_timeout_seconds: float = 10.0
@@ -77,6 +84,8 @@ class AgentModelSettings:
             "api_key_configured": self.api_key_configured,
             "request_timeout_seconds": self.request_timeout_seconds,
             "run_budget_seconds": self.run_budget_seconds,
+            "max_model_calls": self.max_model_calls,
+            "max_input_tokens": self.max_input_tokens,
             "max_output_tokens": self.max_output_tokens,
             "temperature": self.temperature,
             "connect_timeout_seconds": self.connect_timeout_seconds,
@@ -114,6 +123,8 @@ def build_agent_model_settings(
     api_key: object = "",
     request_timeout_seconds: object = DEFAULT_MODEL_TIMEOUT_SECONDS,
     run_budget_seconds: object = DEFAULT_RUN_BUDGET_SECONDS,
+    max_model_calls: object = DEFAULT_MAX_MODEL_CALLS,
+    max_input_tokens: object = DEFAULT_MAX_INPUT_TOKENS,
     max_output_tokens: object = DEFAULT_MAX_OUTPUT_TOKENS,
     temperature: object = DEFAULT_TEMPERATURE,
     connect_timeout_seconds: object = 10.0,
@@ -143,8 +154,15 @@ def build_agent_model_settings(
     if isinstance(run_budget_seconds, bool) or not isinstance(run_budget_seconds, (int, float)):
         raise AgentConfigurationError("Agent run budget must be a number.")
     run_budget = float(run_budget_seconds)
-    if not 10.0 <= run_budget <= 90.0:
-        raise AgentConfigurationError("Agent run budget must be between 10 and 90 seconds.")
+    if not 10.0 <= run_budget <= MAX_RUN_BUDGET_SECONDS:
+        raise AgentConfigurationError(f"Agent run budget must be between 10 and {MAX_RUN_BUDGET_SECONDS:g} seconds.")
+
+    for name, value, maximum in (
+        ("max_model_calls", max_model_calls, MAX_MODEL_CALLS),
+        ("max_input_tokens", max_input_tokens, MAX_INPUT_TOKENS),
+    ):
+        if type(value) is not int or not 1 <= value <= maximum:
+            raise AgentConfigurationError(f"{name} must be an integer between 1 and {maximum}.")
 
     if isinstance(max_output_tokens, bool) or not isinstance(max_output_tokens, int):
         raise AgentConfigurationError("Agent output token limit must be an integer.")
@@ -176,6 +194,8 @@ def build_agent_model_settings(
         api_key=normalized_key,
         request_timeout_seconds=request_timeout,
         run_budget_seconds=run_budget,
+        max_model_calls=max_model_calls,
+        max_input_tokens=max_input_tokens,
         max_output_tokens=max_output_tokens,
         temperature=normalized_temperature,
         stream_include_usage=stream_include_usage,
@@ -207,6 +227,8 @@ def parse_agent_model_settings(config: object) -> tuple[AgentModelSettings, list
                 api_key=key_value,
                 request_timeout_seconds=agent.get("request_timeout_seconds", DEFAULT_MODEL_TIMEOUT_SECONDS),
                 run_budget_seconds=agent.get("run_budget_seconds", DEFAULT_RUN_BUDGET_SECONDS),
+                max_model_calls=agent.get("max_model_calls", DEFAULT_MAX_MODEL_CALLS),
+                max_input_tokens=agent.get("max_input_tokens", DEFAULT_MAX_INPUT_TOKENS),
                 max_output_tokens=agent.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS),
                 temperature=agent.get("temperature", DEFAULT_TEMPERATURE),
                 connect_timeout_seconds=agent.get("connect_timeout_seconds", 10.0),

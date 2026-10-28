@@ -145,13 +145,15 @@ export type PageId = "work" | "history" | "diagnostics" | "settings"
 export type RunView = "result" | "events" | "observations" | "model"
 export type BudgetValues = Record<string, number | "">
 export const BUDGET_FIELDS = [
-  { key: "connect_timeout_seconds", min: 1, max: 30, initial: 10 },
-  { key: "first_response_timeout_seconds", min: 1, max: 60, initial: 45 },
-  { key: "stream_idle_timeout_seconds", min: 1, max: 60, initial: 20 },
-  { key: "request_timeout_seconds", min: 3, max: 60, initial: 60 },
-  { key: "run_budget_seconds", min: 10, max: 90, initial: 90 },
-  { key: "finalization_reserve_seconds", min: 0, max: 30, initial: 15 },
-  { key: "max_output_tokens", min: 64, max: 131072, initial: 32768 },
+  { key: "connect_timeout_seconds", min: 1, max: 30, initial: 10, unit: "seconds" },
+  { key: "first_response_timeout_seconds", min: 1, max: 60, initial: 45, unit: "seconds" },
+  { key: "stream_idle_timeout_seconds", min: 1, max: 60, initial: 20, unit: "seconds" },
+  { key: "request_timeout_seconds", min: 3, max: 60, initial: 60, unit: "seconds" },
+  { key: "run_budget_seconds", min: 10, max: 86400, initial: 900, unit: "seconds" },
+  { key: "finalization_reserve_seconds", min: 0, max: 30, initial: 15, unit: "seconds" },
+  { key: "max_output_tokens", min: 64, max: 131072, initial: 32768, unit: "tokens" },
+  { key: "max_model_calls", min: 1, max: 10000, initial: 60, unit: "calls" },
+  { key: "max_input_tokens", min: 1, max: 1000000000, initial: 2000000, unit: "tokens" },
 ]
 
 export type SettingsReceipt = { operation_id: string; kind: "bridge" | "agent"; state: "saving" | "saved" | "failed" | "unconfirmed"; persisted?: boolean | null; applied?: boolean | null; error_code?: string }

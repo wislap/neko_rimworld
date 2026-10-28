@@ -45,7 +45,7 @@ def prepare(question, context=()):
     return AgentRunSession.create(
         ledger=AgentAuditLedger(question),
         question=question,
-        context_messages=context,
+        history=context,
     )
 
 
@@ -106,7 +106,8 @@ def test_length_edit_uses_current_question_with_historical_user_messages():
             {"answer": "word " * 250, "detail": "Preserved transfer evidence."}
         )
     repair = session.length_repair_messages()
-    assert repair[1] == {"role": "user", "content": "Compare the transfer stage."}
+    assert repair[0] == session.messages[0]
+    assert repair[2] == {"role": "user", "content": "Compare the transfer stage."}
     assert session.submission.detail == "Preserved transfer evidence."
 
 

@@ -33,7 +33,7 @@ def is_integer(value):
 class EventLedger:
     """Owns one SQLite file for every colony. Rows are never updated or deleted.
 
-    Callers serialize access on one thread, as WorkspaceStorage does for the existing store.
+    Callers serialize access on one thread.
     """
 
     SCHEMA = """
@@ -48,6 +48,8 @@ class EventLedger:
                 payload TEXT NOT NULL
             );
             CREATE INDEX events_colony_sequence ON events(colony_id, seq);
+            CREATE INDEX events_kind_colony_sequence ON events(kind, colony_id, seq);
+            CREATE INDEX events_utterance_reference ON events(colony_id, kind, json_extract(payload, '$.utterance_seq'), seq);
             CREATE TABLE board_revisions (
                 entry_id TEXT NOT NULL,
                 revision INTEGER NOT NULL,
@@ -86,13 +88,18 @@ class EventLedger:
             "parent", "source", "evidence", "review_at_tick", "changesets", "body",
         },
     }
+    REQUIRED_INDEX_SQL = {
+        "events_kind_colony_sequence": "CREATE INDEX events_kind_colony_sequence ON events(kind, colony_id, seq)",
+        "events_utterance_reference": ("CREATE INDEX events_utterance_reference ON events"
+                                       "(colony_id, kind, json_extract(payload, '$.utterance_seq'), seq)"),
+    }
     TRIGGERS = frozenset(
         {"sealed_event_update", "sealed_event_delete", "sealed_revision_update", "sealed_revision_delete"}
     )
 
     def __init__(self, path: Path):
         if path.exists():
-            # Admission cannot write, repair or migrate an unsupported database, as for WorkspaceStorage.
+            # Admission cannot write, repair or migrate an unsupported database.
             with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as existing:
                 existing.row_factory = sqlite3.Row
                 self._validate_schema(existing)
@@ -117,6 +124,11 @@ class EventLedger:
                 present = {row["name"] for row in db.execute(f'PRAGMA table_info("{table}")')}
                 if present != columns:
                     raise ValueError(f"Unsupported event ledger schema: {table} requires current columns")
+            indexes = {row["name"]: row["sql"] for row in db.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='events'"
+            )}
+            if any(indexes.get(name) != sql for name, sql in cls.REQUIRED_INDEX_SQL.items()):
+                raise ValueError("Unsupported event ledger schema: required event indexes are missing or changed")
             triggers = {row["name"] for row in db.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
             if not cls.TRIGGERS <= triggers:
                 raise ValueError("Unsupported event ledger schema: append-only triggers are required")
@@ -168,9 +180,52 @@ class EventLedger:
         )
         return row.fetchone() is not None
 
+    def colonies(self):
+        return [row[0] for row in self.db.execute("SELECT DISTINCT colony_id FROM events")]
+
     def events(self, colony_id):
         rows = self.db.execute("SELECT * FROM events WHERE colony_id=? ORDER BY seq", (colony_id,))
         return [_event(row) for row in rows]
+
+    def retained_response(self, colony_id, load_epoch, question, request_id):
+        row = self.db.execute(
+            "SELECT r.*, (SELECT d.payload FROM events d WHERE d.colony_id=r.colony_id AND d.kind='agent.delivery' AND json_extract(d.payload,'$.utterance_seq')=u.seq ORDER BY d.seq DESC LIMIT 1) AS delivery_payload FROM events r JOIN events u ON u.seq=json_extract(r.payload,'$.utterance_seq') "
+            "WHERE r.colony_id=? AND r.load_epoch=? AND u.load_epoch=? AND r.kind=? AND u.kind=? AND json_extract(u.payload,'$.text')=? "
+            "AND json_extract(u.payload,'$.request_id')=? AND json_extract(r.payload,'$.result.status') IN ('ok','degraded') "
+            "ORDER BY r.seq DESC LIMIT 1",
+            (colony_id, load_epoch, load_epoch, RUN_EVENT, UTTERANCE_EVENT, question, request_id),
+        ).fetchone()
+        return _event(row) if row else None
+
+    def progress(self, colony_id, utterance_seq):
+        rows = self.db.execute("SELECT * FROM events WHERE colony_id=? AND kind='agent.progress' AND json_extract(payload,'$.utterance_seq')=? ORDER BY seq", (colony_id, utterance_seq))
+        return [_event(row) for row in rows]
+
+    def interrupted_events(self, colony_id):
+        rows = self.db.execute(
+            "SELECT e.* FROM events e WHERE e.colony_id=? AND (e.kind=? OR e.kind='agent.progress') AND NOT EXISTS "
+            "(SELECT 1 FROM events r WHERE r.colony_id=e.colony_id AND r.kind=? AND json_extract(r.payload,'$.utterance_seq')=CASE WHEN e.kind=? THEN e.seq ELSE json_extract(e.payload,'$.utterance_seq') END) ORDER BY e.seq",
+            (colony_id, UTTERANCE_EVENT, RUN_EVENT, UTTERANCE_EVENT),
+        )
+        return [_event(row) for row in rows]
+
+    def context_events(self, colony_id, cutoff, pinned):
+        # Select only the window transcript fields; never decode result/audit payloads.
+        rows = self.db.execute(
+            "SELECT seq,colony_id,load_epoch,game_tick,wall_time,source,kind,"
+            "CASE WHEN kind=? THEN json_object('utterance_seq',json_extract(payload,'$.utterance_seq'),'messages',json_extract(payload,'$.messages')) ELSE payload END AS payload "
+            "FROM events WHERE colony_id=? AND ((kind IN (?,?) AND game_tick>=?) OR (kind=? AND seq IN (SELECT value FROM json_each(?)))) ORDER BY seq",
+            (RUN_EVENT, colony_id, UTTERANCE_EVENT, RUN_EVENT, cutoff, UTTERANCE_EVENT, encode(list(pinned))),
+        )
+        return [_event(row) for row in rows]
+
+    def events_by_kind(self, colony_id, kinds):
+        rows = self.db.execute("SELECT * FROM events WHERE colony_id=? AND kind IN (SELECT value FROM json_each(?)) ORDER BY seq", (colony_id, encode(list(kinds))))
+        return [_event(row) for row in rows]
+
+    def event(self, colony_id, seq):
+        row = self.db.execute("SELECT * FROM events WHERE colony_id=? AND seq=?", (colony_id, seq)).fetchone()
+        return _event(row) if row is not None else None
 
     def revision(self, entry_id):
         """The latest revision of one entry in any colony; entry ids are unique across the file."""

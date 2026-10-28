@@ -20,8 +20,7 @@ from plugin.plugins.neko_rimworld.game.query_tools import make_game_tools
 from plugin.plugins.neko_rimworld.game.situation import SituationProvider, SituationSnapshot
 from plugin.plugins.neko_rimworld.message_contracts import AssistantTurn, ToolCall
 from plugin.plugins.neko_rimworld.tool_contracts import ToolExecutionError
-from plugin.plugins.neko_rimworld.workspace.runtime import WorkspaceAgent
-from plugin.plugins.neko_rimworld.workspace.storage import WorkspaceStorage
+from plugin.plugins.neko_rimworld.workspace.runtime import FrontdeskService
 
 from .consultation_setup import consultation_setup
 from .test_runtime_repair import LOG, settings, submit
@@ -127,7 +126,7 @@ async def test_shared_bootstrap_before_first_dispatch_with_raw_report_and_one_ba
     else:
         session = AgentRunSession.create(ledger=AgentAuditLedger("What next?"), question="What next?",
                                         workspace_id="work" if kind == "persistent" else None,
-                                        context_messages=({"role": "user", "content": "Previous exchange."},))
+                                        history=({"role": "user", "content": "Previous exchange."},))
         result = await runtime.execute(session, settings())
     assert result["status"] == "ok"
     background = [m for m in inputs[0] if m.get("name") == "game_situation"]
@@ -141,7 +140,8 @@ async def test_shared_bootstrap_before_first_dispatch_with_raw_report_and_one_ba
 
 def test_length_repair_never_replays_background():
     run = AgentRunSession.create(ledger=AgentAuditLedger("q"), question="q")
-    run.messages.insert(1, {"role": "user", "name": "game_situation", "content": "large background"})
+    run.messages.insert(run.run_start, {"role": "user", "name": "game_situation", "content": "large background"})
+    run.run_start += 1
     run.submission.answer = "saved conclusion"
     run.submission.errors = {"delivery": {"code": "handoff_over_budget"}}
     assert "large background" not in json.dumps(run.length_repair_messages())
@@ -190,29 +190,24 @@ async def test_actual_persistent_history_has_only_current_background_and_cached_
             inputs.append(copy.deepcopy(messages))
             return submit("Consultation complete.")
     runtime = AgentRuntime(audit_registry=AgentAuditRegistry(), logger=LOG, model_factory=lambda _: Model(), tools_provider=provide)
-    storage = WorkspaceStorage(tmp_path / "work.db")
+    agent = FrontdeskService(tmp_path / "events.sqlite", runtime, game_session=lambda: clock)
     try:
-        work = await storage.call("create", "owner")
-        agent = WorkspaceAgent(storage, runtime)
         for question in ("First question", "Second question", "Third question"):
-            turn = await storage.call("accept", work, "owner", question)
-            result = await agent.execute(work, "owner", turn, settings(), colony_id=clock.colony_id)
-            assert result["history_saved"]
+            result = await agent.consult(clock, question, settings())
+            assert result["workspace"]["history_saved"]
             if question == "First question":
                 clock.game_tick = 20
             elif question == "Second question":
-                cached = result["result"]["situation_context"]
+                cached = result["situation_context"]
                 assert cached["cache_hit"] and cached["sample"]["finished_tick"] == 10
-                assert result["result"]["freshness"]["game_tick"] == 10
+                assert result["freshness"]["game_tick"] == 10
                 clock.game_tick = 30_010
         assert reads == [10, 30_010]
         assert len(inputs) == 3
         for request in inputs:
             assert sum(m.get("name") == "game_situation" for m in request) == 1
-            history = [m["content"] for m in request if "Caller-attached colony workspace history" in m.get("content", "")]
-            assert all("Game situation snapshot" not in item for item in history)
     finally:
-        await storage.close()
+        await agent.close()
 
 
 def test_snapshot_scope_describes_sampled_map_and_keeps_native_order():

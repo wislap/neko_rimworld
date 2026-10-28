@@ -6,7 +6,7 @@ from contextlib import closing
 
 import pytest
 
-from ..workspace.store import WorkspaceStore
+from ..workspace.ledger import EventLedger
 from ..workspace.views import WorkspaceViews
 
 
@@ -20,17 +20,17 @@ def snapshot(path):
     return hashlib.sha256(path.read_bytes()).hexdigest(), schema, rows
 
 
-@pytest.mark.parametrize("mutation", ["DROP TRIGGER sealed_observation", "DROP INDEX workspace_turn_sequence", "ALTER TABLE workspaces RENAME COLUMN work_state TO retired_state"])
+@pytest.mark.parametrize("mutation", ["DROP TRIGGER sealed_event_update", "DROP TRIGGER sealed_revision_delete", "DROP INDEX events_utterance_reference", "DROP INDEX events_kind_colony_sequence", "ALTER TABLE events RENAME COLUMN source TO retired_source"])
 def test_missing_owned_schema_is_rejected_without_repair(tmp_path, mutation):
     path = tmp_path / "unsupported.sqlite"
-    store = WorkspaceStore(path)
+    store = EventLedger(path)
     store.close()
     with sqlite3.connect(path) as db:
         db.execute(mutation)
     original = snapshot(path)
-    with pytest.raises(ValueError, match="Unsupported workspace schema"):
-        WorkspaceStore(path)
-    with pytest.raises(ValueError, match="Unsupported workspace schema"):
+    with pytest.raises(ValueError, match="Unsupported event ledger schema"):
+        EventLedger(path)
+    with pytest.raises(ValueError, match="Unsupported event ledger schema"):
         WorkspaceViews(path).read("list")
     assert snapshot(path) == original
 
@@ -41,13 +41,13 @@ def test_old_foundation_database_and_non_sqlite_file_are_not_rewritten(tmp_path)
         db.execute("CREATE TABLE workspaces(id TEXT PRIMARY KEY,owner TEXT NOT NULL,focus TEXT NOT NULL)")
         db.execute("INSERT INTO workspaces VALUES ('old','caller','original focus')")
     original = snapshot(path)
-    with pytest.raises(ValueError, match="Unsupported workspace schema"):
-        WorkspaceStore(path)
+    with pytest.raises(ValueError, match="Unsupported event ledger schema"):
+        EventLedger(path)
     assert snapshot(path) == original
     invalid = tmp_path / "unknown.sqlite"
     invalid.write_bytes(b"original non-database bytes")
-    with pytest.raises(ValueError, match="Unsupported workspace database"):
-        WorkspaceStore(invalid)
+    with pytest.raises(ValueError, match="Unsupported event ledger database"):
+        EventLedger(invalid)
     assert invalid.read_bytes() == b"original non-database bytes"
 
 

@@ -19,15 +19,22 @@ def frontdesk_messages(events, *, now_tick, window_ticks=180_000):
     return messages
 
 
-def recall(events, event_seq, tool_call_id=None):
-    """Original text of an utterance, or of one tool result of a run; anything else is a KeyError."""
+def recall(events, event_seq, tool_call_id=None, *, progress=()):
+    """Read retained utterances or the unpruned tool result, never a projection placeholder."""
     event = _event_at(events, event_seq)
     if event["kind"] == UTTERANCE_EVENT and tool_call_id is None:
         return event["payload"]["text"]
     if event["kind"] == RUN_EVENT and tool_call_id is not None:
-        for message in event["payload"]["messages"]:
-            if message["role"] == "tool" and message["tool_call_id"] == tool_call_id:
-                return message["content"]
+        for item in progress:
+            payload = item["payload"]
+            if payload.get("tool_call_id") == tool_call_id and "tool_result" in payload:
+                return encode({"tool_result": payload["tool_result"], "observation": payload.get("observation")})
+        from ..reports import plain
+        for item in (event["payload"].get("audit") or {}).get("events", []):
+            data = plain(item.get("data", {}))
+            if item.get("event") in {"tool_completed", "tool_failed"} and data.get("call_id") == tool_call_id and "result" in data:
+                return encode({"tool_result": data["result"], "observation": None})
+        raise KeyError("Original tool result is unavailable; the model projection is not the original")
     raise KeyError(f"No recallable original at event {event_seq} for tool_call_id {tool_call_id!r}")
 
 
@@ -69,7 +76,7 @@ def _view_message(message, run, names):
         "recall": {"event_seq": run["seq"], "tool_call_id": message["tool_call_id"]},
         "tool": names[message["tool_call_id"]],
         "game_tick": run["game_tick"],
-        "note": "original retained; recall by event_seq and tool_call_id",
+        "note": "recall original by event_seq and tool_call_id when retained",
     }
     return {**message, "content": encode(placeholder)}
 

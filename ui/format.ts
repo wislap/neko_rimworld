@@ -68,11 +68,12 @@ export function progressText(run: Record<string, any> | null | undefined, t: (ke
     return t(`progress.${key}`)
 }
 
-export function budgetError(values: Record<string, number | "">, fields: Array<{ key: string; min: number; max: number }>, t: (key: string, params?: Record<string, any>) => string): string | null {
+export function budgetError(values: Record<string, number | "">, fields: Array<{ key: string; min: number; max: number; unit?: string }>, t: (key: string, params?: Record<string, any>) => string): string | null {
   for (const field of fields) {
     const value = values[field.key]
-    if (field.key === "max_output_tokens" && !Number.isInteger(value)) return t("settings.integerTokens")
-    if (typeof value !== "number" || !Number.isFinite(value) || value < field.min || value > field.max) return t(field.key === "max_output_tokens" ? "settings.invalidTokenRange" : "settings.invalidSecondRange", { label: t(`settings.budget.${field.key}`), min: field.min, max: field.max })
+    const unit = field.unit || (field.key === "max_output_tokens" ? "tokens" : "seconds")
+    if (unit !== "seconds" && !Number.isInteger(value)) return t("settings.integerTokens")
+    if (typeof value !== "number" || !Number.isFinite(value) || value < field.min || value > field.max) return t(unit === "tokens" ? "settings.invalidTokenRange" : unit === "calls" ? "settings.invalidCallRange" : "settings.invalidSecondRange", { label: t(`settings.budget.${field.key}`), min: field.min, max: field.max })
   }
   return null
 }

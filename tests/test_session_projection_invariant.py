@@ -26,6 +26,7 @@ def session(**kwargs):
     return AgentRunSession(
         ledger=AgentAuditLedger("question"), question="question",
         messages=[{"role": "system", "content": "system"}, {"role": "user", "content": "question"}],
+        run_start=1,
         **kwargs,
     )
 

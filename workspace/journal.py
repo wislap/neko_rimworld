@@ -26,8 +26,30 @@ class Journal:
     def close(self):
         self._ledger.close()
 
+    def colonies(self):
+        return self._ledger.colonies()
+
     def events(self, colony_id):
         return self._ledger.events(colony_id)
+
+    def retained_response(self, colony_id, load_epoch, question, request_id):
+        return self._ledger.retained_response(colony_id, load_epoch, question, request_id)
+
+    def progress(self, colony_id, utterance_seq):
+        return self._ledger.progress(colony_id, utterance_seq)
+
+    def interrupted_events(self, colony_id):
+        return self._ledger.interrupted_events(colony_id)
+
+    def context_events(self, colony_id, now_tick, board):
+        pinned = [row["source"]["event_seq"] for row in board if row["kind"] == "intent" and row["status"] != "closed"]
+        return self._ledger.context_events(colony_id, now_tick - 180_000, pinned)
+
+    def event(self, colony_id, seq):
+        return self._ledger.event(colony_id, seq)
+
+    def events_by_kind(self, colony_id, kinds):
+        return self._ledger.events_by_kind(colony_id, kinds)
 
     def record(self, colony_id, load_epoch, game_tick, source, kind, payload):
         """Append an event kind that no typed writer owns; board, load, takeover and return have their own."""
@@ -35,10 +57,10 @@ class Journal:
             raise ValueError(f"{kind} events are written by their own operation")
         return self._ledger.append(colony_id, load_epoch, game_tick, source, kind, payload)
 
-    def record_utterance(self, colony_id, load_epoch, game_tick, text):
+    def record_utterance(self, colony_id, load_epoch, game_tick, text, *, request_id=None):
         if not isinstance(text, str) or not text.strip():
             raise ValueError("A user utterance requires text")
-        return self._ledger.append(colony_id, load_epoch, game_tick, USER, UTTERANCE_EVENT, {"text": text})
+        return self._ledger.append(colony_id, load_epoch, game_tick, USER, UTTERANCE_EVENT, {"text": text, "request_id": request_id})
 
     def record_load(self, colony_id, load_epoch, game_tick):
         return self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, LOAD_EVENT, {})
@@ -60,14 +82,14 @@ class Journal:
             payload = {"takeover_seq": takeover_seq, "utterance_seq": utterance_seq}
             return self._ledger.append(colony_id, load_epoch, game_tick, FRONTDESK, RETURN_EVENT, payload)
 
-    def record_run(self, colony_id, load_epoch, game_tick, role, utterance_seq, messages):
+    def record_run(self, colony_id, load_epoch, game_tick, role, utterance_seq, messages, *, result=None, audit=None):
         """Append the assistant and tool messages one frontdesk run added, answering a user utterance."""
         if role != FRONTDESK:
             raise ValueError("Only the frontdesk session records runs; the planner has no session")
         if not self._ledger.has_event(colony_id, UTTERANCE_EVENT, utterance_seq):
             raise ValueError("A run answers a user utterance of this colony")
         _check_run_messages(messages)
-        payload = {"utterance_seq": utterance_seq, "messages": messages}
+        payload = {"utterance_seq": utterance_seq, "messages": messages, "result": result, "audit": audit}
         return self._ledger.append(colony_id, load_epoch, game_tick, FRONTDESK, RUN_EVENT, payload)
 
     def submit(self, colony_id, load_epoch, game_tick, actor, submission):
@@ -103,10 +125,10 @@ class Journal:
         return current_board(self._ledger.revisions(colony_id))
 
     def takeovers(self, colony_id):
-        return open_takeovers(self._ledger.events(colony_id))
+        return open_takeovers(self._ledger.events_by_kind(colony_id, (TAKEOVER_EVENT, RETURN_EVENT)))
 
     def review_marks(self, colony_id):
-        return review_marks(self._ledger.revisions(colony_id), self._ledger.events(colony_id))
+        return review_marks(self._ledger.revisions(colony_id), self._ledger.events_by_kind(colony_id, (LOAD_EVENT, TAKEOVER_EVENT)))
 
 
 def current_board(revisions):
@@ -120,8 +142,8 @@ def current_board(revisions):
 
 def _check_run_messages(messages):
     """Only assistant and tool messages; each tool call is answered by its own tool message right after."""
-    if not isinstance(messages, list) or not messages:
-        raise ValueError("A run records its messages as a non-empty list")
+    if not isinstance(messages, list):
+        raise ValueError("A run records its messages as a list")
     pending = set()
     for message in messages:
         if not isinstance(message, dict) or message.get("role") not in RUN_ROLES:

@@ -460,7 +460,8 @@ def test_length_only_repair_does_not_replay_world_or_detail_and_never_hides_clai
     before = copy.deepcopy(session.messages)
     repair = session.length_repair_messages()
     assert "LARGE WORLD DATA" not in json.dumps(repair) and "SAVED FULL REPORT" not in json.dumps(repair)
-    assert repair[2]["content"] == session.submission.answer
+    assert repair[0] == session.messages[0]
+    assert repair[3]["content"] == session.submission.answer
     assert session.messages == before and session.submission.detail == "SAVED FULL REPORT"
     session.submission.errors = {"delivery": {"code": "unsupported_claim"}}
     assert session.length_repair_messages() is None

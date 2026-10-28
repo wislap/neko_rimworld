@@ -72,10 +72,12 @@ class AgentRuntime:
         session: AgentRunSession,
         settings: AgentModelSettings,
     ) -> dict[str, Any]:
-        """Execute a fresh prepared session with the existing tools and delivery.
+        """Execute a prepared session with the existing tools and delivery.
 
-        The caller owns context preparation and the lifetime of its work. This
-        execution owns model/tool calls, deadlines, cancellation and one result.
+        The ledger must be fresh (one run per ledger); the session may carry
+        prior history messages before its own user message. The caller owns
+        context preparation and the lifetime of its work. This execution owns
+        model/tool calls, deadlines, cancellation and one result.
         No persisted transcript or experimental module is loaded here.
         """
         ledger = session.ledger
@@ -332,6 +334,8 @@ class AgentRuntime:
                 raise ToolExecutionError("world_changed", "Situation snapshot belongs to another colony.", recoverable=False)
             session.interaction.sample_identity = identity
             session.observations.append(observation)
+            if session.persist_progress is not None:
+                await session.persist_progress({"stage": "situation", "observation": observation})
             payload = response["payload"]
             if payload["status"] in {"ok", "partial"}:
                 context = compile_situation(snapshot)
@@ -347,9 +351,10 @@ class AgentRuntime:
         session.situation_context = context
         # The caller's question stays last. Dynamic background never becomes an
         # instruction or an automatically repeated persistent-history attachment.
-        session.messages.insert(len(session.messages) - 1, {
+        session.messages.insert(session.run_start, {
             "role": "user", "name": "game_situation", "content": context["content"],
         })
+        session.run_start += 1
         session.ledger.record("situation_context_bound", context)
 
     async def _run_loop(
@@ -440,7 +445,7 @@ class AgentRuntime:
                     error_code=requested.error.code,
                     observations=session.observations,
                     fallback_answer=session.fallback_answer,
-                    already_degraded=True,
+                    already_degraded=ledger.state == AgentRunState.DEGRADED,
                 )
             turn = requested.turn
 
@@ -452,6 +457,8 @@ class AgentRuntime:
                 turn.as_audit_value(),
             )
             session.append_assistant(turn)
+            if session.persist_progress is not None:
+                await session.persist_progress({"stage": "assistant", "message": turn.as_message()})
 
             if turn.tool_calls:
                 ledger.transition(
@@ -546,12 +553,15 @@ class AgentRuntime:
                         ledger.record("world_observations_invalidated", {"error_code": session.invalidated_error})
                         return self._finish_degraded(
                             ledger,
-                            reason="The loaded world changed. Start a new consultation for current state.",
+                            reason="The loaded world changed. Observations from this run are stale; read the world again.",
                             error_code=session.invalidated_error,
                             observations=session.observations,
-                            fallback_answer="The loaded world changed; earlier observations are stale. Start a new consultation.",
+                            fallback_answer="The loaded world changed; observations from this run are stale and must be read again.",
                         )
-                    tool_messages.append(session.tool_message(result))
+                    tool_message = session.tool_message(result)
+                    if session.persist_progress is not None:
+                        await session.persist_progress({"stage": "tool", "message": tool_message, "tool_call_id": result.call_id, "tool_result": result.value, "observation": result.observation})
+                    tool_messages.append(tool_message)
                     if session.evidence_views and session.evidence_views[-1]["call_id"] == result.call_id:
                         ledger.record("model_evidence_compiled", session.evidence_views[-1])
                     if result.terminal and result.ok:

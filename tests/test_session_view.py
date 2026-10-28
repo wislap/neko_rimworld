@@ -59,6 +59,7 @@ def seed(journal):
     old_run = journal.record_run(
         COLONY, E0, 12, "frontdesk", old,
         [assistant([("c1", "query_colony")]), tool("c1", FOOD), assistant(content="好的")],
+        audit={"events": [{"event": "tool_completed", "data": {"call_id": "c1", "result": {"food": 12}}}]},
     )
     recent = journal.record_utterance(COLONY, E0, RECENT_TICK, "看看食物")
     recent_run = journal.record_run(COLONY, E0, RECENT_TICK + 1, "frontdesk", recent, [assistant(content="食物12")])
@@ -100,10 +101,10 @@ def test_tool_results_in_window_are_placeholders_with_their_recall_address(journ
         "recall": {"event_seq": old_run, "tool_call_id": "c1"},
         "tool": "query_colony",
         "game_tick": 12,
-        "note": "original retained; recall by event_seq and tool_call_id",
+        "note": "recall original by event_seq and tool_call_id when retained",
     })
     assert FOOD not in json.dumps(tool_message, ensure_ascii=False)
-    assert recall(events, old_run, "c1") == FOOD
+    assert recall(events, old_run, "c1") == canonical({"tool_result": {"food": 12}, "observation": None})
 
 
 def test_recall_returns_originals_and_refuses_anything_else(journal):
@@ -111,7 +112,7 @@ def test_recall_returns_originals_and_refuses_anything_else(journal):
     events = journal.events(COLONY)
     assert recall(events, old) == "建个冷库"
     assert recall(events, recent) == "看看食物"
-    assert recall(events, old_run, "c1") == FOOD
+    assert recall(events, old_run, "c1") == canonical({"tool_result": {"food": 12}, "observation": None})
     for seq, call_id in ((old_run, "nope"), (old, "c1"), (999, None), (old_run, None)):
         with pytest.raises(KeyError):
             recall(events, seq, call_id)
@@ -138,7 +139,7 @@ def test_run_is_recorded_as_one_event_with_its_messages(journal):
     event = journal.events(COLONY)[-1]
     assert event["seq"] == seq
     assert (event["kind"], event["source"], event["game_tick"]) == ("agent.run", "frontdesk", 40)
-    assert event["payload"] == {"utterance_seq": old, "messages": messages}
+    assert event["payload"] == {"utterance_seq": old, "messages": messages, "result": None, "audit": None}
 
 
 @pytest.mark.parametrize(
@@ -149,7 +150,6 @@ def test_run_is_recorded_as_one_event_with_its_messages(journal):
         ("frontdesk", "missing", [assistant(content="x")], "answers a user utterance"),
         ("frontdesk", "old", [{"role": "system", "content": "x"}], "only assistant and tool"),
         ("frontdesk", "old", [{"role": "user", "content": "x"}], "only assistant and tool"),
-        ("frontdesk", "old", [], "non-empty list"),
         ("frontdesk", "old", [tool("c1", "x")], "answers a tool call"),
         ("frontdesk", "old", [assistant([("c1", "f")]), assistant(content="x")], "answered before"),
         ("frontdesk", "old", [assistant([("c1", "f")]), tool("c2", "x")], "answers a tool call"),
@@ -206,7 +206,7 @@ def test_derived_views_replay_from_raw_rows_into_a_fresh_file(tmp_path):
     )
     replica.close()
     assert rebuilt == expected
-    assert expected[2] == FOOD
+    assert expected[2] == canonical({"tool_result": {"food": 12}, "observation": None})
 
 
 def test_each_colony_sees_only_its_own_turns_and_runs(journal):
