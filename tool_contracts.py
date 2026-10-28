@@ -85,6 +85,9 @@ class ToolSetup:
     situation_provider: Any = None
     #: Trusted origin of observations, set by the tool provider, never by game data.
     observation_source: str = "native"
+    write_catalog: dict[str, Any] | None = None
+    write_port: GameWritePort | None = None
+    write_identity: Callable[[], tuple[str, str, str] | None] | None = None
 
     def __post_init__(self):
         if self.observation_source not in {"native", "offline_captured_graph"}:

@@ -7,7 +7,7 @@ import pytest
 from plugin.plugins.neko_rimworld.game.bridge import BridgeNotConnected, BridgeQueryTimeout, BridgeServer
 from plugin.plugins.neko_rimworld.game.protocol import SessionDescriptor
 from plugin.plugins.neko_rimworld.game.write_port import BridgeGameWritePort
-from plugin.plugins.neko_rimworld.tool_contracts import ToolExecutionError
+from plugin.plugins.neko_rimworld.tool_contracts import ReceiptLost, ToolExecutionError
 
 SESSION = SessionDescriptor("colony", "a" * 32, 100, 1)
 
@@ -48,8 +48,9 @@ async def test_port_does_not_retry_ambiguous_timeout():
 
     bridge = Bridge()
     port = BridgeGameWritePort(bridge, "connection", SESSION)
-    with pytest.raises(BridgeQueryTimeout):
-        await port.commit({"load_epoch": SESSION.load_epoch})
+    with pytest.raises(ReceiptLost) as error:
+        await port.commit({"load_epoch": SESSION.load_epoch, "idempotency_key": "same-key"})
+    assert error.value.idempotency_key == "same-key"
     assert bridge.calls == 1
 
 

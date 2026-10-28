@@ -10,6 +10,7 @@ from ...game.observation import Observation
 from ...message_contracts import PreparedToolCall, ToolCall, ToolResult
 from ...tool_contracts import MAX_TOOL_RESULT_CHARS, ToolExecutionError, ToolSpec
 from ..context.model_context import CONTEXT_TOOLS, MAX_SOURCE_CHARS, make_pruner
+from .audit import AgentAuditCapacityError
 
 
 class ToolRegistry:
@@ -119,6 +120,8 @@ class ToolRegistry:
                         recoverable=True,
                         error={"code": payload["error_code"], "message": payload["message"]},
                     )
+        except AgentAuditCapacityError:
+            raise
         except ToolExecutionError as exception:
             return ToolResult(
                 call_id=prepared.call.call_id,

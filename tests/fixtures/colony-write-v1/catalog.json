@@ -1,0 +1,656 @@
+{
+  "capability": "colony_write.transactions.v1",
+  "version": "colony_write.v1",
+  "modes": [
+    "dry_run",
+    "commit",
+    "undo"
+  ],
+  "operations": [
+    {
+      "op": "set_work_priority",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "const": "set_work_priority"
+          },
+          "pawn": {
+            "type": "string",
+            "minLength": 1
+          },
+          "work": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4
+          }
+        },
+        "required": [
+          "op",
+          "pawn",
+          "work",
+          "value"
+        ]
+      },
+      "observation": {
+        "read": {
+          "tool": "look",
+          "arguments": {
+            "object": {
+              "kind": "pawn",
+              "id": {
+                "arg": "pawn"
+              }
+            },
+            "aspects": [
+              "work"
+            ]
+          },
+          "native_operation": "inspect_state"
+        },
+        "extract": {
+          "kind": "keyed_row",
+          "object_id": {
+            "arg": "pawn"
+          },
+          "path": [
+            "facets",
+            "work",
+            "work_types"
+          ],
+          "key_field": "definition",
+          "key": {
+            "arg": "work"
+          },
+          "value_field": "priority",
+          "allow_null": false,
+          "objects_path": [
+            "objects"
+          ],
+          "identity_path": [
+            "target",
+            "id"
+          ],
+          "status_path": [
+            "facets",
+            "work",
+            "status"
+          ],
+          "status_value": "observed"
+        }
+      }
+    },
+    {
+      "op": "set_medical_care",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "const": "set_medical_care"
+          },
+          "pawn": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "op",
+          "pawn",
+          "value"
+        ]
+      },
+      "observation": {
+        "read": {
+          "tool": "look",
+          "arguments": {
+            "object": {
+              "kind": "pawn",
+              "id": {
+                "arg": "pawn"
+              }
+            },
+            "aspects": [
+              "work"
+            ]
+          },
+          "native_operation": "inspect_state"
+        },
+        "extract": {
+          "kind": "field",
+          "object_id": {
+            "arg": "pawn"
+          },
+          "path": [
+            "facets",
+            "work",
+            "medical_care"
+          ],
+          "allow_null": false,
+          "objects_path": [
+            "objects"
+          ],
+          "identity_path": [
+            "target",
+            "id"
+          ],
+          "status_path": [
+            "facets",
+            "work",
+            "status"
+          ],
+          "status_value": "observed"
+        }
+      }
+    },
+    {
+      "op": "set_bill",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "const": "set_bill"
+          },
+          "worktable": {
+            "type": "string",
+            "minLength": 1
+          },
+          "bill": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": false,
+            "properties": {
+              "suspended": {
+                "type": "boolean"
+              },
+              "repeat_mode": {
+                "type": "string",
+                "enum": [
+                  "Forever",
+                  "RepeatCount",
+                  "TargetCount"
+                ]
+              },
+              "repeat_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 2147483647
+              },
+              "target_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 2147483647
+              }
+            }
+          }
+        },
+        "required": [
+          "op",
+          "worktable",
+          "bill",
+          "value"
+        ]
+      },
+      "observation": {
+        "read": {
+          "tool": "look",
+          "arguments": {
+            "object": {
+              "kind": "thing",
+              "id": {
+                "arg": "worktable"
+              }
+            },
+            "aspects": [
+              "state"
+            ],
+            "focus": {
+              "state": [
+                "production"
+              ]
+            },
+            "detail": 100
+          },
+          "native_operation": "inspect_state"
+        },
+        "extract": {
+          "kind": "object_fields",
+          "object_id": {
+            "arg": "worktable"
+          },
+          "path": [
+            "facets",
+            "production",
+            "bills"
+          ],
+          "key_field": "bill_id",
+          "key": {
+            "arg": "bill"
+          },
+          "row_require": {
+            "bill_kind": "production"
+          },
+          "fields_from_value": true,
+          "objects_path": [
+            "objects"
+          ],
+          "identity_path": [
+            "target",
+            "id"
+          ],
+          "status_path": [
+            "facets",
+            "production",
+            "status"
+          ],
+          "status_value": "observed"
+        }
+      }
+    },
+    {
+      "op": "set_storage_allow",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "const": "set_storage_allow"
+          },
+          "storage": {
+            "type": "string",
+            "minLength": 1
+          },
+          "map": {
+            "type": "string",
+            "minLength": 1
+          },
+          "item": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "op",
+          "storage",
+          "map",
+          "item",
+          "value"
+        ]
+      },
+      "observation": {
+        "read": {
+          "tool": "look",
+          "arguments": {
+            "object": {
+              "kind": "storage",
+              "id": {
+                "arg": "storage"
+              },
+              "map": {
+                "arg": "map"
+              }
+            },
+            "aspects": [
+              "allows"
+            ],
+            "focus": {
+              "items": [
+                {
+                  "arg": "item"
+                }
+              ]
+            }
+          },
+          "native_operation": "inspect_storage"
+        },
+        "extract": {
+          "kind": "keyed_row",
+          "object_id": {
+            "arg": "storage"
+          },
+          "path": [
+            "allows"
+          ],
+          "key_field": "definition",
+          "key": {
+            "arg": "item"
+          },
+          "value_field": "allowed",
+          "allow_null": false,
+          "objects_path": [
+            "objects"
+          ],
+          "identity_path": [
+            "id"
+          ],
+          "status_path": [
+            "status"
+          ],
+          "status_value": "observed",
+          "match": [
+            {
+              "value": {
+                "arg": "map"
+              },
+              "path": [
+                "map_id"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "op": "set_allowed_area",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "const": "set_allowed_area"
+          },
+          "pawn": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "map_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "area_id": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "map_id",
+              "area_id"
+            ]
+          }
+        },
+        "required": [
+          "op",
+          "pawn",
+          "value"
+        ]
+      },
+      "observation": {
+        "read": {
+          "tool": "look",
+          "arguments": {
+            "object": {
+              "kind": "pawn",
+              "id": {
+                "arg": "pawn"
+              }
+            },
+            "aspects": [
+              "work"
+            ]
+          },
+          "native_operation": "inspect_state"
+        },
+        "extract": {
+          "kind": "field",
+          "object_id": {
+            "arg": "pawn"
+          },
+          "path": [
+            "facets",
+            "work",
+            "write_allowed_area_key"
+          ],
+          "allow_null": false,
+          "objects_path": [
+            "objects"
+          ],
+          "identity_path": [
+            "target",
+            "id"
+          ],
+          "status_path": [
+            "facets",
+            "work",
+            "status"
+          ],
+          "status_value": "observed"
+        }
+      }
+    },
+    {
+      "op": "set_forbidden",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "const": "set_forbidden"
+          },
+          "thing": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "op",
+          "thing",
+          "value"
+        ]
+      },
+      "observation": {
+        "read": {
+          "tool": "look",
+          "arguments": {
+            "object": {
+              "kind": "thing",
+              "id": {
+                "arg": "thing"
+              }
+            },
+            "aspects": [
+              "state"
+            ],
+            "focus": {
+              "state": [
+                "condition"
+              ]
+            }
+          },
+          "native_operation": "inspect_state"
+        },
+        "extract": {
+          "kind": "field",
+          "object_id": {
+            "arg": "thing"
+          },
+          "path": [
+            "facets",
+            "condition",
+            "forbidden"
+          ],
+          "allow_null": false,
+          "objects_path": [
+            "objects"
+          ],
+          "identity_path": [
+            "target",
+            "id"
+          ],
+          "status_path": [
+            "facets",
+            "condition",
+            "status"
+          ],
+          "status_value": "observed"
+        }
+      }
+    },
+    {
+      "op": "set_research",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "const": "set_research"
+          },
+          "research": {
+            "const": "current"
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "op",
+          "research",
+          "value"
+        ]
+      },
+      "observation": {
+        "read": {
+          "tool": "look",
+          "arguments": {
+            "object": {
+              "kind": "research"
+            },
+            "aspects": [
+              "progress"
+            ]
+          },
+          "native_operation": "inspect_research"
+        },
+        "extract": {
+          "kind": "field",
+          "object_id": null,
+          "path": [
+            "current_regular_project"
+          ],
+          "allow_null": true,
+          "objects_path": [],
+          "identity_path": [],
+          "status_path": [],
+          "status_value": "ok"
+        }
+      }
+    },
+    {
+      "op": "set_storage_priority",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "const": "set_storage_priority"
+          },
+          "storage": {
+            "type": "string",
+            "minLength": 1
+          },
+          "map": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "op",
+          "storage",
+          "map",
+          "value"
+        ]
+      },
+      "observation": {
+        "read": {
+          "tool": "look",
+          "arguments": {
+            "object": {
+              "kind": "storage",
+              "id": {
+                "arg": "storage"
+              },
+              "map": {
+                "arg": "map"
+              }
+            },
+            "aspects": [
+              "priority"
+            ]
+          },
+          "native_operation": "inspect_storage"
+        },
+        "extract": {
+          "kind": "field",
+          "object_id": {
+            "arg": "storage"
+          },
+          "path": [
+            "priority"
+          ],
+          "allow_null": false,
+          "objects_path": [
+            "objects"
+          ],
+          "identity_path": [
+            "id"
+          ],
+          "status_path": [
+            "status"
+          ],
+          "status_value": "observed",
+          "match": [
+            {
+              "value": {
+                "arg": "map"
+              },
+              "path": [
+                "map_id"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "rules": {
+    "source": "native",
+    "missing": "unknown",
+    "null": "unknown unless allow_null is true",
+    "issues": "affected paths unknown",
+    "partial": "affected paths unknown",
+    "truncation": "absence is unknown unless explicitly complete"
+  },
+  "catalog_id": "9e1dc764182a3881e189e75cd720950ef681d6a97cc489e068244eea747452f8"
+}

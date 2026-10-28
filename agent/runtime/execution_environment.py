@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from ...tool_contracts import ToolSetup
+import copy
+
+from ...tool_contracts import ToolSetup, ToolSpec
 from ..world.semantic_tools import semantic_interaction_factory
 from .tools import ToolRegistry
 
@@ -20,11 +22,40 @@ class ExecutionEnvironment:
         self.setup = setup
         self.session = session
         session.interaction = semantic_interaction_factory(setup, session, update)
+        self.write_tools = ()
+        if (session.role == "planner" and setup.write_catalog is not None
+                and setup.write_port is not None and setup.write_identity is not None
+                and setup.observation_source == "native" and setup.write_identity() is not None):
+            from ..write.service import WriteService
+
+            async def record_write(event):
+                stage = event["stage"]
+                if stage == "result":
+                    session.write_outcomes.append(copy.deepcopy(event))
+                try:
+                    session.ledger.record("write_" + stage, event)
+                    if session.persist_progress is not None:
+                        await session.persist_progress({"write": copy.deepcopy(event)})
+                except BaseException:
+                    session.write_record_issue = stage
+                    raise
+
+            service = WriteService(setup.write_catalog, session.observations, setup.write_port,
+                                   setup.write_identity, source_kind=setup.observation_source,
+                                   record=record_write)
+            specs = []
+            for schema in service.schemas():
+                function = schema["function"]
+                name = function["name"]
+                handler = getattr(service, name)
+                specs.append(ToolSpec(name, function["description"], function["parameters"], handler,
+                                      exclusive=True))
+            self.write_tools = tuple(specs)
 
     def registry(self):
         session = self.session
         registry = ToolRegistry(context_pruner=session.context_pruner)
-        work = () if session.interaction.finalizing else session.capabilities
+        work = () if session.interaction.finalizing else session.capabilities + self.write_tools
         for spec in compose_tools(session.interaction.tools(), work):
             registry.register(spec)
         return registry

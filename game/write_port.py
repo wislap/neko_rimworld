@@ -8,8 +8,8 @@ import threading
 from collections.abc import Mapping
 from typing import Any
 
-from ..tool_contracts import ToolExecutionError
-from .bridge import BridgeServer
+from ..tool_contracts import ReceiptLost, ToolExecutionError
+from .bridge import BridgeQueryTimeout, BridgeServer
 from .protocol import SessionDescriptor
 
 
@@ -54,7 +54,12 @@ class BridgeGameWritePort:
         body = copy.deepcopy(dict(changeset))
         if body.get("load_epoch") != self._session.load_epoch:
             raise ToolExecutionError("stale_epoch", "Changeset does not belong to the bound game session.")
-        return await self._call(method, body)
+        try:
+            return await self._call(method, body)
+        except BridgeQueryTimeout as exc:
+            if method != 'commit':
+                raise
+            raise ReceiptLost(body['idempotency_key']) from exc
 
     async def undo(self, token: str) -> Mapping[str, Any]:
         return await self._call("undo", token)

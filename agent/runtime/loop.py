@@ -234,6 +234,28 @@ class AgentRuntime:
         ):
             result = {**result, "agent_text": draft.agent_text,
                       "submission_mode": "retained_submission"}
+        if session.write_outcomes:
+            result = {**result, "write_outcomes": copy.deepcopy(session.write_outcomes)}
+        if session.write_record_issue:
+            stage = session.write_record_issue
+            if stage == "prepared":
+                message = "The write was not sent because its preparation record could not be saved."
+            elif stage == "result" and session.write_outcomes and "receipt" in session.write_outcomes[-1]:
+                receipt = session.write_outcomes[-1]["receipt"]
+                if (session.write_outcomes[-1].get("mode") == "commit"
+                        and isinstance(receipt, Mapping) and receipt.get("status") == "committed"):
+                    message = "The game confirmed the write was committed, but recording was not confirmed. The known receipt is retained."
+                else:
+                    message = "The game returned a write receipt, but recording it was not confirmed. The known receipt is retained."
+            else:
+                message = "The write may have been applied, but its outcome and recording are not confirmed."
+            result = {**result, "answer": message, "caveats": [*result.get("caveats", []), message]}
+            result.pop("agent_text", None)
+            result.pop("delivery", None)
+            result.pop("submission_mode", None)
+            if result.get("status") != "cancelled":
+                result["status"] = "degraded"
+            result.setdefault("audit", {})["error_code"] = "write_record_issue"
         attached = attach_agent_handoff(result)
         if (
             isinstance(result, Mapping) and result.get("answer") == draft.full_text
@@ -544,6 +566,11 @@ class AgentRuntime:
                                 recoverable=False,
                             )
                             finalizing = reserve > 0
+                        if session.write_record_issue:
+                            return self._finish_degraded(
+                                ledger, reason="Write recording failed; this run stopped before any further action.",
+                                error_code="write_record_issue", observations=session.observations,
+                            )
                         if result.observation is not None:
                             if (
                                 session.colony_id is not None

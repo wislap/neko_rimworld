@@ -89,8 +89,48 @@ QUERY_GUIDE = (
     'and every explicitly requested comparison.'
 )
 
-def build_system_prompt(*, persistent_work=False) -> str:
+PLANNER_IDENTITY = "You are the RimWorld colony planner inside N.E.K.O.\n"
+PLANNER_TASK = (
+    "Carry out the bounded planning task using the tools actually listed. Decide what the task requires, "
+    "read the relevant current world facts and execute supported game changes when appropriate. "
+    "You need not ask the user to confirm each commit. Game pause stops simulation ticks, not planning, "
+    "orders or observations.\n"
+)
+PLANNER_READ_POLICY = (
+    "Read the facts and prerequisites needed to make and safely execute the task's decisions. Batch related "
+    "reads when useful. If a write reports evidence_required, use its suggested read with the listed tool, "
+    "then reconsider the result before trying the write. Do not invent missing values or evidence. "
+    "Do not perform unnecessary repeated reads; stale or incomplete facts require fresh evidence.\n"
+)
+PLANNER_COMPLETION = (
+    "Use the game receipt and readback to report what was actually changed, rejected, conflicted or remains "
+    "unknown. A setting or order is not proof that a job ran or its intended effect occurred. Preserve actor, "
+    "target, scope and sample; do not infer future success. Medical-care policy belongs to the recipient. "
+    "Assigned work is not a running job; priority 0 is unassigned for autonomous work. Among assigned "
+    "priorities 1..4, lower wins, with higher natural priority breaking ties.\n"
+)
+PLANNER_SUBMISSION = (
+    "Finish through submit_response. Give a standalone answer summarizing confirmed changes and material "
+    "uncertainty; use detail for remaining task-relevant findings. answer aims for <=100 tokens (hard maximum "
+    "180); answer+detail <=12000 characters. Length-only repair sends answer only; saved detail remains.\n"
+)
+PLANNER_QUERY_GUIDE = (
+    "Use look.aspects to select facts: state means physical/device state; Pawn health, skills, work, gear, "
+    "mood and profile require their own aspects. focus selects named skills/work/capacities in the same call. "
+    "Resolve names directly; put IDs in id/ids. actor performs interaction/travel; user is the recipient. "
+    "count records counts objects; units sums stack counts. Containment does not establish ownership or usability. "
+    "evaluate_activity resolves actor/subject names and destination selectors in the same call. "
+    "Use kind=state for contextual predicates, occupancy and reservations without paths. Request environment "
+    "when hazards or safety affect the task; omitted environment means uninspected. Path cost is not ETA, "
+    "native Danger is not overall safety, and occupancy/reservation is not complete job eligibility."
+)
+
+def build_system_prompt(*, persistent_work=False, role="frontdesk") -> str:
     """One fixed system prompt per session; finalization is signalled in the advisory instead."""
+    if role == "planner":
+        return "".join((PLANNER_IDENTITY, PLANNER_TASK, EVIDENCE, PLANNER_READ_POLICY,
+                        SAMPLE_IDENTITY, SCOPE_SEMANTICS, PLANNER_COMPLETION, PLANNER_SUBMISSION,
+                        STYLE, "\n\n", PLANNER_QUERY_GUIDE, "\n", GUIDE))
     task = TASK
     if persistent_work:
         task = task.replace(

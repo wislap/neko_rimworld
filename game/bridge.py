@@ -208,6 +208,12 @@ class BridgeServer:
             return self._ready_epoch
 
     @property
+    def capabilities(self) -> frozenset[str]:
+        """Capabilities advertised by the current authenticated connection."""
+        with self._connection_lock:
+            return self._capabilities if self._ready_epoch is not None else frozenset()
+
+    @property
     def state_store(self) -> BridgeStateStore:
         return self._state
 
@@ -368,7 +374,8 @@ class BridgeServer:
             if epoch is None or session is None or stale:
                 self._state.set_last_query("not_connected", 0.0, error_code=BridgeNotConnected.code)
                 raise BridgeNotConnected("No authenticated, active RimWorld session is available.")
-            if ("colony_write.v1" if write else self.QUERY_CAPABILITY) not in capabilities:
+            if ((write and "colony_write.v1" not in capabilities and not (operation in {"dry_run", "commit", "undo"} and "colony_write.transactions.v1" in capabilities))
+                    or (not write and self.QUERY_CAPABILITY not in capabilities)):
                 self._state.set_last_query("unsupported", 0.0, error_code=BridgeUnsupportedError.code)
                 raise BridgeUnsupportedError("The connected RimWorld Mod does not advertise the requested capability.")
 

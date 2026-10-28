@@ -27,6 +27,7 @@ class AgentRunSession:
     question: str = ""
     workspace_id: str | None = None
     colony_id: str | None = None
+    role: str = "frontdesk"
     capabilities: tuple[ToolSpec, ...] = ()
     persist_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = field(default=None, repr=False)
     result: dict[str, Any] | None = field(default=None, repr=False)
@@ -34,6 +35,8 @@ class AgentRunSession:
     input_tokens_estimated: int = 0
     tool_calls: int = 0
     observations: list[dict[str, Any]] = field(default_factory=list)
+    write_outcomes: list[dict[str, Any]] = field(default_factory=list)
+    write_record_issue: str | None = None
     knowledge: list[dict[str, Any]] = field(default_factory=list)
     knowledge_omitted: int = 0
     last_assistant_content: str = ""
@@ -49,6 +52,8 @@ class AgentRunSession:
     accept_narrative_summary: Callable[[str], Awaitable[None]] | None = field(default=None, repr=False)
 
     def __post_init__(self):
+        if self.role not in {"frontdesk", "planner"}:
+            raise ValueError("unsupported agent role")
         validate_deployment()
         # Context projection is a session invariant, not an optional mode.
         # Keep a caller-supplied current pruner (including subclasses) intact.
@@ -73,9 +78,10 @@ class AgentRunSession:
         workspace_id: str | None = None,
         colony_id: str | None = None,
         capabilities: tuple[ToolSpec, ...] = (),
+        role: str = "frontdesk",
     ) -> AgentRunSession:
         messages = [
-            {"role": "system", "content": build_system_prompt(persistent_work=workspace_id is not None)},
+            {"role": "system", "content": build_system_prompt(persistent_work=workspace_id is not None, role=role)},
             *copy.deepcopy(history),
             {"role": "user", "content": question},
         ]
@@ -84,6 +90,7 @@ class AgentRunSession:
             question=question,
             workspace_id=workspace_id,
             colony_id=colony_id,
+            role=role,
             capabilities=capabilities,
             messages=messages,
             run_start=len(messages) - 1,

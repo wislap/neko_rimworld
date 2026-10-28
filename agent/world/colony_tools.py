@@ -22,6 +22,7 @@ DOMAINS = {
     "traders": ("inspect_trade", ("identity", "stock")),
     "research": ("inspect_research", ("progress", "requirements", "unlocks")),
     "resources": ("inspect_resources", ("quantity", "distribution")),
+    "storage": ("inspect_storage", ("priority", "allows")),
 }
 ALIASES = {"world_object": "world_objects", "caravan": "caravans", "faction": "factions", "quest": "quests", "trader": "traders"}
 DEFAULTS = {"world": ["places"], "caravans": ["identity", "location", "route"], "factions": ["identity", "relations"], "research": ["progress"], "resources": ["quantity", "distribution"]}
@@ -74,6 +75,7 @@ def extend_look_spec(spec, directory):
         ("inspect_trade", "merchant stock"),
         ("inspect_research", "research progress/prerequisites"),
         ("inspect_resources", "resource quantities by source"),
+        ("inspect_storage", "storage priority and item permissions"),
     ) if operation in operations]
     spec["description"] += " Also read " + "; ".join(domains) + "."
     if "inspect_trade" in operations:
@@ -90,7 +92,7 @@ def extend_look_spec(spec, directory):
             "type": "object", "additionalProperties": False, "required": ["kind"],
             "properties": {"kind": {"const": "map"}, "map": {"type": "string", "default": "current"}},
         }]})
-    if {"inspect_trade", "inspect_resources"} & operations:
+    if {"inspect_trade", "inspect_resources", "inspect_storage"} & operations:
         selectors["map"] = {"type": "string", "default": "current"}
     props["object"]["oneOf"].append({"type": "object", "additionalProperties": False, "required": ["kind"], "properties": selectors})
     if "inspect_resources" in operations:
@@ -102,7 +104,7 @@ def extend_look_spec(spec, directory):
     maps = "/".join(kind for kind in ("traders", "resources") if kind in kinds)
     props["aspects"]["description"] += " Colony domains: " + rules + ". Read only requested aspects. Lists default to current/public objects; research to current projects. Names resolve directly. category/near: world/world_objects/caravans." + (" map: " + maps + "." if maps else "")
     props["limit"] = {"type": "integer", "minimum": 1, "maximum": 100, "default": 20, "description": "Colony-domain row limit; use offset=page.next_offset to continue."}
-    item_kinds = [kind for kind in ("traders", "research", "resources") if "items" in operation_properties(directory, DOMAINS[kind][0])]
+    item_kinds = [kind for kind in ("traders", "research", "resources", "storage") if "items" in operation_properties(directory, DOMAINS[kind][0])]
     if item_kinds:
         props["focus"]["properties"]["items"] = _strings()
         props["focus"]["description"] += " focus.items: exact item Def names/labels."
@@ -141,6 +143,19 @@ async def read_colony(interaction, args, kind):
     if set(args) - {"object", "aspects", "detail", "offset", "limit", "focus"}:
         raise SurfaceError("Colony look accepts object, aspects, detail, offset, limit and focus.items")
     obj = args["object"]
+    if kind == "storage":
+        if set(obj) - {"kind", "id", "ids", "map"} or ("id" in obj) == ("ids" in obj):
+            raise SurfaceError("storage requires id or ids and map")
+        if not isinstance(obj.get("map"), str) or not obj["map"].strip():
+            raise SurfaceError("storage requires map")
+        ids = _list([obj["id"]] if "id" in obj else obj["ids"], "ids")
+        focus = args.get("focus", {})
+        if not isinstance(focus, dict) or set(focus) - {"items"}:
+            raise SurfaceError("storage focus accepts items")
+        request = {"ids": ids, "map": obj["map"]}
+        if "items" in focus:
+            request["items"] = _list(focus["items"], "focus.items")
+        return await interaction._world_read(request, operation)
     allowed = {"kind"} if kind == "resources" else {"kind", "id", "ids", "name", "names"}
     if operation == "inspect_planet":
         allowed |= {"category", "near"}

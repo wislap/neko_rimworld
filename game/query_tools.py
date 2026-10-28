@@ -22,9 +22,11 @@ from .bridge import BridgeServer
 from .catalog_contract import has_retired_capability_alias
 from .observation import Observation
 from .situation import SITUATION_VERSION, SituationProvider
+from .write_catalog import validate_write_catalog
+from .write_port import BridgeGameWritePort
 
 COLONY_STATE_VERSION = "colony_state.v1"
-COLONY_OPERATIONS = frozenset({"inspect_planet", "inspect_factions", "inspect_quests", "inspect_trade", "inspect_research", "evaluate_journey", "evaluate_trade", "inspect_resources"})
+COLONY_OPERATIONS = frozenset({"inspect_planet", "inspect_factions", "inspect_quests", "inspect_trade", "inspect_research", "evaluate_journey", "evaluate_trade", "inspect_resources", "inspect_storage"})
 
 
 def make_game_tools(catalog: dict[str, Any], query: ToolHandler, *, situation_provider=None, current_session=None) -> ToolSetup:
@@ -138,7 +140,7 @@ class CatalogTools:
         self._bridge = bridge
         self._query = query
         self._lock = asyncio.Lock()
-        self._key: tuple[BridgeServer, str] | None = None
+        self._key: tuple[Any, ...] | None = None
         self._catalog: dict[str, Any] | None = None
         self._situation_provider = None
 
@@ -151,7 +153,8 @@ class CatalogTools:
                 self._catalog = None
                 self._situation_provider = None
                 return ToolSetup(())
-            key = (bridge, epoch)
+            current = getattr(bridge, "session", None)
+            key = (bridge, epoch, current.colony_id if current else None, current.load_epoch if current else None)
             if key != self._key:
                 self._catalog = None
                 self._key = None
@@ -165,6 +168,10 @@ class CatalogTools:
                         self._bridge() is not bridge
                         or bridge.connection_key != epoch
                         or response["connection_epoch"] != epoch
+                        or (current is not None and (getattr(bridge, "session", None) is None
+                            or (bridge.session.colony_id, bridge.session.load_epoch) != (current.colony_id, current.load_epoch)
+                            or response.get("colony_id") != current.colony_id
+                            or response.get("load_epoch") != current.load_epoch))
                     ):
                         raise ToolExecutionError(
                             "connection_changed", "The game connection changed while loading its schema."
@@ -184,7 +191,9 @@ class CatalogTools:
 
             # Bind tools to this connection. A reconnect requires a new run/schema, not silent reuse.
             async def scoped_query(arguments: dict[str, Any]):
-                if self._bridge() is not bridge or bridge.connection_key != epoch:
+                if (self._bridge() is not bridge or bridge.connection_key != epoch
+                        or current is not None and (bridge.session is None or
+                            (bridge.session.colony_id, bridge.session.load_epoch) != (current.colony_id, current.load_epoch))):
                     raise ToolExecutionError(
                         "connection_changed",
                         "Game connection changed; start a fresh consultation to reload the schema.",
@@ -196,7 +205,39 @@ class CatalogTools:
 
             if self._situation_provider is None and "situation_snapshot" in self._catalog:
                 self._situation_provider = SituationProvider(scoped_query, lambda: bridge.session)
-            return make_game_tools(self._catalog, scoped_query, situation_provider=self._situation_provider)
+            setup = make_game_tools(self._catalog, scoped_query, situation_provider=self._situation_provider)
+            session = current
+            write = self._catalog.get("colony_write")
+            if (session is not None and bool({"colony_write.v1", "colony_write.transactions.v1"} & bridge.capabilities)
+                    and isinstance(write, dict) and write.get("version") == "colony_write.v1"
+                    and write.get("capability") in {"colony_write.v1", "colony_write.transactions.v1"}
+                    and (write.get("capability") in bridge.capabilities
+                         or "colony_write.v1" in bridge.capabilities)):
+                bound = (epoch, session.colony_id, session.load_epoch)
+
+                def identity():
+                    active = bridge.session
+                    if self._bridge() is not bridge or bridge.connection_key != epoch or active is None:
+                        return None
+                    current = (epoch, active.colony_id, active.load_epoch)
+                    return current if current == bound else None
+
+                setup = replace(setup, write_catalog=copy.deepcopy(write),
+                                write_port=BridgeGameWritePort(bridge, epoch, session),
+                                write_identity=identity)
+            # The catalog and port must describe the same authenticated world.
+            # Recheck after building the setup; a later change is still rejected by
+            # the bound port under the bridge connection lock.
+            active = getattr(bridge, "session", None)
+            if (self._bridge() is not bridge or bridge.connection_key != epoch
+                    or (current is None) != (active is None)
+                    or current is not None and active is not None and
+                    (active.colony_id, active.load_epoch) != (current.colony_id, current.load_epoch)):
+                self._key = None
+                self._catalog = None
+                self._situation_provider = None
+                return ToolSetup(())
+            return setup
 
     @staticmethod
     def _validate(catalog: object) -> None:
@@ -204,5 +245,10 @@ class CatalogTools:
             raise ToolExecutionError("invalid_catalog", "Catalog must be an object.")
         if not isinstance(catalog.get("schema_id"), str) or not catalog["schema_id"].strip():
             raise ToolExecutionError("invalid_catalog", "Catalog is missing schema_id.")
+        if "colony_write" in catalog:
+            try:
+                validate_write_catalog(catalog["colony_write"])
+            except ValueError as error:
+                raise ToolExecutionError("invalid_catalog", "Invalid colony write directory.") from error
         if len(json.dumps(catalog, ensure_ascii=False)) > 256_000:
             raise ToolExecutionError("invalid_catalog", "Catalog exceeds the schema context limit.")
