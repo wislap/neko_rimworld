@@ -19,7 +19,8 @@ UTTERANCE_EVENT = "user.utterance"
 LOAD_EVENT = "colony.load"
 TAKEOVER_EVENT = "user.takeover"
 RETURN_EVENT = "user.return"
-RESERVED_EVENTS = frozenset({REVISION_EVENT, UTTERANCE_EVENT, LOAD_EVENT, TAKEOVER_EVENT, RETURN_EVENT})
+RUN_EVENT = "agent.run"
+RESERVED_EVENTS = frozenset({REVISION_EVENT, UTTERANCE_EVENT, LOAD_EVENT, TAKEOVER_EVENT, RETURN_EVENT, RUN_EVENT})
 
 # SQLite INTEGER is a signed 64-bit value; larger Python integers cannot be stored.
 INTEGER_LIMIT = 2**63

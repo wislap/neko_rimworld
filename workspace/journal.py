@@ -8,6 +8,7 @@ from .ledger import (
     RESERVED_EVENTS,
     RETURN_EVENT,
     REVISION_EVENT,
+    RUN_EVENT,
     TAKEOVER_EVENT,
     USER,
     UTTERANCE_EVENT,
@@ -15,6 +16,7 @@ from .ledger import (
 )
 
 TAKEOVER_FIELDS = frozenset({"object", "field", "value_read", "ai_value", "changeset_id"})
+RUN_ROLES = frozenset({"assistant", "tool"})
 
 
 class Journal:
@@ -57,6 +59,16 @@ class Journal:
                 raise BoardError("A return cites a user utterance of this colony")
             payload = {"takeover_seq": takeover_seq, "utterance_seq": utterance_seq}
             return self._ledger.append(colony_id, load_epoch, game_tick, FRONTDESK, RETURN_EVENT, payload)
+
+    def record_run(self, colony_id, load_epoch, game_tick, role, utterance_seq, messages):
+        """Append the assistant and tool messages one frontdesk run added, answering a user utterance."""
+        if role != FRONTDESK:
+            raise ValueError("Only the frontdesk session records runs; the planner has no session")
+        if not self._ledger.has_event(colony_id, UTTERANCE_EVENT, utterance_seq):
+            raise ValueError("A run answers a user utterance of this colony")
+        _check_run_messages(messages)
+        payload = {"utterance_seq": utterance_seq, "messages": messages}
+        return self._ledger.append(colony_id, load_epoch, game_tick, FRONTDESK, RUN_EVENT, payload)
 
     def submit(self, colony_id, load_epoch, game_tick, actor, submission):
         """Write one board revision and its event atomically, or raise and write nothing."""
@@ -104,6 +116,48 @@ def current_board(revisions):
         if revision["revision"] > latest.get(revision["entry_id"], {"revision": 0})["revision"]:
             latest[revision["entry_id"]] = revision
     return sorted(latest.values(), key=lambda entry: entry["entry_id"])
+
+
+def _check_run_messages(messages):
+    """Only assistant and tool messages; each tool call is answered by its own tool message right after."""
+    if not isinstance(messages, list) or not messages:
+        raise ValueError("A run records its messages as a non-empty list")
+    pending = set()
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") not in RUN_ROLES:
+            raise ValueError("A run records only assistant and tool messages")
+        if message["role"] == "assistant":
+            if pending:
+                raise ValueError("Each tool call is answered before the next message")
+            content = message.get("content")
+            if content is not None and not isinstance(content, str):
+                raise ValueError("An assistant message content is text or null")
+            calls = message.get("tool_calls", [])
+            if not isinstance(calls, list) or not all(_is_tool_call(call) for call in calls):
+                raise ValueError("A tool call names an id and a function name")
+            ids = [call["id"] for call in calls]
+            if len(set(ids)) != len(ids):
+                raise ValueError("Tool call ids are unique within a message")
+            pending = set(ids)
+        else:
+            answer = message.get("tool_call_id")
+            if not isinstance(answer, str) or answer not in pending or not isinstance(message.get("content"), str):
+                raise ValueError("A tool message answers a tool call of the assistant message before it")
+            pending.remove(answer)
+    if pending:
+        raise ValueError("Each tool call is answered by a tool message")
+
+
+def _is_tool_call(call):
+    function = call.get("function") if isinstance(call, dict) else None
+    return (
+        isinstance(call, dict)
+        and isinstance(call.get("id"), str)
+        and bool(call["id"])
+        and isinstance(function, dict)
+        and isinstance(function.get("name"), str)
+        and bool(function["name"])
+    )
 
 
 def open_takeovers(events):
