@@ -106,6 +106,8 @@ class _PendingQuery:
     write_mode: str | None = None
     response: Envelope | None = None
     error: BridgeError | None = None
+    cancel_event: threading.Event | None = None
+    dispatched: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -305,6 +307,9 @@ class BridgeServer:
                 return True
             self._transition(BridgeStatus.STOPPING)
             self._stop_event.set()
+            with self._connection_lock:
+                self._session_stale = True
+                self._fail_pending(BridgeNotConnected("The bridge has stopped."))
             self._close_socket(listener)
             self._close_socket(client)
 
@@ -333,60 +338,64 @@ class BridgeServer:
         """Request one correlated game query from the active game session."""
         return self._request(operation, arguments, timeout, write=False)
 
-    def dry_run(self, changeset: dict[str, Any], timeout: float = 3.0) -> Envelope:
-        return self._request("dry_run", changeset, timeout, write=True)
+    def dry_run(self, changeset: dict[str, Any], timeout: float = 3.0, *, expected_connection=None, expected_session=None, cancel_event=None) -> Envelope:
+        return self._request("dry_run", changeset, timeout, write=True, expected_connection=expected_connection, expected_session=expected_session, cancel_event=cancel_event)
 
-    def commit(self, changeset: dict[str, Any], timeout: float = 3.0) -> Envelope:
-        return self._request("commit", changeset, timeout, write=True)
+    def commit(self, changeset: dict[str, Any], timeout: float = 3.0, *, expected_connection=None, expected_session=None, cancel_event=None) -> Envelope:
+        return self._request("commit", changeset, timeout, write=True, expected_connection=expected_connection, expected_session=expected_session, cancel_event=cancel_event)
 
-    def undo(self, token: str, timeout: float = 3.0) -> Envelope:
-        return self._request("undo", {"token": token}, timeout, write=True)
+    def undo(self, token: str, timeout: float = 3.0, *, expected_connection=None, expected_session=None, cancel_event=None) -> Envelope:
+        return self._request("undo", {"token": token}, timeout, write=True, expected_connection=expected_connection, expected_session=expected_session, cancel_event=cancel_event)
 
-    def set_paused(self, paused: bool, role: str, timeout: float = 3.0) -> Envelope:
-        return self._request("set_paused", {"paused": paused, "role": role}, timeout, write=True)
+    def set_paused(self, paused: bool, role: str, timeout: float = 3.0, *, expected_connection=None, expected_session=None, cancel_event=None) -> Envelope:
+        return self._request("set_paused", {"paused": paused, "role": role}, timeout, write=True, expected_connection=expected_connection, expected_session=expected_session, cancel_event=cancel_event)
 
-    def _request(self, operation: str, arguments: dict[str, Any], timeout: float, *, write: bool) -> Envelope:
+    def _request(self, operation: str, arguments: dict[str, Any], timeout: float, *, write: bool, expected_connection=None, expected_session=None, cancel_event=None) -> Envelope:
 
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
             raise ValueError("timeout must be a positive number")
+        # The session identity, pending registration and queue insertion share the
+        # connection lock with session changes and shutdown.
         with self._connection_lock:
             epoch = self._ready_epoch
             session = self._session
             stale = self._session_stale
             capabilities = self._capabilities
-        if epoch is None or session is None or stale:
-            self._state.set_last_query("not_connected", 0.0, error_code=BridgeNotConnected.code)
-            raise BridgeNotConnected("No authenticated, active RimWorld session is available.")
-        if ("colony_write.v1" if write else self.QUERY_CAPABILITY) not in capabilities:
-            self._state.set_last_query("unsupported", 0.0, error_code=BridgeUnsupportedError.code)
-            raise BridgeUnsupportedError(
-                "The connected RimWorld Mod does not advertise write support." if write
-                else "The connected RimWorld Mod does not advertise generic query support."
-            )
+            if cancel_event is not None and cancel_event.is_set():
+                raise BridgeNotConnected("The write was cancelled before dispatch.")
+            if expected_connection is not None and (epoch != expected_connection or not self._same_session(session, expected_session)):
+                raise BridgeNotConnected("The bound game session changed before the request was queued.")
+            if epoch is None or session is None or stale:
+                self._state.set_last_query("not_connected", 0.0, error_code=BridgeNotConnected.code)
+                raise BridgeNotConnected("No authenticated, active RimWorld session is available.")
+            if ("colony_write.v1" if write else self.QUERY_CAPABILITY) not in capabilities:
+                self._state.set_last_query("unsupported", 0.0, error_code=BridgeUnsupportedError.code)
+                raise BridgeUnsupportedError("The connected RimWorld Mod does not advertise the requested capability.")
 
-        request_id = uuid.uuid4().hex
-        if write:
-            validated = make_envelope(WRITE_REQUEST, epoch, 0, Payload(mode=operation, arguments=arguments), session, request_id)
-        else:
-            validated = make_query_request(epoch, 0, session, request_id, operation, arguments)
-        arguments = validated.payload.to_dict()["arguments"]
-        pending = _PendingQuery(
-            epoch, session, threading.Event(), time.monotonic(),
-            WRITE_RESULT if write else QUERY_RESULT, operation if write else None,
-        )
-        with self._pending_lock:
-            if len(self._pending) >= self._pending_capacity:
-                self._state.set_last_query("busy", 0.0, error_code=BridgeBusyError.code)
-                raise BridgeBusyError("The bridge already has too many pending requests.")
-            self._pending[request_id] = pending
-        try:
-            self._outbound.put_nowait(_QueryRequest(epoch, session, request_id, operation, arguments, write))
-        except queue.Full:
+            request_id = uuid.uuid4().hex
+            if write:
+                validated = make_envelope(WRITE_REQUEST, epoch, 0, Payload(mode=operation, arguments=arguments), session, request_id)
+            else:
+                validated = make_query_request(epoch, 0, session, request_id, operation, arguments)
+            arguments = validated.payload.to_dict()["arguments"]
+            pending = _PendingQuery(
+                epoch, session, threading.Event(), time.monotonic(),
+                WRITE_RESULT if write else QUERY_RESULT, operation if write else None,
+                cancel_event=cancel_event,
+            )
             with self._pending_lock:
-                self._pending.pop(request_id, None)
-            self._update_metrics()
-            self._state.set_last_query("busy", 0.0, error_code=BridgeBusyError.code)
-            raise BridgeBusyError("The bridge outbound queue is full.") from None
+                if cancel_event is not None and cancel_event.is_set():
+                    raise BridgeNotConnected("The write was cancelled before dispatch.")
+                if len(self._pending) >= self._pending_capacity:
+                    self._state.set_last_query("busy", 0.0, error_code=BridgeBusyError.code)
+                    raise BridgeBusyError("The bridge already has too many pending requests.")
+                self._pending[request_id] = pending
+                try:
+                    self._outbound.put_nowait(_QueryRequest(epoch, session, request_id, operation, arguments, write))
+                except queue.Full:
+                    self._pending.pop(request_id, None)
+                    self._state.set_last_query("busy", 0.0, error_code=BridgeBusyError.code)
+                    raise BridgeBusyError("The bridge outbound queue is full.") from None
         self._update_metrics()
 
         try:
@@ -616,22 +625,48 @@ class BridgeServer:
                     "RimWorld sent an invalid protocol message.", protocol_code=exception.error_code
                 ) from None
 
+    def cancel_write(self, cancel_event: threading.Event) -> None:
+        """Cancel undispatched work; a dispatched write has an unknown outcome."""
+        cancel_event.set()
+        with self._connection_lock:
+            with self._pending_lock:
+                cancelled = {key for key, pending in self._pending.items()
+                             if pending.cancel_event is cancel_event and not pending.dispatched}
+                for key in cancelled:
+                    pending = self._pending.pop(key)
+                    pending.error = BridgeNotConnected("The write was cancelled before dispatch.")
+                    pending.event.set()
+                if cancelled:
+                    with self._outbound.mutex:
+                        self._outbound.queue = type(self._outbound.queue)(
+                            item for item in self._outbound.queue if item.request_id not in cancelled
+                        )
+                        self._outbound.not_full.notify_all()
+        self._update_metrics()
+
     def _flush_outbound(self, client: socket.socket, epoch: str, sequence: int) -> int:
         for _ in range(16):
             try:
                 item = self._outbound.get_nowait()
             except queue.Empty:
                 break
-            with self._pending_lock:
-                pending = self._pending.get(item.request_id)
             with self._connection_lock:
                 current = (
                     self._ready_epoch == item.connection_epoch == epoch
                     and self._same_session(self._session, item.session)
                     and not self._session_stale
                 )
-            if pending is None:
-                continue
+            with self._pending_lock:
+                pending = self._pending.get(item.request_id)
+                if pending is None:
+                    continue
+                if pending.cancel_event is not None and pending.cancel_event.is_set():
+                    self._pending.pop(item.request_id, None)
+                    pending.error = BridgeNotConnected("The write was cancelled before dispatch.")
+                    pending.event.set()
+                    continue
+                if current:
+                    pending.dispatched = True
             if not current:
                 self._complete_pending(item.request_id, error=BridgeNotConnected("The game session changed."))
                 continue
@@ -685,8 +720,8 @@ class BridgeServer:
                 raise BridgeProtocolError("session_open attempted to move the snapshot waterline backward.")
             self._session = session
             self._session_stale = False
-        if old_session is not None and not self._same_session(old_session, session):
-            self._fail_pending(BridgeNotConnected("The loaded RimWorld session changed."))
+            if old_session is not None and not self._same_session(old_session, session):
+                self._fail_pending(BridgeNotConnected("The loaded RimWorld session changed."))
         self._state.set_session(**self._session_kwargs(session), stale=False)
         self._transition(BridgeStatus.READY)
         self._event("info", "session", "RimWorld game session opened.")
@@ -704,7 +739,7 @@ class BridgeServer:
                 raise BridgeProtocolError("session_stale attempted to move the snapshot waterline backward.")
             self._session = session
             self._session_stale = True
-        self._fail_pending(BridgeNotConnected("The RimWorld game session became stale."))
+            self._fail_pending(BridgeNotConnected("The RimWorld game session became stale."))
         self._state.set_session(**self._session_kwargs(session), stale=True)
         self._transition(BridgeStatus.STALE)
         self._event("warning", "session", "RimWorld game session became stale.")
@@ -825,6 +860,13 @@ class BridgeServer:
                     self._expired_requests.pop(next(iter(self._expired_requests)))
                 item.error = type(error)(str(error))
                 item.event.set()
+            failed = {request_id for request_id, _ in pending}
+            if failed:
+                with self._outbound.mutex:
+                    self._outbound.queue = type(self._outbound.queue)(
+                        item for item in self._outbound.queue if item.request_id not in failed
+                    )
+                    self._outbound.not_full.notify_all()
         self._update_metrics()
 
     @staticmethod
