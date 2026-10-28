@@ -26,14 +26,18 @@ from .protocol import (
     SESSION_STALE,
     UNEXPECTED_END_OF_STREAM,
     WRITE_DEADLINE_EXCEEDED,
+    WRITE_REQUEST,
+    WRITE_RESULT,
     Direction,
     Envelope,
+    Payload,
     ProtocolError,
     SessionDescriptor,
     compute_client_proof,
     compute_server_proof,
     generate_nonce,
     make_challenge,
+    make_envelope,
     make_heartbeat,
     make_protocol_error,
     make_query_request,
@@ -98,6 +102,8 @@ class _PendingQuery:
     session: SessionDescriptor
     event: threading.Event
     started_at: float
+    result_type: str = QUERY_RESULT
+    write_mode: str | None = None
     response: Envelope | None = None
     error: BridgeError | None = None
 
@@ -109,6 +115,7 @@ class _QueryRequest:
     request_id: str
     operation: str
     arguments: dict[str, Any]
+    write: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -324,6 +331,21 @@ class BridgeServer:
 
     def request(self, operation: str, arguments: dict[str, Any], timeout: float = 3.0) -> Envelope:
         """Request one correlated game query from the active game session."""
+        return self._request(operation, arguments, timeout, write=False)
+
+    def dry_run(self, changeset: dict[str, Any], timeout: float = 3.0) -> Envelope:
+        return self._request("dry_run", changeset, timeout, write=True)
+
+    def commit(self, changeset: dict[str, Any], timeout: float = 3.0) -> Envelope:
+        return self._request("commit", changeset, timeout, write=True)
+
+    def undo(self, token: str, timeout: float = 3.0) -> Envelope:
+        return self._request("undo", {"token": token}, timeout, write=True)
+
+    def set_paused(self, paused: bool, role: str, timeout: float = 3.0) -> Envelope:
+        return self._request("set_paused", {"paused": paused, "role": role}, timeout, write=True)
+
+    def _request(self, operation: str, arguments: dict[str, Any], timeout: float, *, write: bool) -> Envelope:
 
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
             raise ValueError("timeout must be a positive number")
@@ -335,21 +357,30 @@ class BridgeServer:
         if epoch is None or session is None or stale:
             self._state.set_last_query("not_connected", 0.0, error_code=BridgeNotConnected.code)
             raise BridgeNotConnected("No authenticated, active RimWorld session is available.")
-        if self.QUERY_CAPABILITY not in capabilities:
+        if ("colony_write.v1" if write else self.QUERY_CAPABILITY) not in capabilities:
             self._state.set_last_query("unsupported", 0.0, error_code=BridgeUnsupportedError.code)
-            raise BridgeUnsupportedError("The connected RimWorld Mod does not advertise generic query support.")
+            raise BridgeUnsupportedError(
+                "The connected RimWorld Mod does not advertise write support." if write
+                else "The connected RimWorld Mod does not advertise generic query support."
+            )
 
         request_id = uuid.uuid4().hex
-        validated = make_query_request(epoch, 0, session, request_id, operation, arguments)
+        if write:
+            validated = make_envelope(WRITE_REQUEST, epoch, 0, Payload(mode=operation, arguments=arguments), session, request_id)
+        else:
+            validated = make_query_request(epoch, 0, session, request_id, operation, arguments)
         arguments = validated.payload.to_dict()["arguments"]
-        pending = _PendingQuery(epoch, session, threading.Event(), time.monotonic())
+        pending = _PendingQuery(
+            epoch, session, threading.Event(), time.monotonic(),
+            WRITE_RESULT if write else QUERY_RESULT, operation if write else None,
+        )
         with self._pending_lock:
             if len(self._pending) >= self._pending_capacity:
                 self._state.set_last_query("busy", 0.0, error_code=BridgeBusyError.code)
                 raise BridgeBusyError("The bridge already has too many pending requests.")
             self._pending[request_id] = pending
         try:
-            self._outbound.put_nowait(_QueryRequest(epoch, session, request_id, operation, arguments))
+            self._outbound.put_nowait(_QueryRequest(epoch, session, request_id, operation, arguments, write))
         except queue.Full:
             with self._pending_lock:
                 self._pending.pop(request_id, None)
@@ -358,7 +389,17 @@ class BridgeServer:
             raise BridgeBusyError("The bridge outbound queue is full.") from None
         self._update_metrics()
 
-        if not pending.event.wait(float(timeout)):
+        try:
+            completed = pending.event.wait(float(timeout))
+        except BaseException:
+            with self._pending_lock:
+                if self._pending.pop(request_id, None) is pending:
+                    self._expired_requests[request_id] = (pending.connection_epoch, pending.session)
+                    if len(self._expired_requests) > self._pending_capacity:
+                        self._expired_requests.pop(next(iter(self._expired_requests)))
+            self._update_metrics()
+            raise
+        if not completed:
             with self._pending_lock:
                 timed_out = self._pending.pop(request_id, None) is pending
                 if timed_out:
@@ -594,9 +635,15 @@ class BridgeServer:
             if not current:
                 self._complete_pending(item.request_id, error=BridgeNotConnected("The game session changed."))
                 continue
-            envelope = make_query_request(
-                epoch, sequence, item.session, item.request_id, item.operation, item.arguments
-            )
+            if item.write:
+                envelope = make_envelope(
+                    WRITE_REQUEST, epoch, sequence, Payload(mode=item.operation, arguments=item.arguments),
+                    item.session, item.request_id,
+                )
+            else:
+                envelope = make_query_request(
+                    epoch, sequence, item.session, item.request_id, item.operation, item.arguments
+                )
             self._write(client, envelope)
             sequence += 1
         self._update_metrics()
@@ -610,7 +657,7 @@ class BridgeServer:
             self._handle_session_open(envelope)
         elif envelope.type == SESSION_STALE:
             self._handle_session_stale(envelope)
-        elif envelope.type == QUERY_RESULT:
+        elif envelope.type in {QUERY_RESULT, WRITE_RESULT}:
             self._handle_query_result(envelope)
         elif envelope.type == PROTOCOL_ERROR:
             code = envelope.payload.error_code or "unknown"
@@ -699,7 +746,9 @@ class BridgeServer:
             )
         response_session = envelope.session
         if (
-            envelope.connection_epoch != pending.connection_epoch
+            envelope.type != pending.result_type
+            or not self._write_result_matches_mode(envelope, pending.write_mode)
+            or envelope.connection_epoch != pending.connection_epoch
             or not self._same_session(response_session, pending.session)
             or response_session is None
             or response_session.snapshot_sequence < pending.session.snapshot_sequence
@@ -731,6 +780,24 @@ class BridgeServer:
         self._complete_pending(envelope.request_id, response=envelope)
         if update_session:
             self._state.set_session(**self._session_kwargs(response_session), stale=False)
+
+    @staticmethod
+    def _write_result_matches_mode(envelope: Envelope, mode: str | None) -> bool:
+        if mode is None or envelope.type != WRITE_RESULT or envelope.payload.status != "ok":
+            return True
+        data = envelope.payload.data
+        if data is None:
+            return False
+        if mode == "set_paused":
+            return "status" not in data
+        if data.get("status") in {"committed", "undone"} and data.get("load_epoch") != envelope.load_epoch:
+            return False
+        allowed = {
+            "dry_run": {"ok", "conflict", "stale_epoch"},
+            "commit": {"committed", "conflict", "stale_epoch"},
+            "undo": {"undone", "conflict", "unknown_token", "already_undone", "stale_epoch"},
+        }
+        return data.get("status") in allowed.get(mode, set())
 
     def _complete_pending(
         self,

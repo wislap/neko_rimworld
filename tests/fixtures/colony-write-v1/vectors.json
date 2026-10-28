@@ -1,0 +1,847 @@
+{
+  "valid": [
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_request",
+      "payload": {
+        "mode": "commit",
+        "arguments": {
+          "changeset_id": "cs-1",
+          "author": "planner",
+          "entry_id": "t-1",
+          "load_epoch": "22222222222222222222222222222222",
+          "idempotency_key": "key-1",
+          "ops": [
+            {
+              "op": "set_work_priority",
+              "pawn": "Thing_1",
+              "work": "Doctor",
+              "expect": 3,
+              "value": 1,
+              "evidence": "e-1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "unsupported",
+        "error_code": "unsupported",
+        "message": "Writing is not available.",
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "stale_session",
+        "error_code": "stale_epoch",
+        "message": "The requested colony load is no longer active.",
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "conflict",
+          "op": 0,
+          "expected": 3,
+          "observed": 2,
+          "last_writer": "user",
+          "at_tick": 1
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "committed",
+          "changeset_id": "cs-1",
+          "load_epoch": "22222222222222222222222222222222",
+          "readback": [],
+          "undo_token": "undo-1"
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_request",
+      "payload": {
+        "mode": "dry_run",
+        "arguments": {
+          "changeset_id": "cs-1",
+          "author": "planner",
+          "entry_id": "t-1",
+          "load_epoch": "22222222222222222222222222222222",
+          "idempotency_key": "key-1",
+          "ops": [
+            {
+              "op": "set_work_priority",
+              "pawn": "Thing_1",
+              "work": "Doctor",
+              "expect": 3,
+              "value": 1,
+              "evidence": "e-1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_request",
+      "payload": {
+        "mode": "undo",
+        "arguments": {
+          "token": "undo-1"
+        }
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_request",
+      "payload": {
+        "mode": "set_paused",
+        "arguments": {
+          "paused": true,
+          "role": "frontdesk"
+        }
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "ok",
+          "preview": []
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "undone",
+          "changeset_id": "cs-1",
+          "load_epoch": "22222222222222222222222222222222",
+          "readback": []
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "failed",
+        "error_code": "invalid_arguments",
+        "message": "Invalid arguments.",
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "paused": true,
+          "role": "planner"
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "unknown_token"
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "already_undone"
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "stale_epoch",
+          "load_epoch": "22222222222222222222222222222222"
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "conflict",
+          "op": 0,
+          "expected": 3,
+          "observed": 2,
+          "last_writer": null,
+          "at_tick": null
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "ok",
+          "preview": [
+            {
+              "op": 0,
+              "object": "Thing_1",
+              "field": "priority/Doctor",
+              "expect": null,
+              "value": 1
+            }
+          ]
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "committed",
+          "changeset_id": "cs-1",
+          "load_epoch": "22222222222222222222222222222222",
+          "readback": [
+            {
+              "object": "Thing_1",
+              "field": "priority/Doctor",
+              "value": null
+            }
+          ],
+          "undo_token": "undo-1"
+        },
+        "issues": []
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_request",
+      "payload": {
+        "mode": "set_paused",
+        "arguments": {
+          "paused": "true",
+          "role": "planner"
+        }
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "committed"
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_request",
+      "payload": {
+        "mode": "undo",
+        "arguments": {
+          "token": 1
+        }
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_request",
+      "payload": {
+        "mode": "set_paused",
+        "arguments": {
+          "paused": false,
+          "role": "frontdesk"
+        }
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "paused": "yes",
+          "role": "planner"
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "unknown_token",
+          "extra": 1
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "stale_epoch"
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "conflict",
+          "op": 0,
+          "expected": 1,
+          "observed": 2,
+          "last_writer": null,
+          "at_tick": "bad"
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "ok",
+          "preview": [
+            42
+          ]
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "ok",
+          "preview": [
+            {
+              "object": "Thing_1",
+              "field": "priority",
+              "expect": 3,
+              "value": 1
+            }
+          ]
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "ok",
+          "preview": [
+            {
+              "op": -1,
+              "object": "Thing_1",
+              "field": "priority/Doctor",
+              "expect": null,
+              "value": 1
+            }
+          ]
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "ok",
+          "preview": [
+            {
+              "op": 0,
+              "object": "",
+              "field": "priority/Doctor",
+              "expect": null,
+              "value": 1
+            }
+          ]
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "ok",
+          "preview": [
+            {
+              "op": 0,
+              "object": "Thing_1",
+              "field": "",
+              "expect": null,
+              "value": 1
+            }
+          ]
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "ok",
+          "preview": [
+            {
+              "op": 0,
+              "object": "Thing_1",
+              "field": "priority/Doctor",
+              "expect": null,
+              "value": 1,
+              "extra": 1
+            }
+          ]
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "undone",
+          "changeset_id": "cs-1",
+          "load_epoch": "22222222222222222222222222222222",
+          "readback": [
+            42
+          ]
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "undone",
+          "changeset_id": "cs-1",
+          "load_epoch": "22222222222222222222222222222222",
+          "readback": [
+            {
+              "object": "Thing_1",
+              "field": "priority"
+            }
+          ]
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "undone",
+          "changeset_id": "cs-1",
+          "load_epoch": "22222222222222222222222222222222",
+          "readback": [
+            {
+              "object": "",
+              "field": "priority/Doctor",
+              "value": null
+            }
+          ]
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "undone",
+          "changeset_id": "cs-1",
+          "load_epoch": "22222222222222222222222222222222",
+          "readback": [
+            {
+              "object": "Thing_1",
+              "field": "",
+              "value": null
+            }
+          ]
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "undone",
+          "changeset_id": "cs-1",
+          "load_epoch": "22222222222222222222222222222222",
+          "readback": [
+            {
+              "object": "Thing_1",
+              "field": "priority/Doctor",
+              "value": null,
+              "extra": 1
+            }
+          ]
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_result",
+      "payload": {
+        "status": "ok",
+        "data": {
+          "status": "stale_epoch",
+          "load_epoch": "not-a-uuid"
+        },
+        "issues": []
+      }
+    }
+  ]
+}

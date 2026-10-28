@@ -40,6 +40,8 @@ SESSION_STALE: Final = "session_stale"
 HEARTBEAT: Final = "heartbeat"
 QUERY_REQUEST: Final = "query_request"
 QUERY_RESULT: Final = "query_result"
+WRITE_REQUEST: Final = "write_request"
+WRITE_RESULT: Final = "write_result"
 PROTOCOL_ERROR: Final = "protocol_error"
 
 OK: Final = "ok"
@@ -73,6 +75,8 @@ _MESSAGE_TYPES: Final = frozenset(
         HEARTBEAT,
         QUERY_REQUEST,
         QUERY_RESULT,
+        WRITE_REQUEST,
+        WRITE_RESULT,
         PROTOCOL_ERROR,
     }
 )
@@ -101,6 +105,8 @@ _PAYLOAD_FIELDS: Final = {
     HEARTBEAT: frozenset(),
     QUERY_REQUEST: frozenset({"operation", "arguments"}),
     QUERY_RESULT: frozenset({"status", "data", "issues", "execution", "error_code", "message"}),
+    WRITE_REQUEST: frozenset({"mode", "arguments"}),
+    WRITE_RESULT: frozenset({"status", "data", "issues", "error_code", "message"}),
     PROTOCOL_ERROR: frozenset({"error_code", "message"}),
 }
 
@@ -149,8 +155,8 @@ _PRE_AUTH_DIRECTIONS: Final = {
     Direction.PLUGIN_TO_MOD: frozenset({CHALLENGE, WELCOME}),
 }
 _POST_AUTH_DIRECTIONS: Final = {
-    Direction.MOD_TO_PLUGIN: frozenset({SESSION_OPEN, SESSION_STALE, HEARTBEAT, QUERY_RESULT, PROTOCOL_ERROR}),
-    Direction.PLUGIN_TO_MOD: frozenset({QUERY_REQUEST, HEARTBEAT, PROTOCOL_ERROR}),
+    Direction.MOD_TO_PLUGIN: frozenset({SESSION_OPEN, SESSION_STALE, HEARTBEAT, QUERY_RESULT, WRITE_RESULT, PROTOCOL_ERROR}),
+    Direction.PLUGIN_TO_MOD: frozenset({QUERY_REQUEST, WRITE_REQUEST, HEARTBEAT, PROTOCOL_ERROR}),
 }
 _ALL_DIRECTIONS: Final = {
     direction: _PRE_AUTH_DIRECTIONS[direction] | _POST_AUTH_DIRECTIONS[direction] for direction in Direction
@@ -180,6 +186,7 @@ class Payload(_JsonDto):
     client_nonce: str | None = None
     server_nonce: str | None = None
     proof: str | None = None
+    mode: str | None = None
     operation: str | None = None
     arguments: dict[str, Any] | None = None
     status: str | None = None
@@ -599,7 +606,7 @@ def _parse_envelope(value: Any) -> Envelope:
     has_session = bool(colony_id)
     if has_session != bool(load_epoch):
         raise ValidationError(INVALID_FIELD, "Envelope load_epoch must be present exactly when colony_id is present.")
-    needs_session = message_type in {SESSION_OPEN, SESSION_STALE, QUERY_REQUEST, QUERY_RESULT}
+    needs_session = message_type in {SESSION_OPEN, SESSION_STALE, QUERY_REQUEST, QUERY_RESULT, WRITE_REQUEST, WRITE_RESULT}
     allows_session = needs_session or message_type in {HEARTBEAT, PROTOCOL_ERROR}
     if needs_session and not has_session:
         raise ValidationError(INVALID_FIELD, "Envelope colony_id is required for this message type.")
@@ -609,7 +616,7 @@ def _parse_envelope(value: Any) -> Envelope:
         raise ValidationError(INVALID_FIELD, "Session counters must be non-negative.")
     if not has_session and (game_tick != -1 or snapshot_sequence != -1):
         raise ValidationError(INVALID_FIELD, "Counters must be -1 without a session.")
-    needs_request = message_type in {QUERY_REQUEST, QUERY_RESULT}
+    needs_request = message_type in {QUERY_REQUEST, QUERY_RESULT, WRITE_REQUEST, WRITE_RESULT}
     allows_request = needs_request or message_type == PROTOCOL_ERROR
     if needs_request and not request_id:
         raise ValidationError(INVALID_FIELD, "request_id is required for this message type.")
@@ -676,6 +683,23 @@ def _parse_payload(message_type: str, value: Any, game_tick: int, snapshot_seque
         _require_present(raw, {"operation", "arguments"}, "Payload")
         _required_text(raw, "operation", 128)
         _require_object(raw["arguments"], "arguments")
+        return Payload(**raw)
+    if message_type == WRITE_REQUEST:
+        _require_present(raw, {"mode", "arguments"}, "Payload")
+        from .write_contract import validate_request
+
+        try:
+            validate_request(raw["mode"], raw["arguments"])
+        except ValueError as exc:
+            raise ValidationError(INVALID_PAYLOAD, "Invalid write request.") from exc
+        return Payload(**raw)
+    if message_type == WRITE_RESULT:
+        from .write_contract import validate_result
+
+        try:
+            validate_result(raw)
+        except ValueError as exc:
+            raise ValidationError(INVALID_PAYLOAD, "Invalid write result.") from exc
         return Payload(**raw)
     if message_type == QUERY_RESULT:
         return _parse_query_result(raw, game_tick, snapshot_sequence)
