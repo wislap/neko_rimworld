@@ -24,7 +24,7 @@ class WorkspaceViews:
         db.create_function("contains_folded", 2, lambda text, query: query in (text or "").casefold())
         try:
             db.execute("BEGIN")
-            EventLedger._validate_schema(db)
+            EventLedger._validate_schema(db, allow_missing_derived_indexes=True)
             yield db
         finally:
             db.close()

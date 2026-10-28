@@ -45,6 +45,8 @@ class AgentRunSession:
     context_pruner: ContextPruner = field(default_factory=make_pruner, repr=False)
     evidence_views: list[dict[str, Any]] = field(default_factory=list)
     situation_context: dict[str, Any] | None = None
+    narrative_request: list[dict[str, Any]] | None = field(default=None, repr=False)
+    accept_narrative_summary: Callable[[str], Awaitable[None]] | None = field(default=None, repr=False)
 
     def __post_init__(self):
         validate_deployment()

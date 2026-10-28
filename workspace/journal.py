@@ -17,6 +17,8 @@ from .ledger import (
 
 TAKEOVER_FIELDS = frozenset({"object", "field", "value_read", "ai_value", "changeset_id"})
 RUN_ROLES = frozenset({"assistant", "tool"})
+CONTEXT_POLICY_EVENT = "frontdesk.context_policy"
+CONTEXT_POLICY_DEFAULTS = {"window_ticks": 180_000, "narrative_threshold": 60_000}
 
 
 class Journal:
@@ -32,24 +34,54 @@ class Journal:
     def events(self, colony_id):
         return self._ledger.events(colony_id)
 
+    def observe_epoch(self, colony_id, load_epoch, game_tick):
+        """Record a load once when the observed epoch changes; never rewrite history."""
+        previous = self._ledger.latest_epoch(colony_id)
+        if previous is not None and previous != load_epoch:
+            return self.record_load(colony_id, load_epoch, game_tick)
+        return None
+
+    def context_policy(self, colony_id):
+        policy = dict(CONTEXT_POLICY_DEFAULTS)
+        for event in self._ledger.events_by_kind(colony_id, (CONTEXT_POLICY_EVENT,)):
+            policy.update(event["payload"])
+        return policy
+
+    def set_context_policy(self, colony_id, load_epoch, game_tick, changes):
+        if not isinstance(changes, dict) or not changes or any(
+            key not in CONTEXT_POLICY_DEFAULTS or type(value) is not int or not 1 <= value < 2**63
+            for key, value in changes.items()
+        ):
+            raise ValueError("Context policy requires positive integer window_ticks or narrative_threshold")
+        return self._ledger.append(colony_id, load_epoch, game_tick, USER, CONTEXT_POLICY_EVENT, changes)
+
     def retained_response(self, colony_id, load_epoch, question, request_id):
         return self._ledger.retained_response(colony_id, load_epoch, question, request_id)
 
     def progress(self, colony_id, utterance_seq):
         return self._ledger.progress(colony_id, utterance_seq)
 
+    def progress_metadata(self, colony_id, utterance_seq):
+        return self._ledger.progress_metadata(colony_id, utterance_seq)
+
+    def evidence(self, colony_id, observation_id):
+        return self._ledger.evidence(colony_id, observation_id)
+
     def interrupted_events(self, colony_id):
         return self._ledger.interrupted_events(colony_id)
 
-    def context_events(self, colony_id, now_tick, board):
+    def context_events(self, colony_id, now_tick, board, window_ticks=180_000, after_run_seq=0):
         pinned = [row["source"]["event_seq"] for row in board if row["kind"] == "intent" and row["status"] != "closed"]
-        return self._ledger.context_events(colony_id, now_tick - 180_000, pinned)
+        return self._ledger.context_events(colony_id, now_tick - window_ticks, pinned, after_run_seq)
 
     def event(self, colony_id, seq):
         return self._ledger.event(colony_id, seq)
 
     def events_by_kind(self, colony_id, kinds):
         return self._ledger.events_by_kind(colony_id, kinds)
+
+    def latest_event(self, colony_id, kind):
+        return self._ledger.latest_event(colony_id, kind)
 
     def record(self, colony_id, load_epoch, game_tick, source, kind, payload):
         """Append an event kind that no typed writer owns; board, load, takeover and return have their own."""
@@ -128,7 +160,11 @@ class Journal:
         return open_takeovers(self._ledger.events_by_kind(colony_id, (TAKEOVER_EVENT, RETURN_EVENT)))
 
     def review_marks(self, colony_id):
-        return review_marks(self._ledger.revisions(colony_id), self._ledger.events_by_kind(colony_id, (LOAD_EVENT, TAKEOVER_EVENT)))
+        load = self._ledger.latest_event(colony_id, LOAD_EVENT)
+        events = self._ledger.events_by_kind(colony_id, (TAKEOVER_EVENT,))
+        if load:
+            events.append(load)
+        return review_marks(self._ledger.revisions(colony_id), events)
 
 
 def current_board(revisions):

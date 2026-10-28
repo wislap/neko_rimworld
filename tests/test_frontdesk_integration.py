@@ -29,7 +29,8 @@ async def test_frontdesk_reopens_with_original_words_and_colony_isolation(tmp_pa
     service = FrontdeskService(path, runtime, game_session=lambda: game)
     await service.consult(game, "next", object())
     assert runtime.sessions[-1].messages[1]["content"] == "  exact words\n  "
-    assert runtime.sessions[-1].messages[2]["content"] == "answer"
+    assert runtime.sessions[-1].messages[2]["name"] == "historical_narrative"
+    assert '"text":"answer"' in runtime.sessions[-1].messages[2]["content"]
     game.colony_id = "colony-b"
     await service.consult(game, "different colony", object())
     assert [m["content"] for m in runtime.sessions[-1].messages if m["role"] == "user" and m.get("name") != "colony_board"] == ["different colony"]

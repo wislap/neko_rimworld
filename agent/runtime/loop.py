@@ -365,6 +365,25 @@ class AgentRuntime:
         session: AgentRunSession,
     ) -> dict[str, Any]:
         model = self._model_factory(settings)
+        if session.narrative_request is not None:
+            messages = session.narrative_request
+            requested = await request_model(
+                model, settings, ledger, session, messages, [], finalizing=True, reserve=0,
+                research_deadline=settings.run_budget_seconds, cycle=0,
+                request_sha256=_canonical_hash({"messages": messages, "tools": []}),
+                logger=self._logger, max_attempts=MAX_MODEL_ATTEMPTS,
+            )
+            if requested.error is not None:
+                return self._finish_degraded(ledger, reason=str(requested.error), error_code=requested.error.code,
+                                             observations=session.observations, fallback_answer=session.fallback_answer,
+                                             already_degraded=ledger.state == AgentRunState.DEGRADED)
+            turn = requested.turn
+            if turn is None or turn.tool_calls or not turn.content.strip():
+                return self._finish_degraded(ledger, reason="Narrative summary was empty or invalid.",
+                                             error_code="narrative_summary_invalid", observations=session.observations,
+                                             fallback_answer=session.fallback_answer)
+            ledger.transition(AgentRunState.MODEL_RESPONDED, "model_response_received", turn.as_audit_value())
+            await session.accept_narrative_summary(turn.content)
         setup = await self._tools_provider()
 
         def submission_updated(snapshot, event, details):

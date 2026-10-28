@@ -80,21 +80,18 @@ def count_events(journal):
 def test_window_keeps_recent_turns_and_drops_older_ones_whole(journal):
     seed(journal)
     events = journal.events(COLONY)
-    assert frontdesk_messages(events, now_tick=NOW) == [
-        {"role": "user", "content": "看看食物"},
-        {"role": "assistant", "content": "食物12"},
-    ]
+    recent = frontdesk_messages(events, now_tick=NOW)
+    assert [m["content"] for m in recent if m.get("name") != "historical_narrative"] == ["看看食物"]
+    assert [json.loads(m["content"])["assistant_text"][0]["text"] for m in recent if m.get("name") == "historical_narrative"] == ["好的", "食物12"]
     everything = frontdesk_messages(events, now_tick=NOW, window_ticks=NOW + 1)
-    assert [message["role"] for message in everything] == [
-        "user", "assistant", "tool", "assistant", "user", "assistant",
-    ]
+    assert [message["role"] for message in everything] == ["user", "user", "assistant", "tool", "user", "user"]
     assert everything[0] == {"role": "user", "content": "建个冷库"}
 
 
 def test_tool_results_in_window_are_placeholders_with_their_recall_address(journal):
     old, old_run, _, _ = seed(journal)
     events = journal.events(COLONY)
-    tool_message = frontdesk_messages(events, now_tick=NOW, window_ticks=NOW + 1)[2]
+    tool_message = next(message for message in frontdesk_messages(events, now_tick=NOW, window_ticks=NOW + 1) if message["role"] == "tool")
     assert tool_message["role"] == "tool"
     assert tool_message["tool_call_id"] == "c1"
     assert tool_message["content"] == canonical({
@@ -220,7 +217,9 @@ def test_each_colony_sees_only_its_own_turns_and_runs(journal):
     assert {"另一个殖民地", "收到"}.isdisjoint(
         message["content"] for message in frontdesk_messages(mine, now_tick=NOW, window_ticks=NOW + 1)
     )
-    assert [message["content"] for message in frontdesk_messages(theirs, now_tick=NOW)] == ["另一个殖民地", "收到"]
+    view = frontdesk_messages(theirs, now_tick=NOW)
+    assert view[0]["content"] == "另一个殖民地"
+    assert view[1]["name"] == "historical_narrative" and json.loads(view[1]["content"])["assistant_text"][0]["text"] == "收到"
     assert pinned_utterances(mine, journal.board(COLONY), now_tick=NOW) == [{"event_seq": old, "text": "建个冷库"}]
     assert pinned_utterances(theirs, journal.board("colony-2"), now_tick=NOW) == []
     with pytest.raises(KeyError):

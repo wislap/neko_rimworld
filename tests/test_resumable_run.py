@@ -100,7 +100,7 @@ async def test_second_run_continues_the_first_through_the_journal(tmp_path):
         assert request[-2] == {"role": "user", "content": "And the second?"}
         journal.record_run(COLONY, E0, TICK, "frontdesk", second_seq, second.run_messages())
         assert [m["content"] for m in frontdesk_messages(journal.events(COLONY), now_tick=TICK)
-                if m["role"] == "user"] == ["Compare routes.", "And the second?"]
+                if m["role"] == "user" and m.get("name") != "historical_narrative"] == ["Compare routes.", "And the second?"]
     finally:
         journal.close()
 

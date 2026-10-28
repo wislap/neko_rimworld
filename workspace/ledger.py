@@ -20,7 +20,7 @@ LOAD_EVENT = "colony.load"
 TAKEOVER_EVENT = "user.takeover"
 RETURN_EVENT = "user.return"
 RUN_EVENT = "agent.run"
-RESERVED_EVENTS = frozenset({REVISION_EVENT, UTTERANCE_EVENT, LOAD_EVENT, TAKEOVER_EVENT, RETURN_EVENT, RUN_EVENT})
+RESERVED_EVENTS = frozenset({REVISION_EVENT, UTTERANCE_EVENT, LOAD_EVENT, TAKEOVER_EVENT, RETURN_EVENT, RUN_EVENT, "frontdesk.context_policy"})
 
 # SQLite INTEGER is a signed 64-bit value; larger Python integers cannot be stored.
 INTEGER_LIMIT = 2**63
@@ -50,6 +50,8 @@ class EventLedger:
             CREATE INDEX events_colony_sequence ON events(colony_id, seq);
             CREATE INDEX events_kind_colony_sequence ON events(kind, colony_id, seq);
             CREATE INDEX events_utterance_reference ON events(colony_id, kind, json_extract(payload, '$.utterance_seq'), seq);
+            CREATE INDEX events_evidence_reference ON events(colony_id, kind, json_extract(payload, '$.observation.observation_id'), seq);
+            CREATE INDEX events_kind_colony_tick ON events(kind, colony_id, game_tick, seq);
             CREATE TABLE board_revisions (
                 entry_id TEXT NOT NULL,
                 revision INTEGER NOT NULL,
@@ -92,6 +94,9 @@ class EventLedger:
         "events_kind_colony_sequence": "CREATE INDEX events_kind_colony_sequence ON events(kind, colony_id, seq)",
         "events_utterance_reference": ("CREATE INDEX events_utterance_reference ON events"
                                        "(colony_id, kind, json_extract(payload, '$.utterance_seq'), seq)"),
+        "events_evidence_reference": ("CREATE INDEX events_evidence_reference ON events"
+                                      "(colony_id, kind, json_extract(payload, '$.observation.observation_id'), seq)"),
+        "events_kind_colony_tick": "CREATE INDEX events_kind_colony_tick ON events(kind, colony_id, game_tick, seq)",
     }
     TRIGGERS = frozenset(
         {"sealed_event_update", "sealed_event_delete", "sealed_revision_update", "sealed_revision_delete"}
@@ -99,11 +104,21 @@ class EventLedger:
 
     def __init__(self, path: Path):
         if path.exists():
-            # Admission cannot write, repair or migrate an unsupported database.
+            # Only the exact D2 schema may receive the additive derived index.
             with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as existing:
                 existing.row_factory = sqlite3.Row
-                self._validate_schema(existing)
+                upgrade = self._validate_schema(existing, allow_missing_derived_indexes=True)
             self.db = sqlite3.connect(path.resolve().as_uri() + "?mode=rw", uri=True, isolation_level=None)
+            self.db.row_factory = sqlite3.Row
+            try:
+                if upgrade:
+                    with self.transaction():
+                        missing = self._validate_schema(self.db, allow_missing_derived_indexes=True)
+                        for name in sorted(missing):
+                            self.db.execute(self.REQUIRED_INDEX_SQL[name])
+            except Exception:
+                self.db.close()
+                raise
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             self.db = sqlite3.connect(path, isolation_level=None)
@@ -112,12 +127,13 @@ class EventLedger:
         try:
             self._validate_schema(self.db)
             self.db.execute("PRAGMA foreign_keys=ON")
+            self._narrative_cache = {}
         except Exception:
             self.db.close()
             raise
 
     @classmethod
-    def _validate_schema(cls, db):
+    def _validate_schema(cls, db, *, allow_missing_derived_indexes=False):
         """Require the two tables with their columns and sealing triggers; never migrate or repair."""
         try:
             for table, columns in cls.COLUMNS.items():
@@ -127,15 +143,32 @@ class EventLedger:
             indexes = {row["name"]: row["sql"] for row in db.execute(
                 "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='events'"
             )}
-            if any(indexes.get(name) != sql for name, sql in cls.REQUIRED_INDEX_SQL.items()):
+            additive = {"events_evidence_reference", "events_kind_colony_tick"}
+            missing = additive - indexes.keys()
+            if any(indexes.get(name) != sql for name, sql in cls.REQUIRED_INDEX_SQL.items()
+                   if not (name in missing and allow_missing_derived_indexes)):
                 raise ValueError("Unsupported event ledger schema: required event indexes are missing or changed")
             triggers = {row["name"] for row in db.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
             if not cls.TRIGGERS <= triggers:
                 raise ValueError("Unsupported event ledger schema: append-only triggers are required")
+            # Compare actual definitions, not just names: tampered table constraints,
+            # triggers, extra objects and changed non-required indexes must not be upgraded.
+            with closing(sqlite3.connect(":memory:")) as expected:
+                expected.executescript(cls.SCHEMA)
+                query = "SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name"
+                wanted = {(row[0], row[1]): row[2] for row in expected.execute(query)}
+                actual = {(row[0], row[1]): row[2] for row in db.execute(query)}
+                if allow_missing_derived_indexes:
+                    for name in missing:
+                        wanted.pop(("index", name))
+                if actual != wanted:
+                    raise ValueError("Unsupported event ledger schema: definitions differ from the known schema")
+            return missing
         except sqlite3.DatabaseError as error:
             raise ValueError("Unsupported event ledger database: current SQLite schema is required") from error
 
     def close(self):
+        self._narrative_cache.clear()
         self.db.close()
 
     @contextmanager
@@ -187,6 +220,10 @@ class EventLedger:
         rows = self.db.execute("SELECT * FROM events WHERE colony_id=? ORDER BY seq", (colony_id,))
         return [_event(row) for row in rows]
 
+    def latest_epoch(self, colony_id):
+        row = self.db.execute("SELECT load_epoch FROM events WHERE colony_id=? ORDER BY seq DESC LIMIT 1", (colony_id,)).fetchone()
+        return row[0] if row else None
+
     def retained_response(self, colony_id, load_epoch, question, request_id):
         row = self.db.execute(
             "SELECT r.*, (SELECT d.payload FROM events d WHERE d.colony_id=r.colony_id AND d.kind='agent.delivery' AND json_extract(d.payload,'$.utterance_seq')=u.seq ORDER BY d.seq DESC LIMIT 1) AS delivery_payload FROM events r JOIN events u ON u.seq=json_extract(r.payload,'$.utterance_seq') "
@@ -201,6 +238,27 @@ class EventLedger:
         rows = self.db.execute("SELECT * FROM events WHERE colony_id=? AND kind='agent.progress' AND json_extract(payload,'$.utterance_seq')=? ORDER BY seq", (colony_id, utterance_seq))
         return [_event(row) for row in rows]
 
+    def progress_metadata(self, colony_id, utterance_seq):
+        rows = self.db.execute(
+            "SELECT json_extract(payload,'$.tool_call_id') AS call_id, "
+            "json_extract(payload,'$.observation.observation_id') AS evidence_id, "
+            "json_extract(payload,'$.observation.request') AS request, "
+            "json_extract(payload,'$.observation.response.game_tick') AS game_tick "
+            "FROM events WHERE colony_id=? AND kind='agent.progress' "
+            "AND json_extract(payload,'$.utterance_seq')=? AND json_type(payload,'$.observation')='object' ORDER BY seq",
+            (colony_id, utterance_seq),
+        )
+        return [{"payload": {"tool_call_id": row["call_id"], "observation": {
+            "observation_id": row["evidence_id"], "request": json.loads(row["request"]) if row["request"] else {},
+            "response": {"game_tick": row["game_tick"]},
+        }}} for row in rows]
+
+    def evidence(self, colony_id, observation_id):
+        row = self.db.execute("SELECT * FROM events WHERE colony_id=? AND kind='agent.progress' "
+                              "AND json_extract(payload,'$.observation.observation_id')=? ORDER BY seq DESC LIMIT 1",
+                              (colony_id, observation_id)).fetchone()
+        return _event(row) if row else None
+
     def interrupted_events(self, colony_id):
         rows = self.db.execute(
             "SELECT e.* FROM events e WHERE e.colony_id=? AND (e.kind=? OR e.kind='agent.progress') AND NOT EXISTS "
@@ -209,19 +267,93 @@ class EventLedger:
         )
         return [_event(row) for row in rows]
 
-    def context_events(self, colony_id, cutoff, pinned):
-        # Select only the window transcript fields; never decode result/audit payloads.
-        rows = self.db.execute(
+    def context_events(self, colony_id, cutoff, pinned, after_run_seq=0):
+        # Cached narration is a disposable projection; new log rows alone are scanned.
+        state = self._narrative_cache.get(colony_id)
+        if state is None or after_run_seq < state["covered"]:
+            state = {"covered": after_run_seq, "last_scanned": after_run_seq, "runs": {}}
+            self._narrative_cache[colony_id] = state
+        state["covered"] = after_run_seq
+        state["runs"] = {seq: event for seq, event in state["runs"].items() if seq > after_run_seq}
+        highwater = self.db.execute("SELECT coalesce(max(seq),0) FROM events WHERE colony_id=?", (colony_id,)).fetchone()[0]
+        cursor = max(state["last_scanned"], after_run_seq)
+        while True:
+            rows = self.db.execute(
+                "SELECT seq,colony_id,load_epoch,game_tick,wall_time,source,kind,"
+                "json_object('utterance_seq',json_extract(payload,'$.utterance_seq')) AS payload "
+                "FROM events WHERE kind=? AND colony_id=? AND seq>? AND seq<=? AND "
+                "EXISTS (SELECT 1 FROM json_each(events.payload,'$.messages') m WHERE json_extract(m.value,'$.role')='assistant' AND "
+                "((json_type(m.value,'$.content')='text' AND length(json_extract(m.value,'$.content'))>0) OR "
+                "EXISTS (SELECT 1 FROM json_each(m.value,'$.tool_calls') c WHERE json_extract(c.value,'$.function.name')='submit_response' AND "
+                "CASE WHEN json_valid(json_extract(c.value,'$.function.arguments')) THEN "
+                "((json_type(json_extract(c.value,'$.function.arguments'),'$.answer')='text' AND length(json_extract(json_extract(c.value,'$.function.arguments'),'$.answer'))>0) OR "
+                "(json_type(json_extract(c.value,'$.function.arguments'),'$.detail')='text' AND length(json_extract(json_extract(c.value,'$.function.arguments'),'$.detail'))>0)) ELSE 0 END))) ORDER BY seq LIMIT 256",
+                (RUN_EVENT, colony_id, cursor, highwater),
+            ).fetchall()
+            if not rows:
+                break
+            for row in rows:
+                event = _event(row)
+                event["payload"]["messages"] = self._context_messages(event["seq"], True)
+                state["runs"][event["seq"]] = event
+            cursor = rows[-1]["seq"]
+        state["last_scanned"] = max(highwater, cursor)
+        selected = dict(state["runs"])
+        for row in self.db.execute(
+            "SELECT * FROM events WHERE kind=? AND colony_id=? AND game_tick>=?", (UTTERANCE_EVENT, colony_id, cutoff)
+        ):
+            selected[row["seq"]] = _event(row)
+        for row in self.db.execute(
+            "SELECT * FROM events WHERE kind=? AND colony_id=? AND seq IN (SELECT value FROM json_each(?))",
+            (UTTERANCE_EVENT, colony_id, encode(list(pinned))),
+        ):
+            selected[row["seq"]] = _event(row)
+        for row in self.db.execute(
             "SELECT seq,colony_id,load_epoch,game_tick,wall_time,source,kind,"
-            "CASE WHEN kind=? THEN json_object('utterance_seq',json_extract(payload,'$.utterance_seq'),'messages',json_extract(payload,'$.messages')) ELSE payload END AS payload "
-            "FROM events WHERE colony_id=? AND ((kind IN (?,?) AND game_tick>=?) OR (kind=? AND seq IN (SELECT value FROM json_each(?)))) ORDER BY seq",
-            (RUN_EVENT, colony_id, UTTERANCE_EVENT, RUN_EVENT, cutoff, UTTERANCE_EVENT, encode(list(pinned))),
+            "json_object('utterance_seq',json_extract(payload,'$.utterance_seq')) AS payload "
+            "FROM events WHERE kind=? AND colony_id=? AND game_tick>=?", (RUN_EVENT, colony_id, cutoff)
+        ):
+            if row["seq"] not in selected:
+                event = _event(row)
+                event["payload"]["messages"] = self._context_messages(event["seq"], event["seq"] > after_run_seq)
+                selected[event["seq"]] = event
+        return [selected[seq] for seq in sorted(selected)]
+
+    def _context_messages(self, seq, include_narrative):
+        rows = self.db.execute(
+            "SELECT m.key AS idx, json_extract(m.value,'$.role') AS role, "
+            "CASE WHEN ? AND json_extract(m.value,'$.role')='assistant' THEN json_extract(m.value,'$.content') END AS content, "
+            "json_extract(m.value,'$.tool_call_id') AS tool_call_id "
+            "FROM events e, json_each(e.payload,'$.messages') m WHERE e.seq=? ORDER BY m.key", (include_narrative, seq),
+        ).fetchall()
+        messages = []
+        by_index = {}
+        for row in rows:
+            message = {"role": row["role"]}
+            if row["role"] == "assistant":
+                message["content"] = row["content"]
+            else:
+                message.update(tool_call_id=row["tool_call_id"], content="")
+            messages.append(message)
+            by_index[row["idx"]] = message
+        calls = self.db.execute(
+            "SELECT m.key AS idx, json_extract(c.value,'$.id') AS id, json_extract(c.value,'$.type') AS type, "
+            "json_extract(c.value,'$.function.name') AS name, CASE WHEN ? AND json_extract(c.value,'$.function.name')='submit_response' "
+            "THEN json_extract(c.value,'$.function.arguments') END AS arguments "
+            "FROM events e, json_each(e.payload,'$.messages') m, json_each(m.value,'$.tool_calls') c WHERE e.seq=? ORDER BY m.key,c.key",
+            (include_narrative, seq),
         )
-        return [_event(row) for row in rows]
+        for row in calls:
+            by_index[row["idx"]].setdefault("tool_calls", []).append({"id": row["id"], "type": row["type"] or "function", "function": {"name": row["name"], "arguments": row["arguments"] or "{}"}})
+        return messages
 
     def events_by_kind(self, colony_id, kinds):
         rows = self.db.execute("SELECT * FROM events WHERE colony_id=? AND kind IN (SELECT value FROM json_each(?)) ORDER BY seq", (colony_id, encode(list(kinds))))
         return [_event(row) for row in rows]
+
+    def latest_event(self, colony_id, kind):
+        row = self.db.execute("SELECT * FROM events WHERE kind=? AND colony_id=? ORDER BY seq DESC LIMIT 1", (kind, colony_id)).fetchone()
+        return _event(row) if row else None
 
     def event(self, colony_id, seq):
         row = self.db.execute("SELECT * FROM events WHERE colony_id=? AND seq=?", (colony_id, seq)).fetchone()
