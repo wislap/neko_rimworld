@@ -14,6 +14,7 @@ and finalizing state.
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 from typing import Any
 
 from ...tool_contracts import PUBLIC_QUERY_VERSION, ToolExecutionError, ToolSpec
@@ -96,6 +97,25 @@ class SemanticInteraction(ReadOnlyResearchSurface):
         passthrough = tuple(self.original[name] for name in sorted(PASSTHROUGH_TOOLS) if name in self.original)
         specs.append(make_activity_tool(self))
         specs.extend(computation_tools(self))
+        if self.setup.observation_source != "native":
+            async def with_origin(handler, args):
+                try:
+                    result = dict(await handler(args))
+                except ToolExecutionError as error:
+                    raise ToolExecutionError(error.code, str(error), recoverable=error.recoverable,
+                        details={**error.details, "source_kind": self.setup.observation_source}) from error
+                result["source_kind"] = self.setup.observation_source
+                return result
+
+            wrapped = []
+            for spec in specs:
+                async def sourced(args, handler=spec.handler):
+                    return await with_origin(handler, args)
+                description = ("Offline captured graph, partial DTOs; no live Verse reads. "
+                    "Uncaptured fields and environment, route and spatial reads are unavailable. "
+                    "References to native operations below describe the schema, not the source. " + spec.description)
+                wrapped.append(replace(spec, handler=sourced, description=description))
+            specs = wrapped
         return (*specs, *passthrough)
 
     def snapshot(self) -> dict[str, Any]:
@@ -148,7 +168,7 @@ class SemanticInteraction(ReadOnlyResearchSurface):
         else:
             ordered["status"] = native.get("status", "ok")
         ordered["issues"] = copy.deepcopy(native.get("issues", []))
-        ordered["source_kind"] = "native"
+        ordered["source_kind"] = getattr(self.setup, "observation_source", "native")
         return ordered
 
     # -- native read ------------------------------------------------------
@@ -185,7 +205,7 @@ class SemanticInteraction(ReadOnlyResearchSurface):
             raise ToolExecutionError(
                 payload.get("error_code") or "query_failed",
                 payload.get("message") or "Native read failed",
-                details={"issues": payload.get("issues", [])},
+                details={"issues": payload.get("issues", []), **({"source_kind": self.setup.observation_source} if self.setup.observation_source != "native" else {})},
             )
         return dict(
             observation_id=value["observation_id"],
@@ -195,6 +215,7 @@ class SemanticInteraction(ReadOnlyResearchSurface):
             status=payload["status"],
             data=pack(payload.get("data"), payload.get("issues", [])),
             issues=payload.get("issues", []),
+            source_kind=self.setup.observation_source,
             pages=[
                 copy.deepcopy(row.get("page"))
                 for row in (payload.get("data") or {}).get("results", [])

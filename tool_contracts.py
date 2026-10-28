@@ -83,6 +83,12 @@ class ToolSetup:
     knowledge_view: Any = None
     #: Internal preparation source, deliberately absent from the model tool set.
     situation_provider: Any = None
+    #: Trusted origin of observations, set by the tool provider, never by game data.
+    observation_source: str = "native"
+
+    def __post_init__(self):
+        if self.observation_source not in {"native", "offline_captured_graph"}:
+            raise ValueError("unsupported observation source")
 
 
 PUBLIC_QUERY_VERSION = "public_query.v2"

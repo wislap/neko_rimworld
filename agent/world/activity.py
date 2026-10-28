@@ -310,12 +310,14 @@ class ActivityDataSource(Protocol):
 
 
 class SemanticActivityDataSource:
-    source_kind = "native"
-
     def __init__(self, interaction):
         self.interaction = interaction
         self._resolved = {}
         self.resolution_epoch = None
+
+    @property
+    def source_kind(self):
+        return getattr(getattr(self.interaction, "setup", None), "observation_source", "native")
 
     @staticmethod
     def _identity(obj, kind):

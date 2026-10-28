@@ -2,12 +2,13 @@ from types import SimpleNamespace
 
 import pytest
 from plugin.plugins.neko_rimworld.agent.world.semantic_tools import SemanticInteraction
-from plugin.plugins.neko_rimworld.tool_contracts import ToolExecutionError
+from plugin.plugins.neko_rimworld.tool_contracts import ToolExecutionError, ToolSetup
 
 
 @pytest.mark.asyncio
 async def test_native_world_change_is_sticky_and_blocks_later_native_calls():
     interaction = object.__new__(SemanticInteraction)
+    interaction.setup = ToolSetup(())
     interaction.session = SimpleNamespace(observations=[])
     interaction.sample_identity = None
     calls = []
@@ -26,7 +27,8 @@ async def test_native_world_change_is_sticky_and_blocks_later_native_calls():
         return SimpleNamespace(to_dict=lambda: value)
 
     interaction.original = {"query": SimpleNamespace(handler=handler)}
-    await interaction.execute_native({"from": "maps"})
+    first = await interaction.execute_native({"from": "maps"})
+    assert first["source_kind"] == "native"
     with pytest.raises(ToolExecutionError) as changed:
         await interaction.execute_native({"from": "maps"})
     assert changed.value.code == "world_changed" and not changed.value.recoverable
