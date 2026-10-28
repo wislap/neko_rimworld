@@ -147,7 +147,7 @@ async def test_admitted_session_keeps_its_surface_but_new_session_rejects_retire
     result = await runtime.execute(session, settings())
     assert result["status"] == "ok" and session.context_pruner is not None
     assert model.requests[0]["tools"] == model.requests[1]["tools"]
-    assert model.requests[1]["messages"][0]["content"] == model.requests[0]["messages"][0]["content"] + "\n" + session.context_pruner.guide
+    assert model.requests[1]["messages"][0]["content"] == model.requests[0]["messages"][0]["content"]
     with pytest.raises(ValueError, match="NEKO_CONTEXT_PRUNING is retired"):
         AgentRunSession.create(ledger=AgentAuditLedger("new"), question="new")
 

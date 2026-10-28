@@ -905,8 +905,6 @@ class PrunedEvidence:
 
 
 class ContextPruner:
-    guide = GUIDE
-
     def __init__(self):
         self.seen_notes = set()
 

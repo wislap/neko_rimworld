@@ -83,15 +83,10 @@ class AgentRunSession:
         )
 
     def request_messages(self, advisory: str) -> list[dict[str, Any]]:
-        messages = [
+        return [
             *self.submission_repair_history(),
             {"role": "system", "content": advisory},
         ]
-        if self.evidence_views:
-            # Only this code-authored format guide becomes an instruction. Game
-            # descriptions/shared values remain in their original tool role.
-            messages[0] = {**messages[0], "content": messages[0]["content"] + "\n" + self.context_pruner.guide}
-        return messages
 
     def submission_repair_history(self):
         """Remove only superseded failed submissions, never research evidence."""

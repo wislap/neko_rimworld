@@ -18,7 +18,7 @@ from ..model.model_client import AgentModelSettings, ModelClient, OpenAICompatib
 from ..model.model_requests import MAX_MODEL_ATTEMPTS, _canonical_hash, request_model
 from .audit import AgentAuditCapacityError, AgentAuditLedger, AgentAuditRegistry, AgentRunState
 from .execution_environment import ExecutionEnvironment
-from .prompt import build_runtime_advisory, build_system_prompt
+from .prompt import build_runtime_advisory
 from .session import AgentRunSession
 from .tools import ToolRegistry
 
@@ -397,9 +397,6 @@ class AgentRuntime:
                     "research_closed", {"remaining_seconds": remaining, "research_deadline": research_deadline}
                 )
                 session.interaction.finalizing = True
-                session.messages[0]["content"] = build_system_prompt(
-                    finalizing=True, persistent_work=session.workspace_id is not None
-                )
             tools = environment.registry()
             ledger.record("interaction_state", session.interaction.snapshot())
             advisory = build_runtime_advisory(
@@ -408,6 +405,7 @@ class AgentRuntime:
                 remaining_seconds=remaining,
                 model_calls=session.model_calls,
                 tool_calls=session.tool_calls,
+                finalizing=finalizing,
                 finalization_reserve_seconds=settings.finalization_reserve_seconds,
             )
             request_messages = session.request_messages(advisory)

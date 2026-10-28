@@ -3,11 +3,12 @@
 import copy
 
 import pytest
-from plugin.plugins.neko_rimworld.agent.context.context_pruning import ContextPruner
+from plugin.plugins.neko_rimworld.agent.context.context_pruning import GUIDE, ContextPruner
 from plugin.plugins.neko_rimworld.agent.runtime.audit import AgentAuditLedger
+from plugin.plugins.neko_rimworld.agent.runtime.prompt import FINALIZATION_PHASE, build_runtime_advisory
 from plugin.plugins.neko_rimworld.agent.runtime.session import AgentRunSession
 from plugin.plugins.neko_rimworld.agent.runtime.tools import ToolRegistry
-from plugin.plugins.neko_rimworld.message_contracts import ToolCall, ToolResult
+from plugin.plugins.neko_rimworld.message_contracts import AssistantTurn, ToolCall, ToolResult
 from plugin.plugins.neko_rimworld.tool_contracts import ToolSpec
 
 
@@ -66,7 +67,7 @@ async def test_registry_projection_is_used_once_with_raw_results_metrics_and_gui
     assert run.evidence_views == [{"call_id": "call_1", "tool": "look", **result.model_view_metrics}]
     before = copy.deepcopy(run.messages)
     request = run.request_messages("advisory")
-    assert request[0]["content"] == "system\n" + pruner.guide
+    assert request[0]["content"] == "system"
     assert request[1:] == [*before[1:], {"role": "system", "content": "advisory"}]
     assert run.request_messages("advisory") == request and run.messages == before
 
@@ -89,3 +90,28 @@ def test_noncontext_and_terminal_results_keep_their_contract(name, terminal):
     result = ToolResult("call_1", name, True, {"ok": True, "data": {"text": "value"}}, terminal=terminal)
     assert run.tool_message(result) == result.as_message()
     assert run.context_pruner.calls == 0 and run.evidence_views == []
+
+
+def test_system_prompt_prefix_is_byte_stable_across_evidence_and_finalization():
+    run = AgentRunSession.create(ledger=AgentAuditLedger("question"), question="question")
+    requests = []
+
+    def request(**kwargs):
+        advisory = build_runtime_advisory(cycle=len(requests) + 1, elapsed_seconds=1.0,
+            remaining_seconds=30.0, model_calls=len(requests), tool_calls=0, **kwargs)
+        requests.append(run.request_messages(advisory))
+
+    request()
+    run.append_assistant(AssistantTurn("r1", "test", "tool_calls", "", (ToolCall("r1", "look", "{}"),)))
+    run.append_tool_message(run.tool_message(ToolResult("r1", "look", True, {"ok": True, "data": {"text": "value"}})))
+    assert run.evidence_views
+    request()
+    run.append_assistant(AssistantTurn("r2", "test", "stop", "partial"))
+    request(finalizing=True)
+
+    assert requests[0][0]["content"] == requests[1][0]["content"] == requests[2][0]["content"]
+    assert GUIDE in requests[0][0]["content"]
+    for earlier, later in zip(requests, requests[1:]):
+        assert later[:len(earlier) - 1] == earlier[:-1]
+    assert FINALIZATION_PHASE.strip() not in requests[1][-1]["content"]
+    assert FINALIZATION_PHASE.strip() in requests[2][-1]["content"]

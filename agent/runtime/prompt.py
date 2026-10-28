@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..context.context_pruning import GUIDE
+
 IDENTITY = (
     'You are the private read-only RimWorld domain agent inside N.E.K.O.\n'
 )
@@ -68,7 +70,7 @@ FINALIZATION_PHASE = (
     'The research deadline has been reached. Query tools are unavailable for the rest of this run. Finish '
     'using the observations already obtained. Answer supported requested facts and clearly state missing or '
     'incomplete facts. Do not turn unknown values into zero, invent explanations, or claim unfinished counts '
-    'are complete. Do not start further research.\n\n'
+    'are complete. Do not start further research.'
 )
 
 QUERY_GUIDE = (
@@ -87,22 +89,16 @@ QUERY_GUIDE = (
     'and every explicitly requested comparison.'
 )
 
-def build_system_prompt(*, finalizing=False, persistent_work=False) -> str:
+def build_system_prompt(*, persistent_work=False) -> str:
+    """One fixed system prompt per session; finalization is signalled in the advisory instead."""
     task = TASK
     if persistent_work:
         task = task.replace(
             "No long-term memory, game mutation or autonomous action.",
             "The caller retains a persistent colony workspace. No game mutation or autonomous action.",
         )
-    sections = [IDENTITY, task, EVIDENCE]
-    if not finalizing:
-        sections.append(QUERY_POLICY)
-    sections.extend((SAMPLE_IDENTITY, SCOPE_SEMANTICS, COMPLETION_POLICY))
-    if finalizing:
-        sections.append(FINALIZATION_PHASE)
-    sections.extend((SUBMISSION, STYLE))
-    if not finalizing:
-        sections.extend(("\n\n", QUERY_GUIDE))
+    sections = [IDENTITY, task, EVIDENCE, QUERY_POLICY, SAMPLE_IDENTITY, SCOPE_SEMANTICS, COMPLETION_POLICY]
+    sections.extend((SUBMISSION, STYLE, "\n\n", QUERY_GUIDE, "\n", GUIDE))
     return "".join(sections)
 
 
@@ -113,16 +109,18 @@ def build_runtime_advisory(
     remaining_seconds: float,
     model_calls: int,
     tool_calls: int,
+    finalizing: bool = False,
     finalization_reserve_seconds: float = 15.0,
 ) -> str:
     pressure = ""
     if remaining_seconds <= finalization_reserve_seconds:
         pressure = " The finalization reserve has been reached. Prefer submitting the evidence-backed answer now, clearly stating what remains unknown. Time pressure does not make evidence sufficient."
+    phase = f" {FINALIZATION_PHASE}" if finalizing else ""
 
     return (
         "Runtime advisory (not user content): "
         f"cycle={cycle}; "
         f"elapsed_seconds={elapsed_seconds:.1f}; remaining_seconds={remaining_seconds:.1f}; "
         f"model_calls={model_calls}; tool_calls={tool_calls}."
-        f"{pressure}"
+        f"{pressure}{phase}"
     )
