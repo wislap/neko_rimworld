@@ -94,6 +94,71 @@ class Journal:
             raise ValueError("A user utterance requires text")
         return self._ledger.append(colony_id, load_epoch, game_tick, USER, UTTERANCE_EVENT, {"text": text, "request_id": request_id})
 
+    def record_frontdesk_wake(self, colony_id, load_epoch, game_tick, source, text):
+        if source not in {"user", "game", "agent", "frontdesk", "planner", "plugin"}:
+            raise ValueError("Unknown wake source")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("Wake reason requires text")
+        with self._ledger.transaction():
+            if source == "user":
+                anchor = self.record_utterance(colony_id, load_epoch, game_tick, text)
+                key = "utterance_seq"
+            else:
+                anchor = self._ledger.append(colony_id, load_epoch, game_tick,
+                                             "mod" if source == "game" else "plugin" if source == "agent" else source,
+                                             "frontdesk.trigger", {"source": source, "text": text})
+                key = "trigger_seq"
+            return self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "frontdesk.wake",
+                                       {"source": source, key: anchor})
+
+    def ingest_game_event(self, colony_id, load_epoch, game_tick, connection, event):
+        """Persist a native event and its default wakes atomically; the raw row is the cursor."""
+        cursor = event.get("cursor")
+        if (type(cursor) is not int or cursor < 1 or not isinstance(connection, str) or not connection
+                or (event.get("connection_epoch"), event.get("colony_id"), event.get("load_epoch"),
+                    event.get("game_tick")) != (connection, colony_id, load_epoch, game_tick)):
+            raise ValueError("Invalid native event cursor or sampled identity")
+        with self._ledger.transaction():
+            last = self._ledger.game_event_cursor(colony_id, load_epoch, connection)
+            if cursor <= last:
+                previous = self._ledger.game_event_at_cursor(colony_id, load_epoch, connection, cursor)
+                if previous and previous["payload"]["event"] == event:
+                    return False
+                raise ValueError("Native event cursor was reused")
+            latest_epoch = self._ledger.latest_epoch(colony_id)
+            previous_native = self._ledger.latest_event(colony_id, "game.event")
+            previous_epoch = previous_native["load_epoch"] if previous_native else latest_epoch
+            epoch_changed = previous_epoch is not None and previous_epoch != load_epoch
+            if epoch_changed and latest_epoch != load_epoch:
+                start_tick = event.get("data", {}).get("start_tick")
+                loaded_at = (start_tick if event.get("kind") == "session_snapshot"
+                             and type(start_tick) is int and 0 <= start_tick <= game_tick else game_tick)
+                self.record_load(colony_id, load_epoch, loaded_at)
+            seq = self._ledger.append(colony_id, load_epoch, game_tick, "mod", "game.event",
+                                      {"connection": connection, "event": event})
+            kind = event.get("kind")
+            data = event.get("data", {})
+            if epoch_changed or (kind == "letter" and
+                    (data.get("def") in ("ThreatBig", "ThreatSmall", "NegativeEvent")
+                     or data.get("is_choice_letter") is True)):
+                from ..serialization import canonical
+                text = canonical({"event_seq": seq, "event": event})
+                anchor = self._ledger.append(colony_id, load_epoch, game_tick, "mod", "frontdesk.trigger",
+                                             {"source": "game", "text": text, "event_seq": seq})
+                self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "frontdesk.wake",
+                                    {"source": "game", "trigger_seq": anchor})
+            if epoch_changed:
+                self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "planner.wake",
+                                    {"source": "game", "text": "World loaded", "event_seq": seq})
+            return True
+
+    def game_event_gap(self, colony_id, load_epoch, connection):
+        return any(e["load_epoch"] == load_epoch and e["payload"].get("connection") == connection
+                   for e in self._ledger.events_by_kind(colony_id, ("game.event_gap",)))
+
+    def game_event_cursor(self, colony_id, load_epoch, connection):
+        return self._ledger.game_event_cursor(colony_id, load_epoch, connection)
+
     def record_load(self, colony_id, load_epoch, game_tick):
         return self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, LOAD_EVENT, {})
 
@@ -118,10 +183,11 @@ class Journal:
         """Append the assistant and tool messages one frontdesk run added, answering a user utterance."""
         if role != FRONTDESK:
             raise ValueError("Only the frontdesk session records runs; the planner has no session")
-        if not self._ledger.has_event(colony_id, UTTERANCE_EVENT, utterance_seq):
-            raise ValueError("A run answers a user utterance of this colony")
+        if not any(self._ledger.has_event(colony_id, kind, utterance_seq) for kind in (UTTERANCE_EVENT, "frontdesk.trigger")):
+            raise ValueError("A run answers a user utterance or frontdesk trigger of this colony")
         _check_run_messages(messages)
-        payload = {"utterance_seq": utterance_seq, "messages": messages, "result": result, "audit": audit}
+        key = "utterance_seq" if self._ledger.has_event(colony_id, UTTERANCE_EVENT, utterance_seq) else "trigger_seq"
+        payload = {key: utterance_seq, "messages": messages, "result": result, "audit": audit}
         return self._ledger.append(colony_id, load_epoch, game_tick, FRONTDESK, RUN_EVENT, payload)
 
     def finish_planner(self, colony_id, load_epoch, game_tick, start_seq, cursor, result, audit):

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 
-from ...tool_contracts import ToolSetup, ToolSpec
+from ...tool_contracts import ToolExecutionError, ToolSetup, ToolSpec
 from ..world.semantic_tools import semantic_interaction_factory
 from .tools import ToolRegistry
 
@@ -23,6 +23,42 @@ class ExecutionEnvironment:
         self.session = session
         session.interaction = semantic_interaction_factory(setup, session, update)
         self.write_tools = ()
+        port = setup.write_port
+        if (session.explicit_scheduler and setup.observation_source == "native" and port is not None
+                and "colony_pause.v1" in getattr(port, "capabilities", ())):
+            async def set_paused(args):
+                paused = args.get("paused")
+                if type(paused) is not bool or set(args) != {"paused"}:
+                    raise ToolExecutionError("invalid_tool_arguments", "paused must be a boolean")
+                if session.role == "frontdesk" and not paused:
+                    raise ToolExecutionError("pause_forbidden", "The frontdesk may only pause.")
+                request = {"paused": paused, "role": session.role}
+                try:
+                    if session.persist_progress is not None:
+                        await session.persist_progress({"pause_request": request})
+                except BaseException:
+                    session.write_record_issue = "prepared"
+                    raise
+                try:
+                    result = await port.set_paused(paused, role=session.role)
+                except ToolExecutionError:
+                    raise
+                except BaseException:
+                    session.write_record_issue = "unknown"
+                    raise
+                session.write_outcomes.append({"stage": "result", "mode": "set_paused", "receipt": copy.deepcopy(result)})
+                try:
+                    if session.persist_progress is not None:
+                        await session.persist_progress({"pause_result": copy.deepcopy(result)})
+                except BaseException:
+                    session.write_record_issue = "result"
+                    raise
+                return result
+
+            self.write_tools = (ToolSpec("set_paused", "Pause the game" +
+                (" or resume an agent-owned pause" if session.role == "planner" else "") + ".",
+                {"type": "object", "properties": {"paused": {"type": "boolean"}},
+                 "required": ["paused"], "additionalProperties": False}, set_paused, exclusive=True),)
         if (session.role == "planner" and setup.write_catalog is not None
                 and setup.write_port is not None and setup.write_identity is not None
                 and setup.observation_source == "native" and setup.write_identity() is not None):
@@ -50,7 +86,7 @@ class ExecutionEnvironment:
                 handler = getattr(service, name)
                 specs.append(ToolSpec(name, function["description"], function["parameters"], handler,
                                       exclusive=True))
-            self.write_tools = tuple(specs)
+            self.write_tools += tuple(specs)
 
     def registry(self):
         session = self.session

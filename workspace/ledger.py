@@ -220,6 +220,22 @@ class EventLedger:
         rows = self.db.execute("SELECT * FROM events WHERE colony_id=? ORDER BY seq", (colony_id,))
         return [_event(row) for row in rows]
 
+    def game_event_cursor(self, colony_id, load_epoch, connection):
+        row = self.db.execute(
+            "SELECT json_extract(payload,'$.event.cursor') FROM events "
+            "WHERE colony_id=? AND load_epoch=? AND kind='game.event' "
+            "AND json_extract(payload,'$.connection')=? ORDER BY seq DESC LIMIT 1", (colony_id, load_epoch, connection),
+        ).fetchone()
+        return row[0] if row else 0
+
+    def game_event_at_cursor(self, colony_id, load_epoch, connection, cursor):
+        row = self.db.execute(
+            "SELECT * FROM events WHERE colony_id=? AND load_epoch=? AND kind='game.event' "
+            "AND json_extract(payload,'$.connection')=? AND json_extract(payload,'$.event.cursor')=?",
+            (colony_id, load_epoch, connection, cursor),
+        ).fetchone()
+        return _event(row) if row else None
+
     def latest_epoch(self, colony_id):
         row = self.db.execute("SELECT load_epoch FROM events WHERE colony_id=? ORDER BY seq DESC LIMIT 1", (colony_id,)).fetchone()
         return row[0] if row else None
@@ -235,7 +251,7 @@ class EventLedger:
         return _event(row) if row else None
 
     def progress(self, colony_id, utterance_seq):
-        rows = self.db.execute("SELECT * FROM events WHERE colony_id=? AND kind='agent.progress' AND json_extract(payload,'$.utterance_seq')=? ORDER BY seq", (colony_id, utterance_seq))
+        rows = self.db.execute("SELECT * FROM events WHERE colony_id=? AND kind='agent.progress' AND coalesce(json_extract(payload,'$.trigger_seq'),json_extract(payload,'$.utterance_seq'))=? ORDER BY seq", (colony_id, utterance_seq))
         return [_event(row) for row in rows]
 
     def progress_metadata(self, colony_id, utterance_seq):
@@ -245,7 +261,7 @@ class EventLedger:
             "json_extract(payload,'$.observation.request') AS request, "
             "json_extract(payload,'$.observation.response.game_tick') AS game_tick "
             "FROM events WHERE colony_id=? AND kind='agent.progress' "
-            "AND json_extract(payload,'$.utterance_seq')=? AND json_type(payload,'$.observation')='object' ORDER BY seq",
+            "AND coalesce(json_extract(payload,'$.trigger_seq'),json_extract(payload,'$.utterance_seq'))=? AND json_type(payload,'$.observation')='object' ORDER BY seq",
             (colony_id, utterance_seq),
         )
         return [{"payload": {"tool_call_id": row["call_id"], "observation": {
@@ -261,8 +277,8 @@ class EventLedger:
 
     def interrupted_events(self, colony_id):
         rows = self.db.execute(
-            "SELECT e.* FROM events e WHERE e.colony_id=? AND (e.kind=? OR e.kind='agent.progress') AND NOT EXISTS "
-            "(SELECT 1 FROM events r WHERE r.colony_id=e.colony_id AND r.kind=? AND json_extract(r.payload,'$.utterance_seq')=CASE WHEN e.kind=? THEN e.seq ELSE json_extract(e.payload,'$.utterance_seq') END) ORDER BY e.seq",
+            "SELECT e.* FROM events e WHERE e.colony_id=? AND (e.kind IN (?, 'frontdesk.trigger') OR e.kind='agent.progress') AND NOT EXISTS "
+            "(SELECT 1 FROM events r WHERE r.colony_id=e.colony_id AND r.kind=? AND coalesce(json_extract(r.payload,'$.trigger_seq'),json_extract(r.payload,'$.utterance_seq'))=CASE WHEN e.kind IN (?, 'frontdesk.trigger') THEN e.seq ELSE coalesce(json_extract(e.payload,'$.trigger_seq'),json_extract(e.payload,'$.utterance_seq')) END) ORDER BY e.seq",
             (colony_id, UTTERANCE_EVENT, RUN_EVENT, UTTERANCE_EVENT),
         )
         return [_event(row) for row in rows]
@@ -280,7 +296,7 @@ class EventLedger:
         while True:
             rows = self.db.execute(
                 "SELECT seq,colony_id,load_epoch,game_tick,wall_time,source,kind,"
-                "json_object('utterance_seq',json_extract(payload,'$.utterance_seq')) AS payload "
+                "json_object('trigger_seq',coalesce(json_extract(payload,'$.trigger_seq'),json_extract(payload,'$.utterance_seq'))) AS payload "
                 "FROM events WHERE kind=? AND colony_id=? AND seq>? AND seq<=? AND "
                 "EXISTS (SELECT 1 FROM json_each(events.payload,'$.messages') m WHERE json_extract(m.value,'$.role')='assistant' AND "
                 "((json_type(m.value,'$.content')='text' AND length(json_extract(m.value,'$.content'))>0) OR "
@@ -300,7 +316,7 @@ class EventLedger:
         state["last_scanned"] = max(highwater, cursor)
         selected = dict(state["runs"])
         for row in self.db.execute(
-            "SELECT * FROM events WHERE kind=? AND colony_id=? AND game_tick>=?", (UTTERANCE_EVENT, colony_id, cutoff)
+            "SELECT * FROM events WHERE kind IN (?, 'frontdesk.trigger') AND colony_id=? AND game_tick>=?", (UTTERANCE_EVENT, colony_id, cutoff)
         ):
             selected[row["seq"]] = _event(row)
         for row in self.db.execute(
@@ -310,7 +326,7 @@ class EventLedger:
             selected[row["seq"]] = _event(row)
         for row in self.db.execute(
             "SELECT seq,colony_id,load_epoch,game_tick,wall_time,source,kind,"
-            "json_object('utterance_seq',json_extract(payload,'$.utterance_seq')) AS payload "
+            "json_object('trigger_seq',coalesce(json_extract(payload,'$.trigger_seq'),json_extract(payload,'$.utterance_seq'))) AS payload "
             "FROM events WHERE kind=? AND colony_id=? AND game_tick>=?", (RUN_EVENT, colony_id, cutoff)
         ):
             if row["seq"] not in selected:

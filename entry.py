@@ -937,7 +937,13 @@ class NekoRimworldPlugin(NekoPluginBase):
             service = FrontdeskService(self.data_path("workspaces") / "events.sqlite", self._agent_runtime,
                                        game_session=lambda: getattr(self._bridge, "session", None))
             self._workspace_service = service
-        scheduler = ColonyScheduler(service, self._agent_settings)
+        def event_binding():
+            bridge = self._bridge
+            current = getattr(bridge, "session", None)
+            return (getattr(bridge, "connection_key", None),
+                    getattr(current, "colony_id", None), getattr(current, "load_epoch", None))
+
+        scheduler = ColonyScheduler(service, self._agent_settings, event_provider=self._load_agent_tools, binding=event_binding)
         scheduler.start()
         scheduler.resume(game)
         self._colony_scheduler = scheduler

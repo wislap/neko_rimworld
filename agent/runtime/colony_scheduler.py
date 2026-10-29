@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 from ...serialization import canonical
 from ...tool_contracts import ToolExecutionError, ToolSpec
+from ...workspace.session_view import anchor_seq, trigger_message
 from ..runtime.audit import AgentAuditLedger, private_protocol_redacted
 from ..runtime.session import AgentRunSession
 
@@ -18,13 +19,24 @@ from ..runtime.session import AgentRunSession
 class ColonyScheduler:
     _owner = None
 
-    def __init__(self, service, settings):
+    def __init__(self, service, settings, *, event_provider=None, binding=None):
         self.service = service
         self.settings = settings
+        self._event_provider = event_provider
+        self._binding = binding
+        self._gap_binding = None
+        self._pending_gap = None
+        self._attempted_binding = object()
+        self._retry_at = 0.0
         self._signal = asyncio.Event()
         self._games = {}
         self._worker = None
         self._frontdesk_worker = None
+        self._event_worker = None
+        self._event_port = None
+        self._event_identity = None
+        self._event_cursor = 0
+        self._policy_installed = False
         self._frontdesk_signal = asyncio.Event()
         self._frontdesk_results = asyncio.Queue()
         self._pending_frontdesk = None
@@ -39,6 +51,8 @@ class ColonyScheduler:
         ColonyScheduler._owner = self
         self._worker = asyncio.create_task(self._run())
         self._frontdesk_worker = asyncio.create_task(self._run_frontdesk())
+        if self._event_provider is not None and self._binding is not None:
+            self._event_worker = asyncio.create_task(self._run_events())
 
     async def wake(self, game, *, source, text, utterance_seq=None):
         if self._worker is None or self._worker.done():
@@ -77,7 +91,7 @@ class ColonyScheduler:
         self._pending_frontdesk = None
         self._frontdesk_signal.set()
 
-    async def wake_frontdesk(self, game, text):
+    async def wake_frontdesk(self, game, text, *, source="user"):
         """Schedule a real user utterance through the existing frontdesk service."""
         if self._worker is None or self._worker.done():
             raise RuntimeError("Scheduler is not running")
@@ -86,10 +100,10 @@ class ColonyScheduler:
         current = self.service.game_session()
         if current is None or (current.colony_id, current.load_epoch) != (game.colony_id, game.load_epoch):
             raise ValueError("The active colony changed before wake")
-        utterance = await self.service.call("record_utterance", current.colony_id, current.load_epoch,
-                                            current.game_tick, text)
-        seq = await self.service.call("record", current.colony_id, current.load_epoch, current.game_tick,
-                                      "plugin", "frontdesk.wake", {"source": "user", "utterance_seq": utterance})
+        if source not in {"user", "game", "agent", "frontdesk", "planner", "plugin"}:
+            raise ValueError("Unknown wake source")
+        seq = await self.service.call("record_frontdesk_wake", current.colony_id, current.load_epoch,
+                                      current.game_tick, source, text)
         self._games[current.colony_id] = _game_binding(current)
         self._frontdesk_signal.set()
         return seq
@@ -106,9 +120,102 @@ class ColonyScheduler:
         if self._worker is not None:
             self._worker.cancel()
             self._frontdesk_worker.cancel()
-            await asyncio.gather(self._worker, self._frontdesk_worker, return_exceptions=True)
-            self._worker = None
-            ColonyScheduler._owner = None
+            if self._event_worker is not None:
+                self._event_worker.cancel()
+            await asyncio.gather(*(task for task in (self._worker, self._frontdesk_worker, self._event_worker)
+                                   if task is not None), return_exceptions=True)
+            try:
+                if self._event_port is not None and self._event_identity and self._event_identity() is not None:
+                    if "colony_pause.v1" in self._event_port.capabilities:
+                        await self._event_port.push_policy({"source": "frontdesk", "pause_on_letter_defs": []})
+            finally:
+                self._event_port = None
+                self._event_identity = None
+                self._worker = None
+                ColonyScheduler._owner = None
+
+    async def _run_events(self):
+        """Poll only the negotiated bound port; a change requires a fresh binding."""
+        while True:
+            poll_identity = None
+            try:
+                if self._pending_gap is not None:
+                    colony, epoch, tick, payload, gap_binding = self._pending_gap
+                    await self.service.call("record", colony, epoch, tick, "plugin", "game.event_gap", payload)
+                    self._gap_binding = gap_binding
+                    self._pending_gap = None
+                binding = self._binding()
+                if binding == self._gap_binding:
+                    await asyncio.sleep(1)
+                    continue
+                if self._event_port is not None and self._event_identity() is None:
+                    self._event_port = self._event_identity = None
+                    self._policy_installed = False
+                    self._attempted_binding = object()
+                if (self._event_port is None and binding == self._attempted_binding
+                        and asyncio.get_running_loop().time() >= self._retry_at):
+                    self._attempted_binding = object()
+                if self._event_port is None and binding != self._attempted_binding:
+                    self._attempted_binding = binding
+                    self._retry_at = asyncio.get_running_loop().time() + 5
+                    setup = await self._event_provider()
+                    port, identity = setup.write_port, setup.write_identity
+                    if port is None or identity is None or identity() is None:
+                        self._event_port = self._event_identity = None
+                    else:
+                        self._event_port, self._event_identity = port, identity
+                        connection, colony, epoch = identity()
+                        self._event_cursor = await self.service.call("game_event_cursor", colony, epoch, connection)
+                        if await self.service.call("game_event_gap", colony, epoch, connection):
+                            self._gap_binding = binding
+                            continue
+                if (self._event_port is not None and not self._policy_installed
+                        and "colony_pause.v1" in self._event_port.capabilities):
+                    await self._event_port.push_policy({"source": "frontdesk", "pause_on_letter_defs":
+                                                        ["ThreatBig", "ThreatSmall", "NegativeEvent"]})
+                    self._policy_installed = True
+                if self._event_port is not None and "colony_events.v1" in self._event_port.capabilities:
+                    connection, colony, epoch = self._event_identity()
+                    poll_identity = (connection, colony, epoch)
+                    game = self.service.game_session()
+                    if game is None or (game.colony_id, game.load_epoch) != (colony, epoch):
+                        raise ValueError("Active game changed during event polling")
+                    for event in await self._event_port.events(since=self._event_cursor):
+                        if self._event_identity() != (connection, colony, epoch):
+                            raise ValueError("Game binding changed during event polling")
+                        if (event.get("connection_epoch"), event.get("colony_id"), event.get("load_epoch")) != (connection, colony, epoch):
+                            raise ValueError("Native event identity does not match its bound port")
+                        changed = await self.service.call("ingest_game_event", colony, epoch, event["game_tick"],
+                                                          connection, dict(event))
+                        self._event_cursor = event["cursor"]
+                        if changed:
+                            self._games[colony] = _game_binding(game)
+                            self._frontdesk_signal.set()
+                            self._signal.set()
+            except asyncio.CancelledError:
+                raise
+            except ToolExecutionError as error:
+                self.error = error
+                if error.code == "event_gap" and poll_identity is not None:
+                    connection, colony, epoch = poll_identity
+                    self._pending_gap = (colony, epoch, game.game_tick,
+                                         {"connection": connection, "after_cursor": self._event_cursor,
+                                          "reason": str(error), "details": copy.deepcopy(error.details)}, binding)
+                    try:
+                        await self.service.call("record", colony, epoch, game.game_tick, "plugin",
+                                                "game.event_gap", self._pending_gap[3])
+                    except (OSError, sqlite3.Error) as record_error:
+                        self.error = record_error
+                    else:
+                        self._gap_binding = binding
+                        self._pending_gap = None
+            except Exception as error:
+                self.error = error
+                if self._event_port is None or self._event_identity() is None:
+                    self._event_port = self._event_identity = None
+                    self._policy_installed = False
+                    self._retry_at = asyncio.get_running_loop().time() + 5
+            await asyncio.sleep(1)
 
     async def _run_frontdesk(self):
         try:
@@ -144,12 +251,12 @@ class ColonyScheduler:
         # any newer wake can advance the consumption cursor.
         for wake in wakes:
             runs = [e for e in events if e["kind"] == "agent.run"
-                    and e["payload"].get("utterance_seq") == wake["payload"]["utterance_seq"]
+                    and anchor_seq(e) == anchor_seq(wake)
                     and (e["payload"].get("result") or {}).get("status") == "ok"]
             if runs:
                 run = runs[-1]
                 delivered = [e["payload"]["wake_seq"] for e in events if e["kind"] == "frontdesk.inbox"
-                             and e["payload"].get("utterance_seq") == wake["payload"]["utterance_seq"]]
+                             and anchor_seq(e) == anchor_seq(wake)]
                 binding = SimpleNamespace(colony_id=game.colony_id, load_epoch=run["load_epoch"],
                                           game_tick=run["game_tick"])
                 await self._offer_frontdesk(binding, run["game_tick"], wake["seq"],
@@ -164,18 +271,20 @@ class ColonyScheduler:
         if not pending:
             return
         initial = pending[0]
-        utterance = await self.service.call("event", game.colony_id, initial["payload"]["utterance_seq"])
+        utterance = await self.service.call("event", game.colony_id, anchor_seq(initial))
         cursor = initial["seq"]
         existing = [e for e in events if e["kind"] == "agent.run"
-                    and e["payload"].get("utterance_seq") == utterance["seq"]
+                    and anchor_seq(e) == utterance["seq"]
                     and (e["payload"].get("result") or {}).get("status") == "ok"]
         if existing:
             result = existing[-1]["payload"]["result"]
             delivered = [e["payload"]["wake_seq"] for e in events if e["kind"] == "frontdesk.inbox"
-                         and e["payload"].get("utterance_seq") == utterance["seq"]]
+                         and anchor_seq(e) == utterance["seq"]]
             cursor = max([cursor, *delivered])
             await self._offer_frontdesk(game, current.game_tick, initial["seq"], cursor, result)
             return
+
+        intent_sources = {utterance["seq"]} if utterance["kind"] == "user.utterance" else set()
 
         async def inbox():
             nonlocal cursor
@@ -184,23 +293,36 @@ class ColonyScheduler:
                         and e["load_epoch"] == game.load_epoch]
             messages = []
             for event in incoming:
-                original = await self.service.call("event", game.colony_id, event["payload"]["utterance_seq"])
-                messages.append({"role": "user", "name": "frontdesk_inbox", "content":
-                                 "User's original words: " + canonical(original)})
+                original = await self.service.call("event", game.colony_id, anchor_seq(event))
+                message = trigger_message(original)
+                if original["kind"] == "user.utterance":
+                    message = {"role": "user", "name": "frontdesk_inbox", "content":
+                               "User original words (event " + str(original["seq"]) + "): " + original["payload"]["text"]}
+                else:
+                    message["name"] = "frontdesk_trigger"
+                messages.append(message)
                 cursor = event["seq"]
                 current = self.service.game_session()
                 if current is None or (current.colony_id, current.load_epoch) != (game.colony_id, game.load_epoch):
                     raise ToolExecutionError("world_changed", "The active colony or epoch changed.", recoverable=False)
                 await self.service.call("record", game.colony_id, game.load_epoch,
                                         current.game_tick, "frontdesk",
-                                        "frontdesk.inbox", {"wake_seq": cursor, "utterance_seq": utterance["seq"],
+                                        "frontdesk.inbox", {"wake_seq": cursor, ("utterance_seq" if utterance["kind"] == "user.utterance" else "trigger_seq"): utterance["seq"],
                                                             "message": messages[-1]})
+                if original["kind"] == "user.utterance":
+                    intent_sources.add(original["seq"])
             return messages
 
-        result = await self.service.consult(game, utterance["payload"]["text"], self.settings,
+        question = (utterance["payload"]["text"] if utterance["kind"] == "user.utterance"
+                    else trigger_message(utterance)["content"])
+        async def wake_planner(text):
+            return await self.wake(game, source="frontdesk", text=text)
+
+        result = await self.service.consult(game, question, self.settings,
                                             explicit_update_only=True, inbox=inbox,
-                                            utterance_seq=utterance["seq"],
-                                            pending_utterances=[e["payload"]["utterance_seq"] for e in pending])
+                                            utterance_seq=utterance["seq"] if utterance["kind"] == "user.utterance" else None,
+                                            trigger_seq=utterance["seq"] if utterance["kind"] == "frontdesk.trigger" else None,
+                                            wake_planner=wake_planner, intent_sources=intent_sources, pending_utterances=[anchor_seq(e) for e in pending])
         if result.get("status") == "ok" and result.get("workspace", {}).get("history_saved"):
             current = self.service.game_session()
             tick = current.game_tick if current and (current.colony_id, current.load_epoch) == (
@@ -320,7 +442,16 @@ class ColonyScheduler:
                 raise ToolExecutionError("handoff_required", "A nonempty handoff is required.")
             return {"handoff": handoff}
 
+        async def message_frontdesk(args):
+            text = args.get("text")
+            if set(args) != {"text"} or not isinstance(text, str) or not text.strip():
+                raise ToolExecutionError("invalid_tool_arguments", "A nonempty message is required.")
+            return {"wake_seq": await self.wake_frontdesk(game, text, source="planner")}
+
         capabilities = (
+            ToolSpec("message_frontdesk", "Send a message to the frontdesk.",
+                     {"type": "object", "properties": {"text": {"type": "string", "minLength": 1}},
+                      "required": ["text"], "additionalProperties": False}, message_frontdesk),
             ToolSpec("planner_board", "Read or revise strategy and task entries on the colony board.",
                      {"type": "object", "properties": {"action": {"type": "string", "enum": ["read", "write"]},
                       "entry": {"type": "object", "properties": {
@@ -364,6 +495,7 @@ class ColonyScheduler:
                 await progress({"stage": "inbox", "wake_seq": event["seq"], "message": message})
             return messages
 
+        session.explicit_scheduler = True
         session.persist_progress = progress
         session.inbox = inbox
         result = None
