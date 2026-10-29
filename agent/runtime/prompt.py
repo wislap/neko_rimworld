@@ -125,11 +125,13 @@ PLANNER_QUERY_GUIDE = (
     "native Danger is not overall safety, and occupancy/reservation is not complete job eligibility."
 )
 
-def build_system_prompt(*, persistent_work=False, role="frontdesk") -> str:
+def build_system_prompt(*, persistent_work=False, role="frontdesk", planner_loop=False) -> str:
     """One fixed system prompt per session; finalization is signalled in the advisory instead."""
     if role == "planner":
         return "".join((PLANNER_IDENTITY, PLANNER_TASK, EVIDENCE, PLANNER_READ_POLICY,
-                        SAMPLE_IDENTITY, SCOPE_SEMANTICS, PLANNER_COMPLETION, PLANNER_SUBMISSION,
+                        SAMPLE_IDENTITY, SCOPE_SEMANTICS, PLANNER_COMPLETION,
+                        ("Finish using planner_yield with a nonempty handoff describing progress, next steps "
+                         "and undecided thoughts. Record decisions on the board.\n" if planner_loop else PLANNER_SUBMISSION),
                         STYLE, "\n\n", PLANNER_QUERY_GUIDE, "\n", GUIDE))
     task = TASK
     if persistent_work:

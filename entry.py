@@ -195,6 +195,7 @@ class NekoRimworldPlugin(NekoPluginBase):
             report_sink=self._save_report,
         )
         self._workspace_service = None
+        self._colony_scheduler = None
         self._frontdesk_entry_locks = {}
         self._consultation_tasks = set()
         self._settings_saves = SettingsSaveOperations()
@@ -254,6 +255,10 @@ class NekoRimworldPlugin(NekoPluginBase):
             task.cancel()
         if calls:
             await asyncio.gather(*calls, return_exceptions=True)
+        scheduler = getattr(self, "_colony_scheduler", None)
+        if scheduler is not None:
+            await scheduler.close()
+            self._colony_scheduler = None
         await self._agent_runtime.cancel_all()
         workspace = getattr(self, "_workspace_service", None)
         if workspace is not None:
@@ -917,6 +922,26 @@ class NekoRimworldPlugin(NekoPluginBase):
                 return await self._consultation(question, _ctx, game)
         finally:
             self._consultation_tasks.discard(task)
+
+    async def start_colony_scheduler(self):
+        """Explicit opt-in for the local scheduler; startup never enables it."""
+        from .agent.runtime.colony_scheduler import ColonyScheduler
+
+        if self._colony_scheduler is not None:
+            raise RuntimeError("Scheduler already started")
+        game = getattr(self._bridge, "session", None)
+        if game is None or not self._agent_settings.configured:
+            raise ValueError("A connected colony and configured model are required")
+        service = self._workspace_service
+        if service is None or service.closed:
+            service = FrontdeskService(self.data_path("workspaces") / "events.sqlite", self._agent_runtime,
+                                       game_session=lambda: getattr(self._bridge, "session", None))
+            self._workspace_service = service
+        scheduler = ColonyScheduler(service, self._agent_settings)
+        scheduler.start()
+        scheduler.resume(game)
+        self._colony_scheduler = scheduler
+        return scheduler
 
     async def _consultation(self, question, _ctx, game):
         if not isinstance(question, str) or not question.strip():

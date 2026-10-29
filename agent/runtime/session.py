@@ -30,6 +30,9 @@ class AgentRunSession:
     role: str = "frontdesk"
     capabilities: tuple[ToolSpec, ...] = ()
     persist_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = field(default=None, repr=False)
+    inbox: Callable[[], Awaitable[list[dict[str, Any]]]] | None = field(default=None, repr=False)
+    planner_terminal: bool = False
+    frontdesk_update_only: bool = False
     result: dict[str, Any] | None = field(default=None, repr=False)
     model_calls: int = 0
     input_tokens_estimated: int = 0
@@ -79,9 +82,10 @@ class AgentRunSession:
         colony_id: str | None = None,
         capabilities: tuple[ToolSpec, ...] = (),
         role: str = "frontdesk",
+        planner_loop: bool = False,
     ) -> AgentRunSession:
         messages = [
-            {"role": "system", "content": build_system_prompt(persistent_work=workspace_id is not None, role=role)},
+            {"role": "system", "content": build_system_prompt(persistent_work=workspace_id is not None, role=role, planner_loop=planner_loop)},
             *copy.deepcopy(history),
             {"role": "user", "content": question},
         ]
@@ -91,6 +95,7 @@ class AgentRunSession:
             workspace_id=workspace_id,
             colony_id=colony_id,
             role=role,
+            planner_terminal=planner_loop,
             capabilities=capabilities,
             messages=messages,
             run_start=len(messages) - 1,

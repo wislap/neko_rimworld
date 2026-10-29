@@ -135,9 +135,11 @@ async def test_actual_executor_records_each_stage_before_next_model_request(plug
     assert result.is_ok()
     events = await plugin._workspace_service.call("events", "colony-A")
     progress = [e["payload"] for e in events if e["kind"] == "agent.progress"]
-    assert [e["stage"] for e in progress] == ["assistant", "tool", "assistant", "tool"]
-    assert progress[1]["tool_call_id"] == "frontdesk_board"
-    assert progress[1]["tool_result"]["data"]["entries"] == []
+    assert [e["stage"] for e in progress if "message" in e] == ["assistant", "tool", "assistant", "tool"]
+    assert len([e for e in progress if e.get("stage") == "model_request"]) == 2
+    board_result = next(e for e in progress if e.get("stage") == "tool")
+    assert board_result["tool_call_id"] == "frontdesk_board"
+    assert board_result["tool_result"]["data"]["entries"] == []
 
 @pytest.mark.asyncio
 async def test_same_words_new_request_do_not_replay_undelivered_answer(plugin, tmp_path):

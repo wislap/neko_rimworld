@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 from collections.abc import Mapping
@@ -111,6 +112,13 @@ async def request_model(
             ledger.transition(AgentRunState.MODEL_REQUESTING, "model_request_started", request_event)
         else:
             ledger.record("model_request_started", request_event)
+        persist = getattr(session, "persist_progress", None)
+        if persist is not None:
+            # Preserve each actual attempt before dispatch, including retries.
+            # A failed journal write must not leave an unrecorded model request.
+            await persist({"stage": "model_request", "model_request": copy.deepcopy({
+                key: value for key, value in request_event.items() if key != "base_url"
+            })})
         session.model_calls += 1
         try:
             async with asyncio.timeout(request_timeout):

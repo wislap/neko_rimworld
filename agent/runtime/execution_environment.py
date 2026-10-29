@@ -55,7 +55,12 @@ class ExecutionEnvironment:
     def registry(self):
         session = self.session
         registry = ToolRegistry(context_pruner=session.context_pruner)
-        work = () if session.interaction.finalizing else session.capabilities + self.write_tools
-        for spec in compose_tools(session.interaction.tools(), work):
+        work = (() if session.interaction.finalizing else session.capabilities + self.write_tools)
+        if (session.planner_terminal or session.frontdesk_update_only) and session.interaction.finalizing:
+            work = tuple(spec for spec in session.capabilities if spec.terminal)
+        base = session.interaction.tools()
+        if session.planner_terminal:
+            base = tuple(spec for spec in base if spec.name != "submit_response")
+        for spec in compose_tools(base, work):
             registry.register(spec)
         return registry

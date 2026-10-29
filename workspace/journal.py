@@ -124,6 +124,19 @@ class Journal:
         payload = {"utterance_seq": utterance_seq, "messages": messages, "result": result, "audit": audit}
         return self._ledger.append(colony_id, load_epoch, game_tick, FRONTDESK, RUN_EVENT, payload)
 
+    def finish_planner(self, colony_id, load_epoch, game_tick, start_seq, cursor, result, audit):
+        """Atomically retain the outcome, optional handoff and consumed wake position."""
+        with self._ledger.transaction():
+            terminal = result.get("terminal")
+            if terminal and terminal.get("kind") == "yield":
+                self._ledger.append(colony_id, load_epoch, game_tick, "planner", "planner.yield",
+                                    {"start_seq": start_seq, "handoff": terminal["handoff"]})
+            seq = self._ledger.append(colony_id, load_epoch, game_tick, "planner", "planner.finished",
+                                      {"start_seq": start_seq, "result": result, "audit": audit})
+            self._ledger.append(colony_id, load_epoch, game_tick, "planner", "planner.consumed",
+                                {"through_seq": cursor})
+            return seq
+
     def submit(self, colony_id, load_epoch, game_tick, actor, submission):
         """Write one board revision and its event atomically, or raise and write nothing."""
         check_shape(submission)

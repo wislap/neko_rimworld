@@ -256,6 +256,8 @@ class AgentRuntime:
             if result.get("status") != "cancelled":
                 result["status"] = "degraded"
             result.setdefault("audit", {})["error_code"] = "write_record_issue"
+        if session.planner_terminal or result.get("terminal", {}).get("kind") == "update_only":
+            return result
         attached = attach_agent_handoff(result)
         if (
             isinstance(result, Mapping) and result.get("answer") == draft.full_text
@@ -307,7 +309,7 @@ class AgentRuntime:
         # caller even if cancellation is raised, without another large copy.
         # The public audit may deliberately bound large text fields.
         session.result = result
-        if self._report_sink is None or not session.submission.full_text:
+        if session.planner_terminal or self._report_sink is None or not session.submission.full_text:
             return
         record = {
             "report_id": ledger.run_id,
@@ -454,6 +456,8 @@ class AgentRuntime:
                 finalizing=finalizing,
                 finalization_reserve_seconds=settings.finalization_reserve_seconds,
             )
+            if session.inbox is not None:
+                session.messages.extend(await session.inbox())
             request_messages = session.request_messages(advisory)
             repair_messages = session.length_repair_messages()
             if repair_messages is not None:
@@ -509,6 +513,7 @@ class AgentRuntime:
                 )
                 tool_messages: list[dict[str, Any]] = []
                 submitted_response: Mapping[str, Any] | None = None
+                terminal_name = None
                 isolated_batch = len(turn.tool_calls) > 1 and any(tools.is_exclusive(c.name) for c in turn.tool_calls)
                 for call in turn.tool_calls:
                     session.tool_calls += 1
@@ -614,6 +619,7 @@ class AgentRuntime:
                         data_value = result.value.get("data")
                         if isinstance(data_value, Mapping) and submitted_response is None:
                             submitted_response = data_value
+                            terminal_name = result.name
                 for message in tool_messages:
                     session.append_tool_message(message)
                 ledger.transition(
@@ -622,11 +628,26 @@ class AgentRuntime:
                     {"count": len(tool_messages)},
                 )
                 if submitted_response is not None:
-                    return self._complete_submission(ledger, session, submitted_response)
+                    if session.planner_terminal:
+                        handoff = submitted_response["handoff"]
+                        result = self._finish_success(ledger, answer=handoff, agent_text=handoff,
+                            submission_mode="yield", observations=session.observations, delivery={})
+                        result["terminal"] = {"kind": "yield", "handoff": handoff}
+                        return result
+                    if session.frontdesk_update_only and terminal_name == "update_only":
+                        result = self._finish_success(ledger, answer="", agent_text="",
+                            submission_mode="update_only", observations=session.observations, delivery={})
+                        result["terminal"] = {"kind": "update_only"}
+                        return result
+                    result = self._complete_submission(ledger, session, submitted_response)
+                    if session.frontdesk_update_only:
+                        result["terminal"] = {"kind": "reply"}
+                    return result
                 continue
 
             if turn.content:
                 session.append_recovery(
+                    "Finish with planner_yield and a handoff." if session.planner_terminal else
                     "The consultation is not submitted. Continue any necessary research, then finish through submit_response. Ordinary assistant text does not complete this request."
                 )
                 ledger.record("explicit_submission_required", {"finish_reason": turn.finish_reason})

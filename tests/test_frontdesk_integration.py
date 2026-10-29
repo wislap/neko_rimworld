@@ -267,7 +267,10 @@ async def test_snapshot_progress_is_durable_before_first_model_call(tmp_path):
     copy_path = tmp_path / "crash.sqlite"
     shutil.copyfile(tmp_path / "events.sqlite", copy_path)
     journal = Journal(copy_path)
-    assert journal.interrupted_events(game.colony_id)[-1]["payload"]["stage"] == "situation"
+    interrupted = journal.interrupted_events(game.colony_id)
+    assert any(e["payload"].get("stage") == "situation" for e in interrupted)
+    assert interrupted[-1]["payload"]["stage"] == "model_request"
+    assert interrupted[-1]["payload"]["model_request"]["messages"]
     journal.close()
     recovered = FrontdeskService(copy_path, Runtime(), game_session=lambda: game)
     await recovered._recover_interrupted(game.colony_id)
