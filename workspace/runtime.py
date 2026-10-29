@@ -103,7 +103,7 @@ class FrontdeskService:
 
     async def consult(self, game, question, settings, *, request_id=None,
                       explicit_update_only=False, inbox=None, utterance_seq=None, pending_utterances=(), trigger_seq=None,
-                      wake_planner=None, intent_sources=None):
+                      wake_planner=None, intent_sources=None, scheduler_tools=(), scheduler_setup_provider=None):
         if self.closed:
             raise RuntimeError("Frontdesk service is closed")
         task = asyncio.current_task()
@@ -148,6 +148,11 @@ class FrontdeskService:
                     seq = utterance_seq
                 if intent_sources is None:
                     intent_sources = {seq} if trigger_seq is None else set()
+                if explicit_update_only and trigger_seq is None:
+                    history.append({"role": "user", "name": "user_event_reference", "content": canonical({
+                        "source": "plugin", "user_event_seq": seq,
+                        "note": "Journal reference for the following original user message. Use this reference when a tool asks for the user's original words."
+                    })})
                 turn_id = str(seq)
                 workspace_id = game.colony_id
                 ledger = AgentAuditLedger(question, workspace_id=workspace_id, turn_id=turn_id)
@@ -155,7 +160,11 @@ class FrontdeskService:
                 if trigger_seq is not None:
                     session.messages[session.run_start] = trigger_message(original)
                 if explicit_update_only:
+                    from .takeovers import return_capability
+
                     session.explicit_scheduler = True
+                    session.capabilities += tuple(scheduler_tools)
+                    session.capabilities += (return_capability(self, game, intent_sources, scheduler_setup_provider),)
                     async def update_only(args):
                         if args:
                             raise ToolExecutionError("invalid_tool_arguments", "update_only takes no arguments")

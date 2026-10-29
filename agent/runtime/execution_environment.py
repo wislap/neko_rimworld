@@ -76,9 +76,16 @@ class ExecutionEnvironment:
                     session.write_record_issue = stage
                     raise
 
+            guard = None
+            if session.explicit_scheduler and session.takeover_service is None:
+                raise ToolExecutionError("takeover_unknown", "The takeover journal is unavailable.", recoverable=False)
+            if session.takeover_service is not None:
+                from ...workspace.takeovers import TakeoverControl
+                guard = TakeoverControl(session.takeover_service, setup.ledger_query, setup.write_identity,
+                                        setup.write_fields_query)
             service = WriteService(setup.write_catalog, session.observations, setup.write_port,
                                    setup.write_identity, source_kind=setup.observation_source,
-                                   record=record_write)
+                                   record=record_write, guard=guard)
             specs = []
             for schema in service.schemas():
                 function = schema["function"]

@@ -1212,12 +1212,23 @@ class NekoRimworldPlugin(NekoPluginBase):
         bridge = self._bridge
         if bridge is None:
             raise ToolExecutionError("bridge_not_running", "The RimWorld bridge is not listening.")
+        idle_only = arguments.get("idle_only", False)
+        if type(idle_only) is not bool:
+            raise ToolExecutionError("invalid_arguments", "idle_only must be boolean.")
+        request_options = {}
+        if idle_only:
+            binding = arguments.get("binding")
+            session = bridge.session
+            if (not isinstance(binding, (tuple, list)) or len(binding) != 3 or session is None
+                    or (session.colony_id, session.load_epoch) != tuple(binding[1:])):
+                raise ToolExecutionError("game_offline", "The bound game session changed.")
+            request_options = {"idle_only": True, "expected_connection": binding[0], "expected_session": session}
         # Catalog initialization can also be expensive on the first modded
         # game query; do not remove every game tool after a 2.5-second warmup.
         response_timeout = 9.0 if operation in FRAME_READ_OPERATIONS or operation in {"query", "query_catalog"} else 2.5
         try:
             payload = await asyncio.wait_for(
-                asyncio.to_thread(bridge.request, operation, query_arguments, response_timeout),
+                asyncio.to_thread(bridge.request, operation, query_arguments, response_timeout, **request_options),
                 timeout=response_timeout + 1.0,
             )
         except BridgeNotConnected as exception:

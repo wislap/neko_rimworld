@@ -1,5 +1,7 @@
 """Event and board writes, plus views rebuilt from the log; the only path into the two tables."""
 
+from contextlib import nullcontext
+
 from .board import TASK_TARGET_KINDS, BoardError, check_revision, check_shape
 from .ledger import (
     FRONTDESK,
@@ -14,11 +16,33 @@ from .ledger import (
     UTTERANCE_EVENT,
     EventLedger,
 )
+from .wake_conditions import COMPARISONS, numeric, path_value, validate_condition
 
 TAKEOVER_FIELDS = frozenset({"object", "field", "value_read", "ai_value", "changeset_id"})
 RUN_ROLES = frozenset({"assistant", "tool"})
 CONTEXT_POLICY_EVENT = "frontdesk.context_policy"
 CONTEXT_POLICY_DEFAULTS = {"window_ticks": 180_000, "narrative_threshold": 60_000}
+WAKE_POLICY_DEFAULTS = {
+    "pause_on_letter_defs": ["ThreatBig", "ThreatSmall", "NegativeEvent"],
+    "frontdesk_letter_defs": ["ThreatBig", "ThreatSmall", "NegativeEvent"],
+    "frontdesk_choice_letters": True,
+    "frontdesk_paused_windows": True,
+    "planner_review_ticks": 15_000,
+}
+
+
+def _event_filter(value, expected):
+    if isinstance(expected, dict) and set(expected) == {"op", "value"}:
+        op, threshold = expected["op"], expected["value"]
+        return (op in COMPARISONS and numeric(value) and numeric(threshold)
+                and COMPARISONS[op](value, threshold))
+    if type(value) is bool or type(expected) is bool:
+        return type(value) is type(expected) and value == expected
+    if isinstance(value, dict) and isinstance(expected, dict):
+        return value.keys() == expected.keys() and all(_event_filter(value[k], expected[k]) for k in value)
+    if isinstance(value, list) and isinstance(expected, list):
+        return len(value) == len(expected) and all(_event_filter(a, b) for a, b in zip(value, expected))
+    return value == expected
 
 
 class Journal:
@@ -46,6 +70,139 @@ class Journal:
         for event in self._ledger.events_by_kind(colony_id, (CONTEXT_POLICY_EVENT,)):
             policy.update(event["payload"])
         return policy
+
+    def wake_policy(self, colony_id):
+        policy = {key: value.copy() if isinstance(value, list) else value
+                  for key, value in WAKE_POLICY_DEFAULTS.items()}
+        for event in self._ledger.events_by_kind(colony_id, ("scheduler.policy",)):
+            policy.update(event["payload"])
+        return policy
+
+    def wake_policy_authors(self, colony_id):
+        authors = {key: {"source": PLUGIN, "event_seq": None} for key in WAKE_POLICY_DEFAULTS}
+        for event in self._ledger.events_by_kind(colony_id, ("scheduler.policy",)):
+            for key in event["payload"]:
+                authors[key] = {"source": event["source"], "event_seq": event["seq"]}
+        return authors
+
+    def set_wake_policy(self, colony_id, load_epoch, game_tick, actor, changes):
+        if actor not in {"frontdesk", "planner"} or not isinstance(changes, dict) or not changes:
+            raise ValueError("Invalid policy author or changes")
+        allowed = ({"pause_on_letter_defs", "frontdesk_letter_defs", "frontdesk_choice_letters", "frontdesk_paused_windows"}
+                   if actor == "frontdesk" else {"planner_review_ticks"})
+        if not changes.keys() <= allowed:
+            raise ValueError("Policy field is not writable by this role")
+        for key, value in changes.items():
+            if key.endswith("_defs"):
+                if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
+                    raise ValueError("Letter definitions must be nonempty strings")
+            elif key in {"frontdesk_choice_letters", "frontdesk_paused_windows"}:
+                if type(value) is not bool:
+                    raise ValueError("Choice letter policy must be boolean")
+            elif type(value) is not int or not 1 <= value < 2**63:
+                raise ValueError("Review interval must be a positive integer")
+        with self._ledger.transaction():
+            seq = self._ledger.append(colony_id, load_epoch, game_tick, actor, "scheduler.policy", changes)
+            if "planner_review_ticks" in changes:
+                defaults = [e for e in self._ledger.events_by_kind(colony_id, ("scheduler.default_review",))
+                            if e["load_epoch"] == load_epoch]
+                if defaults:
+                    old_id = defaults[-1]["payload"]["id"]
+                    active = {item["id"]: item for item in self.wake_conditions(colony_id, load_epoch)}
+                    if old_id in active:
+                        self.cancel_wake(colony_id, load_epoch, game_tick, "planner", old_id)
+                        new = self.register_wake(colony_id, load_epoch, game_tick, "planner",
+                                                 {"kind": "periodic", "interval_ticks": changes["planner_review_ticks"]},
+                                                 "Periodic colony review")
+                        self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN,
+                                            "scheduler.default_review", {"id": new["id"]})
+            return seq
+
+    def wake_conditions(self, colony_id, load_epoch):
+        active = {}
+        for event in self._ledger.events_by_kind(colony_id, ("wake.registered", "wake.cancelled", "wake.evaluated")):
+            if event["load_epoch"] != load_epoch:
+                continue
+            payload = event["payload"]
+            if event["kind"] == "wake.registered":
+                active[event["seq"]] = {**payload, "id": event["seq"], "next_tick": payload["next_tick"]}
+            elif event["kind"] == "wake.cancelled":
+                active.pop(payload["id"], None)
+            elif payload["id"] in active:
+                if payload.get("consume"):
+                    active.pop(payload["id"])
+                else:
+                    active[payload["id"]]["next_tick"] = payload["next_tick"]
+        return list(active.values())
+
+    def register_wake(self, colony_id, load_epoch, game_tick, actor, condition, text):
+        if actor not in {"frontdesk", "planner"} or not isinstance(text, str) or not text.strip():
+            raise ValueError("Wake requires a valid role and reason")
+        condition = validate_condition(condition)
+        kind = condition["kind"]
+        next_tick = (condition["tick"] if kind == "deadline" else
+                     game_tick + condition.get("interval_ticks", 0))
+        if next_tick >= 2**63:
+            raise ValueError("Wake tick exceeds the supported range")
+        payload = {"role": actor, "condition": condition, "text": text, "next_tick": next_tick}
+        seq = self._ledger.append(colony_id, load_epoch, game_tick, actor, "wake.registered", payload)
+        return {"id": seq, **payload}
+
+    def cancel_wake(self, colony_id, load_epoch, game_tick, actor, wake_id):
+        active = {item["id"]: item for item in self.wake_conditions(colony_id, load_epoch)}
+        if wake_id not in active or active[wake_id]["role"] != actor:
+            raise ValueError("Wake is absent or owned by another role")
+        return self._ledger.append(colony_id, load_epoch, game_tick, actor, "wake.cancelled", {"id": wake_id})
+
+    def evaluate_wake(self, colony_id, load_epoch, game_tick, wake_id, observation, *, expected_next_tick):
+        """Atomically record the sample, its advancement and any resulting inbox wake."""
+        with nullcontext() if self._ledger.db.in_transaction else self._ledger.transaction():
+            active = {item["id"]: item for item in self.wake_conditions(colony_id, load_epoch)}
+            item = active.get(wake_id)
+            if item is None or item["next_tick"] != expected_next_tick:
+                return False
+            condition = item["condition"]
+            kind = condition["kind"]
+            if kind != "event" and game_tick < item["next_tick"]:
+                return False
+            value, matched, error = None, False, None
+            if kind in {"deadline", "periodic"}:
+                matched = True
+            elif kind == "event":
+                data = observation.get("data", {})
+                matched = (observation.get("kind") == condition["event_kind"] and
+                           isinstance(data, dict) and all(k in data and _event_filter(data[k], v)
+                               for k, v in condition["filters"].items()))
+            else:
+                try:
+                    if "error" in observation or observation.get("response", {}).get("payload", {}).get("status") != "ok":
+                        raise ValueError("Read did not return a successful observation")
+                    value = path_value(observation, condition["path"])
+                    if not numeric(value):
+                        raise ValueError("Observation is not a finite number")
+                    matched = COMPARISONS[condition["op"]](value, condition["value"])
+                except (ValueError, TypeError) as exc:
+                    error = str(exc)
+            consume = matched and kind in {"deadline", "event", "numeric"}
+            busy = kind == "numeric" and observation.get("error", {}).get("code") == "bridge_busy"
+            next_tick = (game_tick + condition["interval_ticks"] if kind in {"periodic", "numeric"} and not busy
+                         else item["next_tick"])
+            payload = {"id": wake_id, "condition": condition, "observation": observation,
+                       "value": value, "matched": matched, "error": error, "sample_tick": game_tick,
+                       "consume": consume, "next_tick": next_tick}
+            evaluation = self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "wake.evaluated", payload)
+            if matched:
+                from ..serialization import canonical
+                text = canonical({"reason": item["text"], "evaluation_seq": evaluation, **payload})
+                if item["role"] == "planner":
+                    self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "planner.wake",
+                                        {"source": "plugin", "text": text, "evaluation_seq": evaluation})
+                else:
+                    anchor = self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "frontdesk.trigger",
+                                                 {"source": "plugin", "text": text, "evaluation_seq": evaluation})
+                    self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "frontdesk.wake",
+                                        {"source": "plugin", "trigger_seq": anchor})
+            return matched
 
     def set_context_policy(self, colony_id, load_epoch, game_tick, changes):
         if not isinstance(changes, dict) or not changes or any(
@@ -136,11 +293,24 @@ class Journal:
                 self.record_load(colony_id, load_epoch, loaded_at)
             seq = self._ledger.append(colony_id, load_epoch, game_tick, "mod", "game.event",
                                       {"connection": connection, "event": event})
+            defaults = [e for e in self._ledger.events_by_kind(colony_id, ("scheduler.default_review",))
+                        if e["load_epoch"] == load_epoch]
+            if not defaults:
+                default = self.register_wake(colony_id, load_epoch, game_tick, "planner",
+                                             {"kind": "periodic", "interval_ticks": self.wake_policy(colony_id)["planner_review_ticks"]},
+                                             "Periodic colony review")
+                self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "scheduler.default_review", {"id": default["id"]})
+            for item in self.wake_conditions(colony_id, load_epoch):
+                if item["condition"]["kind"] in {"event", "deadline", "periodic"}:
+                    self.evaluate_wake(colony_id, load_epoch, game_tick, item["id"], event,
+                                       expected_next_tick=item["next_tick"])
             kind = event.get("kind")
             data = event.get("data", {})
-            if epoch_changed or (kind == "letter" and
-                    (data.get("def") in ("ThreatBig", "ThreatSmall", "NegativeEvent")
-                     or data.get("is_choice_letter") is True)):
+            policy = self.wake_policy(colony_id)
+            if epoch_changed or (kind == "pause_changed" and policy["frontdesk_paused_windows"]
+                                 and data.get("source") == "window" and data.get("windows_force_paused") is True) or (kind == "letter" and
+                    (data.get("def") in policy["frontdesk_letter_defs"]
+                     or (policy["frontdesk_choice_letters"] and data.get("is_choice_letter") is True))):
                 from ..serialization import canonical
                 text = canonical({"event_seq": seq, "event": event})
                 anchor = self._ledger.append(colony_id, load_epoch, game_tick, "mod", "frontdesk.trigger",
@@ -167,7 +337,7 @@ class Journal:
             raise ValueError("A takeover records object, field, value_read, ai_value and changeset_id")
         return self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, TAKEOVER_EVENT, takeover)
 
-    def record_return(self, colony_id, load_epoch, game_tick, *, takeover_seq, utterance_seq):
+    def record_return(self, colony_id, load_epoch, game_tick, *, takeover_seq, utterance_seq, accepted_baseline=None):
         """Release a takeover, citing the user's own words; a takeover can be released once."""
         with self._ledger.transaction():
             if not self._ledger.has_event(colony_id, TAKEOVER_EVENT, takeover_seq):
@@ -177,6 +347,10 @@ class Journal:
             if not self._ledger.has_event(colony_id, UTTERANCE_EVENT, utterance_seq):
                 raise BoardError("A return cites a user utterance of this colony")
             payload = {"takeover_seq": takeover_seq, "utterance_seq": utterance_seq}
+            if accepted_baseline is not None:
+                if not isinstance(accepted_baseline, dict):
+                    raise ValueError("Accepted baseline must be an object")
+                payload["accepted_baseline"] = accepted_baseline
             return self._ledger.append(colony_id, load_epoch, game_tick, FRONTDESK, RETURN_EVENT, payload)
 
     def record_run(self, colony_id, load_epoch, game_tick, role, utterance_seq, messages, *, result=None, audit=None):

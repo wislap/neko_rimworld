@@ -43,7 +43,7 @@ def frontdesk_messages(events, *, now_tick, window_ticks=180_000, progress_by_ut
 def recall(events, event_seq, tool_call_id=None, *, progress=(), part="result"):
     """Read retained utterances or the unpruned tool result, never a projection placeholder."""
     event = _event_at(events, event_seq)
-    if event["kind"] == "game.event" and tool_call_id is None:
+    if event["kind"] in {"game.event", "takeover.snapshot", "takeover.identities"} and tool_call_id is None:
         return event["payload"]
     if event["kind"] == "frontdesk.trigger" and tool_call_id is None:
         return event["payload"]

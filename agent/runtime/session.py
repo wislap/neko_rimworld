@@ -32,6 +32,7 @@ class AgentRunSession:
     persist_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = field(default=None, repr=False)
     inbox: Callable[[], Awaitable[list[dict[str, Any]]]] | None = field(default=None, repr=False)
     explicit_scheduler: bool = False
+    takeover_service: Any = field(default=None, repr=False)
     planner_terminal: bool = False
     frontdesk_update_only: bool = False
     result: dict[str, Any] | None = field(default=None, repr=False)

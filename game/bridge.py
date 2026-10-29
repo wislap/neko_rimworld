@@ -359,9 +359,13 @@ class BridgeServer:
             self._transition(BridgeStatus.ERROR, last_incident={"incident_id": incident})
         return stopped
 
-    def request(self, operation: str, arguments: dict[str, Any], timeout: float = 3.0) -> Envelope:
+    def request(self, operation: str, arguments: dict[str, Any], timeout: float = 3.0, *,
+                idle_only: bool = False, expected_connection=None, expected_session=None) -> Envelope:
         """Request one correlated game query from the active game session."""
-        return self._request(operation, arguments, timeout, write=False)
+        if type(idle_only) is not bool:
+            raise ValueError("idle_only must be a boolean")
+        return self._request(operation, arguments, timeout, write=False, idle_only=idle_only,
+                             expected_connection=expected_connection, expected_session=expected_session)
 
     def dry_run(self, changeset: dict[str, Any], timeout: float = 3.0, *, expected_connection=None, expected_session=None, cancel_event=None) -> Envelope:
         return self._request("dry_run", changeset, timeout, write=True, expected_connection=expected_connection, expected_session=expected_session, cancel_event=cancel_event)
@@ -400,7 +404,7 @@ class BridgeServer:
                 })
             return copy.deepcopy([event for event in self._game_events if event["cursor"] > since])
 
-    def _request(self, operation: str, arguments: dict[str, Any], timeout: float, *, write: bool, policy: bool = False, expected_connection=None, expected_session=None, cancel_event=None) -> Envelope:
+    def _request(self, operation: str, arguments: dict[str, Any], timeout: float, *, write: bool, policy: bool = False, expected_connection=None, expected_session=None, cancel_event=None, idle_only: bool = False) -> Envelope:
 
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
             raise ValueError("timeout must be a positive number")
@@ -444,6 +448,8 @@ class BridgeServer:
             with self._pending_lock:
                 if cancel_event is not None and cancel_event.is_set():
                     raise BridgeNotConnected("The write was cancelled before dispatch.")
+                if idle_only and self._pending:
+                    raise BridgeBusyError("The read channel is busy; opportunistic reads are not queued.")
                 if len(self._pending) >= self._pending_capacity:
                     self._state.set_last_query("busy", 0.0, error_code=BridgeBusyError.code)
                     raise BridgeBusyError("The bridge already has too many pending requests.")

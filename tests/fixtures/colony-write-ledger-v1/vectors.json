@@ -1,0 +1,110 @@
+{
+  "capability": "colony_write.ledger_snapshot.v1",
+  "queries": [
+    {
+      "operation": "write_ledger_snapshot",
+      "arguments": {},
+      "data": {
+        "ledger_status": "valid",
+        "entries": [
+          {
+            "object": "Pawn_1",
+            "field": "medical_care",
+            "value": "Best",
+            "changeset_id": "change-1",
+            "author": "planner",
+            "tick": 123,
+            "current_status": "observed",
+            "current_value": "HerbalOrWorse",
+            "may_change_by_game": true
+          }
+        ],
+        "complete": true,
+        "entry_count": 1
+      }
+    },
+    {
+      "operation": "write_ledger_snapshot",
+      "arguments": {},
+      "data": {
+        "ledger_status": "invalid",
+        "entries": [],
+        "complete": false,
+        "entry_count": 0
+      }
+    },
+    {
+      "operation": "write_field_identities",
+      "arguments": {
+        "changeset": {
+          "changeset_id": "change-1",
+          "author": "planner",
+          "entry_id": "task-1",
+          "load_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "idempotency_key": "key-1",
+          "ops": [
+            {
+              "op": "set_medical_care",
+              "pawn": "Pawn_1",
+              "evidence": "ev-1",
+              "expect": "HerbalOrWorse",
+              "value": "Best"
+            }
+          ]
+        }
+      },
+      "data": {
+        "fields": [
+          {
+            "op": 0,
+            "object": "Pawn_1",
+            "field": "medical_care"
+          }
+        ],
+        "complete": true,
+        "field_count": 1
+      }
+    },
+    {
+      "operation": "write_undo_fields",
+      "arguments": {
+        "token": "token-1"
+      },
+      "data": {
+        "status": "available",
+        "fields": [
+          {
+            "object": "Pawn_1",
+            "field": "medical_care"
+          }
+        ],
+        "complete": true,
+        "field_count": 1
+      }
+    },
+    {
+      "operation": "write_undo_fields",
+      "arguments": {
+        "token": "missing"
+      },
+      "data": {
+        "status": "unknown_token",
+        "fields": [],
+        "complete": true,
+        "field_count": 0
+      }
+    },
+    {
+      "operation": "write_undo_fields",
+      "arguments": {
+        "token": "used"
+      },
+      "data": {
+        "status": "already_undone",
+        "fields": [],
+        "complete": true,
+        "field_count": 0
+      }
+    }
+  ]
+}

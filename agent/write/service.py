@@ -85,7 +85,7 @@ def _substitute(value, op):
 class WriteService:
     """A run-scoped service. identity returns connection, colony and load epoch."""
 
-    def __init__(self, catalog, observations, port, identity, *, source_kind='native', record=None):
+    def __init__(self, catalog, observations, port, identity, *, source_kind='native', record=None, guard=None):
         if source_kind not in {'native', 'scripted_game_world'}:
             raise ToolExecutionError('untrusted_observation_source', 'Writes require native or scripted world observations.')
         directory = catalog.get('colony_write', catalog)
@@ -99,6 +99,7 @@ class WriteService:
             raise ToolExecutionError('invalid_catalog', 'Duplicate write operation.')
         self.observations, self.port, self.identity = observations, port, identity
         self.record = record
+        self.guard = guard
         current = identity()
         self.bound = tuple(current) if current is not None else ()
         if len(self.bound) != 3 or not all(self.bound):
@@ -272,6 +273,8 @@ class WriteService:
 
     async def _changeset_call(self, mode, args):
         changeset = self._prepare(args)
+        if self.guard is not None:
+            await self.guard.guard_changeset(changeset)
         event = {'mode': mode, 'changeset': changeset, 'catalog_id': self.directory['catalog_id']}
         await self._record({'stage': 'prepared', **event})
         unknown = {'outcome': 'unknown', 'changeset_id': changeset['changeset_id'],
@@ -313,6 +316,8 @@ class WriteService:
         self._current()
         if not _schema_check(args, {'type': 'object', 'additionalProperties': False, 'properties': {'token': {'type': 'string', 'minLength': 1}}, 'required': ['token']}):
             raise ToolExecutionError('invalid_arguments', 'Expected an undo token.')
+        if self.guard is not None:
+            await self.guard.guard_undo(args['token'])
         await self._record({'stage': 'prepared', 'mode': 'undo', 'token': args['token'], 'catalog_id': self.directory['catalog_id']})
         self._current()
         try:

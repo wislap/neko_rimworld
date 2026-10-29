@@ -207,6 +207,22 @@ class CatalogTools:
                 self._situation_provider = SituationProvider(scoped_query, lambda: bridge.session)
             setup = make_game_tools(self._catalog, scoped_query, situation_provider=self._situation_provider)
             session = current
+            if session is not None:
+                async def idle_query(operation, arguments):
+                    return await scoped_query({"operation": operation, "arguments": copy.deepcopy(arguments),
+                                               "idle_only": True,
+                                               "binding": (epoch, session.colony_id, session.load_epoch)})
+
+                setup = replace(setup, idle_query=idle_query)
+                if "colony_write.ledger_snapshot.v1" in getattr(bridge, "capabilities", ()):
+                    async def ledger_query():
+                        return await scoped_query({"operation": "write_ledger_snapshot", "arguments": {}})
+
+                    setup = replace(setup, ledger_query=ledger_query)
+                    async def write_fields_query(operation, arguments):
+                        return await scoped_query({"operation": operation, "arguments": copy.deepcopy(arguments)})
+
+                    setup = replace(setup, write_fields_query=write_fields_query)
             write = self._catalog.get("colony_write")
             capabilities = getattr(bridge, "capabilities", frozenset())
             valid_write = (bool({"colony_write.v1", "colony_write.transactions.v1"} & capabilities)

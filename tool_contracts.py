@@ -90,6 +90,9 @@ class ToolSetup:
     write_catalog: dict[str, Any] | None = None
     write_port: GameWritePort | None = None
     write_identity: Callable[[], tuple[str, str, str] | None] | None = None
+    idle_query: Any = None
+    ledger_query: Any = None
+    write_fields_query: Any = None
 
     def __post_init__(self):
         if self.observation_source not in {"native", "offline_captured_graph"}:

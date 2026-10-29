@@ -34,9 +34,11 @@ class ColonyScheduler:
         self._frontdesk_worker = None
         self._event_worker = None
         self._event_port = None
+        self._event_setup = None
         self._event_identity = None
         self._event_cursor = 0
         self._policy_installed = False
+        self._installed_policy = None
         self._frontdesk_signal = asyncio.Event()
         self._frontdesk_results = asyncio.Queue()
         self._pending_frontdesk = None
@@ -164,16 +166,20 @@ class ColonyScheduler:
                         self._event_port = self._event_identity = None
                     else:
                         self._event_port, self._event_identity = port, identity
+                        self._event_setup = setup
                         connection, colony, epoch = identity()
                         self._event_cursor = await self.service.call("game_event_cursor", colony, epoch, connection)
                         if await self.service.call("game_event_gap", colony, epoch, connection):
                             self._gap_binding = binding
                             continue
-                if (self._event_port is not None and not self._policy_installed
-                        and "colony_pause.v1" in self._event_port.capabilities):
-                    await self._event_port.push_policy({"source": "frontdesk", "pause_on_letter_defs":
-                                                        ["ThreatBig", "ThreatSmall", "NegativeEvent"]})
-                    self._policy_installed = True
+                if (self._event_port is not None and "colony_pause.v1" in self._event_port.capabilities):
+                    _, colony, _ = self._event_identity()
+                    policy = await self.service.call("wake_policy", colony)
+                    desired = policy["pause_on_letter_defs"]
+                    if not self._policy_installed or desired != self._installed_policy:
+                        await self._event_port.push_policy({"source": "frontdesk", "pause_on_letter_defs": desired})
+                        self._installed_policy = copy.deepcopy(desired)
+                        self._policy_installed = True
                 if self._event_port is not None and "colony_events.v1" in self._event_port.capabilities:
                     connection, colony, epoch = self._event_identity()
                     poll_identity = (connection, colony, epoch)
@@ -189,6 +195,7 @@ class ColonyScheduler:
                                                           connection, dict(event))
                         self._event_cursor = event["cursor"]
                         if changed:
+                            await self._sample_numeric((connection, colony, epoch), event["game_tick"])
                             self._games[colony] = _game_binding(game)
                             self._frontdesk_signal.set()
                             self._signal.set()
@@ -216,6 +223,114 @@ class ColonyScheduler:
                     self._policy_installed = False
                     self._retry_at = asyncio.get_running_loop().time() + 5
             await asyncio.sleep(1)
+
+    def _native_read(self, name):
+        setup = self._event_setup
+        if setup is None or self._event_identity is None or self._event_identity() is None or not isinstance(setup.directory, dict):
+            raise ValueError("The bound native catalog is unavailable")
+        directory = setup.directory
+        names = {"query"}
+        for key, collection, name_key in (("world_observation", "tools", "name"),
+                                           ("native_behavior", "tools", "name"),
+                                           ("colony_state", "operations", "operation")):
+            names.update(spec.get(name_key) for spec in directory.get(key, {}).get(collection, [])
+                         if isinstance(spec, dict))
+        if name not in names:
+            raise ValueError("Numeric reads must use a catalogued native tool")
+        spec = next((tool for tool in setup.tools if tool.name == name), None)
+        if spec is None:
+            raise ValueError("Native read is not available on this binding")
+        return spec
+
+    async def _sample_numeric(self, identity, tick):
+        connection, colony, epoch = identity
+        for item in await self.service.call("wake_conditions", colony, epoch):
+            condition = item["condition"]
+            if condition["kind"] != "numeric" or tick < item["next_tick"]:
+                continue
+            if self._event_identity() != identity:
+                return
+            if self._event_setup is None or self._event_setup.idle_query is None:
+                return
+            observation = None
+            try:
+                self._native_read(condition["tool"])
+                result = await self._event_setup.idle_query(condition["tool"], copy.deepcopy(condition["arguments"]))
+                observation = result.to_dict() if hasattr(result, "to_dict") else dict(result)
+                response = observation.get("response", {})
+                if (response.get("connection_epoch"), response.get("colony_id"), response.get("load_epoch")) != identity:
+                    raise ValueError("Numeric observation has a different binding")
+                sample_tick = response.get("game_tick")
+                if type(sample_tick) is not int or sample_tick < tick:
+                    raise ValueError("Numeric observation has an invalid sampling tick")
+            except ToolExecutionError as error:
+                observation = {"error": {"code": error.code, "message": str(error)}}
+                sample_tick = tick
+            except ValueError as error:
+                failure = {"error": {"code": "invalid_observation", "message": str(error)}}
+                if observation is not None:
+                    failure["observation"] = observation
+                observation = failure
+                sample_tick = tick
+            if self._event_identity() != identity:
+                return
+            await self.service.call("evaluate_wake", colony, epoch, sample_tick, item["id"], observation,
+                                    expected_next_tick=item["next_tick"])
+
+    def scheduler_tools(self, game, role):
+        async def manage(args):
+            current = self.service.game_session()
+            if current is None or (current.colony_id, current.load_epoch) != (game.colony_id, game.load_epoch):
+                raise ToolExecutionError("world_changed", "The active colony changed.", recoverable=False)
+            try:
+                action = args.get("action")
+                if action == "read":
+                    reads = []
+                    if self._event_setup is not None and self._event_identity is not None and self._event_identity() is not None:
+                        for tool in self._event_setup.tools:
+                            try:
+                                self._native_read(tool.name)
+                            except ValueError:
+                                continue
+                            reads.append({"name": tool.name, "parameters": tool.parameters})
+                    return {"conditions": await self.service.call("wake_conditions", current.colony_id, current.load_epoch),
+                            "policy": await self.service.call("wake_policy", current.colony_id),
+                            "policy_authors": await self.service.call("wake_policy_authors", current.colony_id),
+                            "native_reads": reads}
+                if action == "cancel":
+                    return {"event_seq": await self.service.call("cancel_wake", current.colony_id, current.load_epoch,
+                                                                  current.game_tick, role, args["id"])}
+                if action == "policy":
+                    return {"event_seq": await self.service.call("set_wake_policy", current.colony_id, current.load_epoch,
+                                                                  current.game_tick, role, args["changes"])}
+                if action == "register":
+                    condition = args["condition"]
+                    if not isinstance(condition, dict):
+                        raise ValueError("Condition must be an object")
+                    if condition.get("kind") == "numeric":
+                        self._native_read(condition.get("tool"))
+                    return await self.service.call("register_wake", current.colony_id, current.load_epoch,
+                                                   current.game_tick, role, condition, args["text"])
+                raise ValueError("Unknown scheduler action")
+            except (KeyError, ValueError, TypeError) as error:
+                raise ToolExecutionError("scheduler_invalid", str(error)) from error
+
+        return (ToolSpec("manage_wakes", "Read, register or cancel wake conditions and change your role's policy. "
+                         "Condition kinds: deadline (tick), periodic (interval_ticks), event (event_kind and data filters: exact values or {op,value} numeric comparisons), "
+                         "numeric (catalog tool, arguments, response path, op eq/ne/lt/le/gt/ge, value, optional interval_ticks). "
+                         "Numeric paths start at the original observation; default interval 2500, minimum 250 ticks. "
+                         "Frontdesk policy fields are pause_on_letter_defs, frontdesk_letter_defs, frontdesk_choice_letters and frontdesk_paused_windows; "
+                         "planner may change planner_review_ticks. Read returns current policy and native read schemas.",
+                         {"type": "object", "properties": {"action": {"type": "string", "enum": ["read", "register", "cancel", "policy"]},
+                          "id": {"type": "integer"}, "text": {"type": "string"}, "condition": {"type": "object", "properties": {
+                              "kind": {"type": "string", "enum": ["deadline", "periodic", "event", "numeric"]},
+                              "tick": {"type": "integer"}, "interval_ticks": {"type": "integer"},
+                              "event_kind": {"type": "string"}, "filters": {"type": "object"},
+                              "tool": {"type": "string"}, "arguments": {"type": "object"},
+                              "path": {"type": "array", "items": {"type": ["string", "integer"]}},
+                              "op": {"type": "string", "enum": ["eq", "ne", "lt", "le", "gt", "ge"]},
+                              "value": {"type": "number"}}, "required": ["kind"], "additionalProperties": False},
+                          "changes": {"type": "object"}}, "required": ["action"], "additionalProperties": False}, manage),)
 
     async def _run_frontdesk(self):
         try:
@@ -322,7 +437,9 @@ class ColonyScheduler:
                                             explicit_update_only=True, inbox=inbox,
                                             utterance_seq=utterance["seq"] if utterance["kind"] == "user.utterance" else None,
                                             trigger_seq=utterance["seq"] if utterance["kind"] == "frontdesk.trigger" else None,
-                                            wake_planner=wake_planner, intent_sources=intent_sources, pending_utterances=[anchor_seq(e) for e in pending])
+                                            wake_planner=wake_planner, intent_sources=intent_sources, pending_utterances=[anchor_seq(e) for e in pending],
+                                            scheduler_tools=self.scheduler_tools(game, "frontdesk"),
+                                            scheduler_setup_provider=self._event_provider)
         if result.get("status") == "ok" and result.get("workspace", {}).get("history_saved"):
             current = self.service.game_session()
             tick = current.game_tick if current and (current.colony_id, current.load_epoch) == (
@@ -388,6 +505,16 @@ class ColonyScheduler:
         pending = [e for e in wakes if e["load_epoch"] == load_epoch]
         if not pending:
             return
+        if self._event_provider is not None:
+            from ...workspace.takeovers import TakeoverControl
+
+            try:
+                setup = await self._event_provider()
+                control = TakeoverControl(self.service, setup.ledger_query, setup.write_identity, setup.write_fields_query)
+                await control.assess()
+            except ToolExecutionError as error:
+                await self.service.call("record", colony_id, load_epoch, current_tick(), "plugin",
+                                        "takeover.unavailable", {"code": error.code, "message": str(error)})
         board = await self.service.call("board", game.colony_id)
         intents = [e for e in board if e["kind"] == "intent" and e["status"] != "closed"]
         words = [await self.service.call("event", game.colony_id, e["source"]["event_seq"]) for e in intents]
@@ -473,9 +600,11 @@ class ColonyScheduler:
                       "required": ["handoff"], "additionalProperties": False}, yield_tool, terminal=True),
         )
         capabilities += (self.service.capabilities(game, start)[1],)
+        capabilities += self.scheduler_tools(game, "planner")
         session = AgentRunSession.create(ledger=ledger, question=question, workspace_id=game.colony_id,
                                          colony_id=game.colony_id, capabilities=capabilities, role="planner",
                                          planner_loop=True)
+        session.takeover_service = self.service
 
         async def progress(payload):
             await self.service.call("record", colony_id, load_epoch, current_tick(require_binding=False),
