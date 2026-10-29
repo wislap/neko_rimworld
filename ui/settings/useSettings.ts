@@ -98,8 +98,9 @@ export function useSettings(services: PanelServices) {
   }, [state.action_nonce])
   useEffect(() => {
     const active = bridgeReceipt?.state === "saving" ? bridgeReceipt : agentReceipt?.state === "saving" ? agentReceipt : null
-    if (!active) return
-    const timer = setTimeout(() => { void readReceipt(active.kind, active.operation_id) }, 700)
+    if (!active || (active.kind !== "bridge" && active.kind !== "agent")) return
+    const kind = active.kind
+    const timer = setTimeout(() => { void readReceipt(kind, active.operation_id) }, 700)
     return () => clearTimeout(timer)
   }, [bridgeReceipt, agentReceipt, checking])
   useEffect(() => {

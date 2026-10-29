@@ -66,9 +66,9 @@ def validate_request(mode, args):
         _text(args["token"])
     elif mode == "set_paused":
         _fields(args, ("paused", "role"))
-        if type(args["paused"]) is not bool or args["role"] not in ("planner", "frontdesk"):
+        if type(args["paused"]) is not bool or args["role"] not in ("planner", "frontdesk", "policy"):
             _bad()
-        if args["role"] == "frontdesk" and not args["paused"]:
+        if args["role"] in ("frontdesk", "policy") and not args["paused"]:
             _bad()
     else:
         _bad()
@@ -90,7 +90,9 @@ def validate_result(raw):
     kind = data.get("status")
     if kind is None and "status" not in data:
         _fields(data, ("paused", "role"))
-        if type(data["paused"]) is not bool or data["role"] not in ("planner", "frontdesk"):
+        if type(data["paused"]) is not bool or data["role"] not in ("planner", "frontdesk", "policy"):
+            _bad()
+        if data["role"] in ("frontdesk", "policy") and not data["paused"]:
             _bad()
     elif kind in ("ok", "committed", "undone"):
         names = {"ok": ("status", "preview"), "committed": ("status", "changeset_id", "load_epoch", "readback", "undo_token"), "undone": ("status", "changeset_id", "load_epoch", "readback")}[kind]

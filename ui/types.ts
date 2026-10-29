@@ -112,6 +112,7 @@ export type AgentRuntimeState = {
 }
 
 export type DashboardState = {
+  autoplay?: { enabled?: boolean; fault?: any; budget?: any; settings?: Record<string, number | "">; activation?: { seq: number; source: string; load_epoch: string; payload: { goal: string; constraints: string; goal_edited: boolean; constraints_edited: boolean } } | null; board?: any[]; takeovers?: any[]; actions?: any[] }
   settings_saves?: SettingsReceipt[]
   consultations_in_progress?: number
   workspaces?: { revision?: number; active_count?: number }
@@ -141,7 +142,7 @@ export type DashboardState = {
   updated_at?: string
 }
 
-export type PageId = "work" | "history" | "diagnostics" | "settings"
+export type PageId = "work" | "history" | "autoplay" | "diagnostics" | "settings"
 export type RunView = "result" | "events" | "observations" | "model"
 export type BudgetValues = Record<string, number | "">
 export const BUDGET_FIELDS = [
@@ -156,4 +157,4 @@ export const BUDGET_FIELDS = [
   { key: "max_input_tokens", min: 1, max: 1000000000, initial: 2000000, unit: "tokens" },
 ]
 
-export type SettingsReceipt = { operation_id: string; kind: "bridge" | "agent"; state: "saving" | "saved" | "failed" | "unconfirmed"; persisted?: boolean | null; applied?: boolean | null; error_code?: string }
+export type SettingsReceipt = { operation_id: string; kind: "bridge" | "agent" | "autoplay"; state: "saving" | "saved" | "failed" | "unconfirmed"; persisted?: boolean | null; applied?: boolean | null; error_code?: string }

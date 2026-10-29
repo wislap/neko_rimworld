@@ -52,6 +52,81 @@ class Journal:
     def close(self):
         self._ledger.close()
 
+    def budget_status(self, colony_id):
+        events = self._ledger.events_by_kind(colony_id, ("budget.reserve", "budget.settle"))
+        reservations = {e["payload"]["id"]: e["payload"] for e in events if e["kind"] == "budget.reserve"}
+        settlements = {e["payload"]["id"]: e["payload"] for e in events if e["kind"] == "budget.settle"}
+        input_total = known_prompt = known_completion = 0
+        cost_total = known_cost = reserved_cost = 0.0
+        unknown_usage = unknown_cost = unpriced = not_dispatched = attempted = 0
+        for ident, item in reservations.items():
+            receipt = settlements.get(ident, {})
+            if receipt.get("outcome") == "not_dispatched":
+                not_dispatched += 1
+                continue
+            if receipt.get("outcome") == "attempted":
+                attempted += 1
+            usage = receipt.get("usage", {})
+            prompt, output, cached = (usage.get(k) for k in ("prompt_tokens", "completion_tokens", "cached_tokens"))
+            def valid(n):
+                return type(n) is int and n >= 0
+            input_total += prompt if valid(prompt) else item["input_estimate"]
+            known_prompt += prompt if valid(prompt) else 0
+            known_completion += output if valid(output) else 0
+            if not (valid(prompt) and valid(output)):
+                unknown_usage += 1
+            prices = item["prices"]
+            priced = all(prices[k] is not None for k in ("input_price", "output_price", "cache_read_price"))
+            exact = priced and valid(prompt) and valid(output) and valid(cached) and cached <= prompt
+            if exact:
+                cost = ((prompt - cached) * prices["input_price"] + cached * prices["cache_read_price"]
+                        + output * prices["output_price"]) / 1_000_000
+                known_cost += cost
+            else:
+                unknown_cost += 1
+                if not priced:
+                    unpriced += 1
+                    continue
+                # Use known quantities even if they exceed the reservation. Unknown quantities
+                # retain their reservation; unknown cache split uses the higher configured rate.
+                input_count = prompt if valid(prompt) else item["input_estimate"]
+                output_count = output if valid(output) else item["output_limit"]
+                cost = (input_count * max(prices["input_price"], prices["cache_read_price"])
+                        + output_count * prices["output_price"]) / 1_000_000
+                reserved_cost += cost
+            cost_total += cost
+        charged = len(reservations) - not_dispatched
+        return {"requests": charged, "reservations": len(reservations), "not_dispatched": not_dispatched,
+                "attempted": attempted, "dispatch_unknown": charged - attempted,
+                "input_tokens": input_total, "cost": cost_total,
+                "unknown_usage": unknown_usage, "unknown_cost": unknown_cost,
+                "known_prompt_tokens": known_prompt, "known_completion_tokens": known_completion,
+                "known_cost": known_cost, "reserved_cost": reserved_cost,
+                "unpriced_reservations": unpriced}
+
+    def budget_reserve(self, colony_id, epoch, tick, payload, max_requests, max_input_tokens, max_cost):
+        with self._ledger.transaction():
+            state = self.budget_status(colony_id)
+            if (state["requests"] + 1 > max_requests
+                    or state["input_tokens"] + payload["input_estimate"] > max_input_tokens
+                    or (max_cost is not None and (payload["reserved_cost"] is None
+                        or state["unpriced_reservations"] or state["cost"] + payload["reserved_cost"] > max_cost))):
+                return False
+            self._ledger.append(colony_id, epoch, tick, PLUGIN, "budget.reserve", payload)
+        return True
+
+    def budget_settle(self, colony_id, epoch, tick, payload):
+        with self._ledger.transaction():
+            events = self._ledger.events_by_kind(colony_id, ("budget.reserve", "budget.settle"))
+            if not any(e["kind"] == "budget.reserve" and e["payload"]["id"] == payload["id"] for e in events):
+                raise ValueError("Unknown model reservation")
+            for event in events:
+                if event["kind"] == "budget.settle" and event["payload"]["id"] == payload["id"]:
+                    if event["payload"] == payload:
+                        return
+                    raise ValueError("Model reservation already settled differently")
+            self._ledger.append(colony_id, epoch, tick, PLUGIN, "budget.settle", payload)
+
     def colonies(self):
         return self._ledger.colonies()
 
@@ -246,19 +321,40 @@ class Journal:
             raise ValueError(f"{kind} events are written by their own operation")
         return self._ledger.append(colony_id, load_epoch, game_tick, source, kind, payload)
 
+    def record_autoplay_activation(self, colony_id, load_epoch, game_tick, choices):
+        required = {"goal", "constraints", "goal_edited", "constraints_edited"}
+        if not isinstance(choices, dict) or set(choices) != required:
+            raise ValueError("Activation requires goal, constraints and their edited flags")
+        for name in ("goal", "constraints"):
+            value = choices[name]
+            if not isinstance(value, str) or not value.strip() or len(value) > 2000:
+                raise ValueError(f"Activation {name} must be nonempty text up to 2000 characters")
+        if any(type(choices[name]) is not bool for name in ("goal_edited", "constraints_edited")):
+            raise ValueError("Activation edited flags must be booleans")
+        from ..serialization import canonical
+
+        with self._ledger.transaction():
+            activation = self._ledger.append(colony_id, load_epoch, game_tick, USER, "autoplay.activation", dict(choices))
+            wake = self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "planner.wake", {
+                "source": "plugin", "text": "Explicit autoplay activation choices: " + canonical(choices),
+                "activation_seq": activation, "choices": dict(choices)})
+        return wake
+
     def record_utterance(self, colony_id, load_epoch, game_tick, text, *, request_id=None):
         if not isinstance(text, str) or not text.strip():
             raise ValueError("A user utterance requires text")
         return self._ledger.append(colony_id, load_epoch, game_tick, USER, UTTERANCE_EVENT, {"text": text, "request_id": request_id})
 
-    def record_frontdesk_wake(self, colony_id, load_epoch, game_tick, source, text):
+    def record_frontdesk_wake(self, colony_id, load_epoch, game_tick, source, text, *, request_id=None):
         if source not in {"user", "game", "agent", "frontdesk", "planner", "plugin"}:
             raise ValueError("Unknown wake source")
         if not isinstance(text, str) or not text.strip():
             raise ValueError("Wake reason requires text")
+        if source != "user" and request_id is not None:
+            raise ValueError("Only original user requests have host request identifiers")
         with self._ledger.transaction():
             if source == "user":
-                anchor = self.record_utterance(colony_id, load_epoch, game_tick, text)
+                anchor = self.record_utterance(colony_id, load_epoch, game_tick, text, request_id=request_id)
                 key = "utterance_seq"
             else:
                 anchor = self._ledger.append(colony_id, load_epoch, game_tick,

@@ -32,6 +32,11 @@ class AgentRunSession:
     persist_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = field(default=None, repr=False)
     inbox: Callable[[], Awaitable[list[dict[str, Any]]]] | None = field(default=None, repr=False)
     explicit_scheduler: bool = False
+    budget: Any = field(default=None, repr=False)
+    budget_scope: tuple[str, str, int] | None = field(default=None, repr=False)
+    received_model_turn: AssistantTurn | None = field(default=None, repr=False)
+    model_receipt_unconfirmed: bool = False
+    received_model_error: dict[str, Any] | None = field(default=None, repr=False)
     takeover_service: Any = field(default=None, repr=False)
     planner_terminal: bool = False
     frontdesk_update_only: bool = False
@@ -85,9 +90,10 @@ class AgentRunSession:
         capabilities: tuple[ToolSpec, ...] = (),
         role: str = "frontdesk",
         planner_loop: bool = False,
+        autoplay: bool = False,
     ) -> AgentRunSession:
         messages = [
-            {"role": "system", "content": build_system_prompt(persistent_work=workspace_id is not None, role=role, planner_loop=planner_loop)},
+            {"role": "system", "content": build_system_prompt(persistent_work=workspace_id is not None, role=role, planner_loop=planner_loop, autoplay=autoplay)},
             *copy.deepcopy(history),
             {"role": "user", "content": question},
         ]

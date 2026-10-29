@@ -16,7 +16,13 @@ from ..delivery.handoff import (
 )
 from ..model.model_client import AgentModelSettings, ModelClient, OpenAICompatibleModelClient
 from ..model.model_requests import MAX_MODEL_ATTEMPTS, _canonical_hash, request_model
-from .audit import AgentAuditCapacityError, AgentAuditLedger, AgentAuditRegistry, AgentRunState
+from .audit import (
+    AgentAuditCapacityError,
+    AgentAuditLedger,
+    AgentAuditRegistry,
+    AgentRunState,
+    private_protocol_redacted,
+)
 from .execution_environment import ExecutionEnvironment
 from .prompt import build_runtime_advisory
 from .session import AgentRunSession
@@ -234,6 +240,13 @@ class AgentRuntime:
         ):
             result = {**result, "agent_text": draft.agent_text,
                       "submission_mode": "retained_submission"}
+        if session.model_receipt_unconfirmed:
+            if session.received_model_turn is not None:
+                result = {**result, "received_model_response": private_protocol_redacted(session.received_model_turn.as_audit_value()),
+                          "model_response_recording": "unconfirmed"}
+            elif session.received_model_error is not None:
+                result = {**result, "received_model_error": private_protocol_redacted(session.received_model_error),
+                          "model_response_recording": "unconfirmed"}
         if session.write_outcomes:
             result = {**result, "write_outcomes": copy.deepcopy(session.write_outcomes)}
         if session.write_record_issue:
@@ -455,6 +468,7 @@ class AgentRuntime:
                 tool_calls=session.tool_calls,
                 finalizing=finalizing,
                 finalization_reserve_seconds=settings.finalization_reserve_seconds,
+                autoplay_role=session.role if session.explicit_scheduler else None,
             )
             if session.inbox is not None:
                 session.messages.extend(await session.inbox())

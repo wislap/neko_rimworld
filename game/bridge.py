@@ -424,7 +424,8 @@ class BridgeServer:
                 raise BridgeNotConnected("No authenticated, active RimWorld session is available.")
             supported = (
                 "colony_pause.v1" in capabilities if policy else
-                bool({"colony_pause.v1", "colony_write.v1"} & capabilities) if operation == "set_paused" else
+                ("colony_pause.policy.v1" in capabilities if arguments.get("role") == "policy" else
+                 bool({"colony_pause.v1", "colony_write.v1"} & capabilities)) if operation == "set_paused" else
                 ("colony_write.v1" in capabilities or "colony_write.transactions.v1" in capabilities) if write else
                 self.QUERY_CAPABILITY in capabilities
             )

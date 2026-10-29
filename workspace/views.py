@@ -14,6 +14,19 @@ class WorkspaceViews:
     def __init__(self, path):
         self.path = path
 
+    def latest_activation(self, colony_id):
+        """Read this colony's latest explicit choices without creating a journal."""
+        with self.database() as db:
+            if db is None:
+                return None
+            row = db.execute("SELECT seq, source, load_epoch, game_tick, payload FROM events "
+                             "WHERE colony_id=? AND kind='autoplay.activation' ORDER BY seq DESC LIMIT 1",
+                             (colony_id,)).fetchone()
+            if row is None:
+                return None
+            return {"seq": row["seq"], "source": row["source"], "load_epoch": row["load_epoch"],
+                    "game_tick": row["game_tick"], "payload": json.loads(row["payload"])}
+
     @contextmanager
     def database(self):
         if not self.path.is_file():

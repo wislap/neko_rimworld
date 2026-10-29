@@ -132,7 +132,7 @@ name = "Save panel settings"
 description = "Start one settings save and return a receipt without waiting for persistence."
 timeout = 3.0
 metadata = { "agent_auto" = false }
-input_schema = { "type" = "object", "additionalProperties" = false, "required" = ["operation_id", "kind", "ui_nonce"], "properties" = { "operation_id" = { "type" = "string", "pattern" = "^[a-f0-9]{32}$" }, "kind" = { "type" = "string", "enum" = ["bridge", "agent"] }, "ui_nonce" = { "type" = "string", "writeOnly" = true }, "port" = { "type" = "integer", "minimum" = 1, "maximum" = 65535 }, "pairing_token" = { "type" = "string", "writeOnly" = true, "maxLength" = 128 }, "base_url" = { "type" = "string", "maxLength" = 2048 }, "model" = { "type" = "string", "maxLength" = 256 }, "api_key" = { "type" = "string", "writeOnly" = true, "maxLength" = 4096 }, "budgets" = { "type" = "object" } } }
+input_schema = { "type" = "object", "additionalProperties" = false, "required" = ["operation_id", "kind", "ui_nonce"], "properties" = { "operation_id" = { "type" = "string", "pattern" = "^[a-f0-9]{32}$" }, "kind" = { "type" = "string", "enum" = ["bridge", "agent", "autoplay"] }, "ui_nonce" = { "type" = "string", "writeOnly" = true }, "port" = { "type" = "integer", "minimum" = 1, "maximum" = 65535 }, "pairing_token" = { "type" = "string", "writeOnly" = true, "maxLength" = 128 }, "base_url" = { "type" = "string", "maxLength" = 2048 }, "model" = { "type" = "string", "maxLength" = 256 }, "api_key" = { "type" = "string", "writeOnly" = true, "maxLength" = 4096 }, "budgets" = { "type" = "object" } } }
 
 [[entries]]
 id = "get_settings_save"
@@ -141,3 +141,19 @@ description = "Read the status of a panel settings save; never repeats a write."
 timeout = 3.0
 metadata = { "agent_auto" = false }
 input_schema = { "type" = "object", "additionalProperties" = false, "required" = ["operation_id"], "properties" = { "operation_id" = { "type" = "string", "pattern" = "^[a-f0-9]{32}$" } } }
+
+[[entries]]
+id = "autoplay_mode"
+name = "Set autoplay mode"
+description = "Explicitly enable or disable autoplay for this process."
+timeout = 15.0
+metadata = { "agent_auto" = false }
+input_schema = { "type" = "object", "properties" = { "enabled" = { "type" = "boolean" }, "ui_nonce" = { "type" = "string", "writeOnly" = true }, "goal" = { "type" = "string", "minLength" = 1, "maxLength" = 2000 }, "constraints" = { "type" = "string", "minLength" = 1, "maxLength" = 2000 }, "goal_edited" = { "type" = "boolean" }, "constraints_edited" = { "type" = "boolean" } }, "required" = ["enabled", "ui_nonce"], "additionalProperties" = false }
+
+[[entries]]
+id = "autoplay_undo"
+name = "Undo a colony action"
+description = "Undo a current-epoch commit after checking user takeovers."
+timeout = 15.0
+metadata = { "agent_auto" = false }
+input_schema = { "type" = "object", "properties" = { "seq" = { "type" = "integer" }, "ui_nonce" = { "type" = "string", "writeOnly" = true } }, "required" = ["seq", "ui_nonce"], "additionalProperties" = false }

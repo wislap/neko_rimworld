@@ -7,6 +7,7 @@ import { useDiagnostics } from "./diagnostics/useDiagnostics"
 import { useSettings } from "./settings/useSettings"
 import { useWorkView } from "./work/useWorkView"
 import { StatusStrip } from "./components/status-strip"
+import { Autoplay } from "./work/autoplay"
 import { WorkPage } from "./work/work-page"
 import { HistoryPage } from "./work/history-page"
 import { ReadingRecords } from "./work/reading-records"
@@ -18,22 +19,24 @@ function PanelBody(props: PluginSurfaceProps<DashboardState>) {
   const { t } = useI18n()
   const services = usePanelServices(props)
   const [storedPage, setPage] = useLocalState<PageId>("rimworld:advice:page", "work")
-  const page = ["work", "history", "diagnostics", "settings"].includes(storedPage) ? storedPage : "work"
+  const page = ["work", "history", "autoplay", "diagnostics", "settings"].includes(storedPage) ? storedPage : "work"
   const diagnostics = useDiagnostics(services, page, setPage)
   const settings = useSettings(services)
   const work = useWorkView(services, page)
   const active = diagnostics.running || (services.state.agent?.active_count ?? 0) > 0 || (services.state.consultations_in_progress ?? 0) > 0
+  const polling = active || services.state.autoplay?.enabled === true
   useEffect(() => {
-    if (!active) return
+    if (!polling) return
     let stopped = false
     let timer: ReturnType<typeof setTimeout>
+    const delay = () => typeof document !== "undefined" && document.hidden ? 8000 : active ? 1000 : 4000
     async function tick() {
       await services.refresh()
-      if (!stopped) timer = setTimeout(tick, typeof document !== "undefined" && document.hidden ? 4000 : 1000)
+      if (!stopped) timer = setTimeout(tick, delay())
     }
-    timer = setTimeout(tick, 1000)
+    timer = setTimeout(tick, delay())
     return () => { stopped = true; clearTimeout(timer) }
-  }, [active])
+  }, [active, polling])
   const openReadings = () => { diagnostics.setDiagnosticMode("readings"); setPage("diagnostics") }
   const openConnectionTest = () => { diagnostics.setDiagnosticMode("test"); setPage("diagnostics") }
   return <Page title="N.E.K.O RimWorld" subtitle={t("panel.subtitle")}>
@@ -44,11 +47,12 @@ function PanelBody(props: PluginSurfaceProps<DashboardState>) {
       <NavigationTabs id="rimworld-main-nav" activeId={page} onChange={id => setPage(id as PageId)} items={[
         { id: "work", label: t("nav.advice") },
         { id: "history", label: t("nav.history") },
+        { id: "autoplay", label: t("nav.autoplay") },
         { id: "diagnostics", label: t("nav.debug") },
         { id: "settings", label: t(settings.bridgeDirty || settings.agentDirty ? "nav.settingsDirty" : "nav.settings") },
       ]}>
         <ErrorBoundary key={page} title={t("debug.pageError")} >
-          {page === "diagnostics" ? <DiagnosticsPage c={diagnostics} readings={<ReadingRecords c={work} openAudit={diagnostics.openArchive} />} /> : page === "settings" ? <SettingsPage c={settings} /> : <div style={{ maxWidth: "1120px", width: "100%", marginInline: "auto", minWidth: 0 }}>{page === "history" ? <HistoryPage c={work} state={services.state} openDiagnostics={openReadings} openSettings={() => setPage("settings")} /> : <WorkPage c={work} state={services.state} openHistory={() => setPage("history")} openDiagnostics={openReadings} openSettings={() => setPage("settings")} openConnectionTest={openConnectionTest} />}</div>}
+          {page === "diagnostics" ? <DiagnosticsPage c={diagnostics} readings={<ReadingRecords c={work} openAudit={diagnostics.openArchive} />} /> : page === "settings" ? <SettingsPage c={settings} /> : <div style={{ maxWidth: "1120px", width: "100%", marginInline: "auto", minWidth: 0 }}>{page === "autoplay" ? <Autoplay key={services.state.session?.colony_id || "none"} services={services} /> : page === "history" ? <HistoryPage c={work} state={services.state} openDiagnostics={openReadings} openSettings={() => setPage("settings")} /> : <WorkPage c={work} state={services.state} openHistory={() => setPage("history")} openDiagnostics={openReadings} openSettings={() => setPage("settings")} openConnectionTest={openConnectionTest} />}</div>}
         </ErrorBoundary>
       </NavigationTabs>
     </Stack>

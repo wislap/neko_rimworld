@@ -90,11 +90,11 @@ test("the guide translates every chapter and offers public downloads without run
   }
 });
 
-test("the guide is separate from the four panel pages and never disturbs panel drafts",async()=>{
+test("the guide is separate from the panel pages and never disturbs panel drafts",async()=>{
   const h=setup();const guide=setup("zh-CN",{},"guide");try{
     await flush();
     assert.equal(h.root.querySelectorAll('#rimworld-main-nav-tab-guide').length,0);
-    assert.equal(h.root.querySelectorAll('[role="tablist"] [role="tab"]').length,4);
+    assert.equal(h.root.querySelectorAll('[role="tablist"] [role="tab"]').length,5);
     await h.tab("设置");
     await h.type(h.root.querySelector('input[placeholder="https://example.com/v1"]'),"https://draft.example/v1");
     await h.type(h.root.querySelectorAll('input[type="password"]')[1],"draft-key");
@@ -275,7 +275,7 @@ test("debug remains a top-level destination from advice, history and settings",a
       await h.click(label,'[role="tab"]');
       const tab=h.root.querySelector('#rimworld-main-nav-tab-diagnostics');
       assert.equal(tab.textContent,"调试");
-      assert.equal(tab.closest('[role="tablist"]').querySelectorAll('[role="tab"]').length,4);
+      assert.equal(tab.closest('[role="tablist"]').querySelectorAll('[role="tab"]').length,5);
     }
     await h.type(h.root.querySelector('input[placeholder="https://example.com/v1"]'),"https://unsaved.example/v1");
     await h.click("调试",'[role="tab"]');
@@ -769,4 +769,126 @@ test("English and fallback locales render translated settings, guidance and trou
    assert.doesNotMatch(h.root.textContent,/[\u4e00-\u9fff]|debug\.[a-z]/)
   }finally{await h.close()}
  }
+})
+
+test("autoplay requires an explicit panel action and shows real board and safe undo", async()=>{
+ const h=setup("zh-CN", {autoplay:{enabled:false,board:[{entry_id:"task-1",kind:"task",revision:3,status:"open",body:"准备食物"}],takeovers:[{seq:5,payload:{object:"pawn",field:"priority"}}],actions:[{seq:9,mode:"commit",status:"committed",changeset_id:"change",tick:30,undo_available:true}]}});try{
+  h.props.actions.push({id:"autoplay_mode",entry_id:"autoplay_mode"},{id:"autoplay_undo",entry_id:"autoplay_undo"})
+  h.render();await flush();assert.doesNotMatch(h.root.textContent,/task-1.*revision 3/);await h.tab("自动游玩");assert.match(h.root.textContent,/task-1.*revision 3/);assert.match(h.root.textContent,/pawn \/ priority/)
+  assert.equal(h.calls.filter(c=>c.id==="autoplay_mode").length,0)
+  await h.click("开启自动游玩");assert.equal(JSON.stringify(h.calls.find(c=>c.id==="autoplay_mode").args),JSON.stringify({enabled:true,goal:"Prioritize survival and stability.",constraints:"No cannibalism or live organ harvesting.",goal_edited:false,constraints_edited:false,ui_nonce:"test-nonce"}))
+  await h.click("撤销");assert.equal(JSON.stringify(h.calls.find(c=>c.id==="autoplay_undo").args),JSON.stringify({seq:9,ui_nonce:"test-nonce"}))
+ }finally{await h.close()}
+})
+
+test("autoplay budget keeps draft and recovers a save receipt across navigation",async()=>{
+ const h=setup("zh-CN", {autoplay:{enabled:false,settings:{max_requests:123}}});try{
+  let release; const pending=new Promise(resolve=>{release=resolve});
+  h.setInvoke(async(id,args)=>id==="begin_settings_save" && args.kind==="autoplay" ? await pending : id==="get_settings_save" ? {result:{operation_id:args.operation_id,kind:"autoplay",state:"saved",persisted:true,applied:true}} : {result:{workspaces:[],total:0,next_offset:null}})
+  h.render();await flush();await h.tab("自动游玩");const input=[...h.root.querySelectorAll("input")].find(x=>x.value==="123");await h.type(input,"124")
+  h.button("保存自动游玩预算").click();await flush();const call=h.calls.find(c=>c.id==="begin_settings_save");assert.equal(call.args.budgets.max_requests,124)
+  await h.tab("设置");await h.tab("自动游玩");assert.ok([...h.root.querySelectorAll("input")].some(x=>x.value==="124"))
+  release({result:{operation_id:call.args.operation_id,kind:"autoplay",state:"saved",persisted:true,applied:true}});await flush()
+  assert.equal(h.calls.filter(c=>c.id==="begin_settings_save").length,1)
+ }finally{await h.close()}
+})
+
+test("autoplay budget clears optional limits and rejects empty required counts", async()=>{
+ const h=setup("en", {autoplay:{enabled:false,settings:{max_requests:123,max_cost:8,input_price:7}}});try{
+  h.render();await flush();await h.tab("Autoplay");const inputs=[...h.root.querySelectorAll('input')];
+  await h.type(inputs.find(x=>x.value==='8'),'');await h.click('Save autoplay budget')
+  const save=h.calls.find(c=>c.id==='begin_settings_save');assert.equal(save.args.budgets.max_cost,null)
+  await h.type([...h.root.querySelectorAll('input')].find(x=>x.value==='123'),'');await h.click('Save autoplay budget')
+  assert.equal(h.calls.filter(c=>c.id==='begin_settings_save').length,1)
+  assert.match(h.root.textContent,/positive whole numbers/)
+ }finally{await h.close()}
+})
+
+test("activation sends edited goal and untouched default constraints as choices", async()=>{
+ const h=setup("en", {autoplay:{enabled:false}});try{
+  h.props.actions.push({id:"autoplay_mode",entry_id:"autoplay_mode"});h.render();await flush();await h.tab("Autoplay")
+  const goal=[...h.root.querySelectorAll('input')].find(x=>x.value==='Prioritize survival and stability.')
+  await h.type(goal,'Build a peaceful colony.');await h.click('Enable autoplay')
+  const sent=h.calls.find(c=>c.id==='autoplay_mode').args
+  assert.equal(sent.goal,'Build a peaceful colony.');assert.equal(sent.goal_edited,true)
+  assert.equal(sent.constraints,'No cannibalism or live organ harvesting.');assert.equal(sent.constraints_edited,false)
+ }finally{await h.close()}
+})
+
+test("reenabling restores this colony's latest goal across reload without overwriting draft", async()=>{
+ const activation={seq:7,source:"user",load_epoch:"old",payload:{goal:"Protect animals",constraints:"No live organ harvesting",goal_edited:true,constraints_edited:true}}
+ const h=setup("en", {session:{colony_id:"A",load_epoch:"new"},autoplay:{enabled:false,activation}});try{
+  h.props.actions.push({id:"autoplay_mode",entry_id:"autoplay_mode"});h.render();await flush();await h.tab("Autoplay")
+  const find=v=>[...h.root.querySelectorAll('input')].find(x=>x.value===v)
+  assert.ok(find('Protect animals'));assert.ok(find('No live organ harvesting'))
+  await h.type(find('Protect animals'),'Protect all animals')
+  h.state.autoplay.activation={...activation,seq:8};h.render();await flush();assert.ok(find('Protect all animals'))
+  await h.click('Enable autoplay');const sent=h.calls.find(c=>c.id==='autoplay_mode').args
+  assert.equal(sent.goal,'Protect all animals');assert.equal(sent.goal_edited,true)
+  h.state.session={colony_id:"B",load_epoch:"other"};h.state.autoplay.activation=null;h.render();await flush()
+  assert.ok(find('Prioritize survival and stability.'));assert.equal(find('Protect all animals'),undefined)
+ }finally{await h.close()}
+})
+
+test("model settings ignore autoplay receipts and check the matching agent receipt", async()=>{
+ const agent={operation_id:"a".repeat(32),kind:"agent",state:"saving",persisted:null,applied:null}
+ const autoplay={operation_id:"b".repeat(32),kind:"autoplay",state:"failed",persisted:false,applied:false}
+ const h=setup("zh-CN",{settings_saves:[agent,autoplay]});try{
+  h.setInvoke(async(id,args)=>({result:id==="get_settings_save" ? {...agent,state:"saved",persisted:true,applied:true} : {workspaces:[],total:0,next_offset:null}}))
+  await h.tab("设置");assert.match(h.root.textContent,/正在保存并确认/)
+  await h.click("核对这次保存状态")
+  assert.equal(h.calls.filter(c=>c.id==="get_settings_save").at(-1).args.operation_id,agent.operation_id)
+  assert.match(h.root.textContent,/设置已保存并应用/)
+  assert.ok(h.calls.every(c=>c.id!=="begin_settings_save"))
+ }finally{await h.close()}
+})
+
+test("autoplay is a separate page and advice stays the default", async()=>{
+ const h=setup("en",{autoplay:{enabled:false,board:[{entry_id:"only-board",kind:"task",revision:1,status:"open",body:"plan"}]}});try{
+  await flush();assert.equal(h.root.querySelector('#rimworld-main-nav-tab-work').getAttribute('aria-selected'),'true')
+  assert.doesNotMatch(h.root.textContent,/only-board|Enable autoplay/)
+  await h.tab('Autoplay');assert.equal(h.root.querySelector('#rimworld-main-nav-tab-autoplay').getAttribute('aria-selected'),'true')
+  assert.match(h.root.textContent,/only-board/);assert.match(h.root.textContent,/Enable autoplay/)
+  assert.ok(h.calls.every(c=>c.id!=="autoplay_mode"))
+  await h.tab('Latest advice');assert.doesNotMatch(h.root.textContent,/only-board|Enable autoplay/)
+ }finally{await h.close()}
+})
+
+test("idle autoplay polls for background changes and stops after disable", async()=>{
+ const h=setup("en",{autoplay:{enabled:false},agent:{active_count:0,recent_count:0,active_runs:[],recent_runs:[]}})
+ const originalSet=h.window.setTimeout, originalClear=h.window.clearTimeout
+ const timers=new Map();let next=1,refreshes=0
+ try{
+  h.window.setTimeout=(fn,delay)=>{const id=next++;timers.set(id,{fn,delay});return id}
+  h.window.clearTimeout=id=>timers.delete(id)
+  h.props.api.refresh=async()=>{refreshes++;h.state.autoplay.fault={kind:"endpoint",code:"model_transport",pause:"requested"};h.render()}
+  h.state.autoplay.enabled=true;h.render();await flush()
+  assert.match(h.root.textContent,/No consultation in progress/);assert.doesNotMatch(h.root.textContent,/Analyzing/)
+  const timer=[...timers.entries()].find(([,v])=>v.delay===4000 || v.delay===8000)
+  assert.ok(timer,"idle autoplay schedules a refresh")
+  timers.delete(timer[0]);await timer[1].fn();await flush();assert.equal(refreshes,1)
+  await h.tab("Autoplay");assert.match(h.root.textContent,/model_transport/)
+  assert.ok([...timers.values()].some(v=>v.delay===4000 || v.delay===8000))
+  h.state.autoplay.enabled=false;h.render();await flush()
+  assert.ok(![...timers.values()].some(v=>v.delay===4000 || v.delay===8000))
+  assert.equal(refreshes,1)
+ }finally{h.window.setTimeout=originalSet;h.window.clearTimeout=originalClear;await h.close()}
+})
+
+test("autoplay receipt cannot survive a backend restart while an old check is pending", async()=>{
+ const pending={operation_id:"a".repeat(32),kind:"autoplay",state:"saving",persisted:null,applied:null}
+ const h=setup("en",{settings_saves:[pending],autoplay:{enabled:false}});try{
+  let finishOld
+  h.setInvoke(async(id)=>id==="get_settings_save"?await new Promise(resolve=>{finishOld=resolve}):{result:{workspaces:[],total:0,next_offset:null}})
+  await h.tab("Autoplay");await h.click("Check save status");assert.equal(typeof finishOld,"function")
+  h.state.settings_saves=[{...pending,state:"saved",persisted:true,applied:true}];h.render();await flush()
+  assert.match(h.root.textContent,/Save status: saved/)
+  h.setInvoke(async(id)=>{if(id==="get_settings_save")throw new Error("settings_receipt_unavailable");return {result:{workspaces:[],total:0,next_offset:null}}})
+  h.state.action_nonce="new-process";h.state.settings_saves=[];h.render();await flush()
+  assert.match(h.root.textContent,/Save status: unconfirmed/)
+  finishOld({result:{...pending,state:"saved",persisted:true,applied:true}});await flush()
+  assert.match(h.root.textContent,/Save status: unconfirmed/);assert.doesNotMatch(h.root.textContent,/Save status: saved/)
+  assert.ok(h.calls.filter(c=>c.id==="get_settings_save").length>=2)
+  assert.ok(h.calls.every(c=>c.id!=="begin_settings_save"))
+ }finally{await h.close()}
 })

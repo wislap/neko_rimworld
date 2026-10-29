@@ -71,6 +71,8 @@ class BridgeGameWritePort:
         return await self._call("undo", token)
 
     async def set_paused(self, paused: bool, *, role: str) -> Mapping[str, Any]:
+        if role == "policy" and (not paused or "colony_pause.policy.v1" not in self._capabilities):
+            raise ToolExecutionError("unsupported", "Policy pause is unavailable.")
         return await self._call("set_paused", paused, role)
 
     async def events(self, since: int = 0) -> list[Mapping[str, Any]]:

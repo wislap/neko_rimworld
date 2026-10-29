@@ -68,7 +68,7 @@ class ScriptedGameWorld:
         self._lose_next_receipt = False
         self._fail_after: int | None = None
 
-    capabilities = frozenset({"colony_write.transactions.v1", "colony_events.v1", "colony_pause.v1"})
+    capabilities = frozenset({"colony_write.transactions.v1", "colony_events.v1", "colony_pause.v1", "colony_pause.policy.v1"})
 
     @property
     def load_epoch(self) -> str:
@@ -231,7 +231,7 @@ class ScriptedGameWorld:
         return copy.deepcopy(dict(policy))
 
     async def set_paused(self, paused: bool, *, role: str) -> dict[str, Any]:
-        if not isinstance(paused, bool) or role not in ("frontdesk", "planner") or (role == "frontdesk" and not paused):
+        if not isinstance(paused, bool) or role not in ("frontdesk", "planner", "policy") or (role in ("frontdesk", "policy") and not paused):
             raise ToolExecutionError("invalid_argument", "paused must be a boolean.")
         changed = self._paused != paused
         self._paused = paused

@@ -6,7 +6,7 @@ Start here: [中文使用指南](docs/QUICKSTART.zh-CN.md) · [English quick sta
 
 The plugin detail page's dedicated **教程 / Guide** tab walks through downloads,
 separate Mod and plugin installation, pairing, model configuration and the first
-question. The working panel keeps its four original pages. Download the released
+question. The source working panel also has an explicit Autoplay page. Download the released
 [Bridge Mod v3.2.0 ZIP](https://github.com/wislap/NekoRimWorld/releases/download/v3.2.0/NekoRimWorld-3.2.0.zip)
 for RimWorld; get the separate `.neko-plugin` package from the
 [plugin releases page](https://github.com/wislap/n.e.k.o_plugin_neko_rimworld/releases) when available.
@@ -18,15 +18,43 @@ does not silently repeat a write after a lost reply. Model limits are under
 advanced settings. English and Simplified Chinese follow the host language, with
 English as the fallback. These local changes are not a published release.
 
-## Current source: v3.2
+## Current source: unreleased v3.3 work
 
 The product version is `3.2.0` (displayed as **v3.2**), aligned with the Mod and
 bench. It includes the selected situation background, world/faction/quest/trade/
 research consultation, exact definition reads, resource-source separation and
-loaded-journey comparisons. This is the current source version, not a claim that
+loaded-journey comparisons. Metadata remains at 3.2.0 during v3.3 development; this is not a claim that
 a plugin v3.2 package has been published. The Mod is distributed separately at
 [v3.2.0](https://github.com/wislap/NekoRimWorld/releases/tag/v3.2.0). Protocol versions and
-SDK support ranges are independent and unchanged.
+SDK support ranges are independent.
+
+The default consultation remains read-only. **Autoplay** is an explicit Hosted
+panel action for the connected colony; starting or restarting the plugin never
+enables it. It requires a matching source-built Mod with transaction, field
+ledger, event, pause and `colony_pause.policy.v1` capabilities. Source changes
+do not deploy that Mod or enable an existing instance.
+
+Autoplay shares the existing frontdesk, planner, journal and write services.
+The panel shows the board, user takeovers and current-epoch actions with guarded
+undo. Activation records the displayed goal and constraints; defaults prioritize
+survival/stability and prohibit cannibalism or live organ harvesting. Both choices
+can be edited before activation. Model behavior and actual gameplay quality have
+not been certified by the provider-free integration checks.
+
+The cumulative request/input limits apply across both roles and runs in the
+colony journal. Optional prices are configured per million tokens under
+`neko_rimworld.autoplay`; no vendor prices are assumed. Clear an optional price
+or cost limit in the panel to remove it. Saves take effect on the next explicit
+enable. Known usage, unknown usage and local conservative reservations remain
+separate; displayed estimates are not a provider bill.
+
+An endpoint failure stops new role runs, requests code-owned policy pause and
+submits a fixed notification through the host SDK. Budget or recording failures
+stop new calls and report the game pause state as unknown. Recovery requires
+explicitly disabling and enabling the mode; it does not resume the game.
+Background replies use the existing frontdesk delivery and local SDK submission
+receipt. A successful local submission does not prove a connected client or user
+received the message.
 
 The existing `rimworld_consult(question)` entry and shared runtime remain the
 only consultation path. Situation preparation below is distinct from the five
@@ -36,7 +64,8 @@ five-domain scans or a mandatory discovery round.
 When the Mod advertises `situation_snapshot.v1`, consultation preparation supplies a native situation snapshot before the first model request. It covers ongoing conditions, visible hostile groups, native alerts, actionable quests and recent archive events. This is background data in a separate user message, not a model tool. The deterministic view uses at most 1,000 tokens; complete original observations remain in the report. Native section priority and recency order are retained, and directly linked Quest sources are grouped without inferring links.
 
 One connection-owned in-memory provider reuses the original sampled snapshot until 30,000 game ticks have elapsed. A consultation fixes one snapshot for all its research requests. The displayed map is the map at sampling; global alert, quest and event scopes remain explicit. Persistent work does not automatically reattach old backgrounds through history, and pure answer-length repair excludes game background. Busy, unsupported or timed-out background reads are disclosed as unavailable while ordinary consultation can continue; world or connection changes still stop the run.
-The host agent sees `rimworld_consult(question)`. No game orders or mutations are executed.
+The host agent sees `rimworld_consult(question)`. Default read-only consultation
+does not execute game orders or mutations.
 
 When the Mod advertises `colony_state.v1`, `look` also reads world locations,
 existing caravans, factions, public quests, trader stock and research. Two direct

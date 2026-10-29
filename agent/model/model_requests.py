@@ -6,6 +6,7 @@ import asyncio
 import copy
 import hashlib
 import json
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -87,44 +88,94 @@ async def request_model(
             break
         if session.model_calls >= settings.max_model_calls:
             return ModelRequestResult(None, finalizing, ModelClientError("agent_request_budget", "The model request limit was reached."))
-        encoded = json.dumps({"messages": request_messages, "tools": tool_schemas}, ensure_ascii=False, separators=(",", ":"), default=str)
+        messages = request_messages
+        if session.budget is not None:
+            try:
+                state = await session.budget.status(session.budget_scope)
+            except BaseException:
+                session.budget.blocked = True
+                raise
+            messages = [*request_messages, {"role": "system", "content":
+                "Cumulative model budget (local estimates and reservations, not a provider bill): "
+                + json.dumps(state, ensure_ascii=False, sort_keys=True)}]
+        request_sha256 = _canonical_hash({"messages": messages, "tools": tool_schemas})
+        attempt_id = uuid.uuid4().hex
+        encoded = json.dumps({"messages": messages, "tools": tool_schemas}, ensure_ascii=False, separators=(",", ":"), default=str)
         encoding = tokenizer()
         estimate = len(encoding.encode(encoded, disallowed_special=())) if encoding else len(encoded.encode("utf-8"))
         if session.input_tokens_estimated + estimate > settings.max_input_tokens:
             return ModelRequestResult(None, finalizing, ModelClientError("agent_input_budget", "The local cumulative input token estimate would exceed its limit."))
-        session.input_tokens_estimated += estimate
         request_timeout = min(
             settings.request_timeout_seconds,
             max(0.001, available),
         )
         request_event = {
-            "input_budget": {"tokens": estimate, "cumulative": session.input_tokens_estimated, "method": encoding.name if encoding else "utf8_bytes_upper_bound"},
+            "input_budget": {"tokens": estimate, "cumulative": session.input_tokens_estimated + estimate, "method": encoding.name if encoding else "utf8_bytes_upper_bound"},
             "model": settings.model,
             "base_url": settings.base_url,
             "timeout_seconds": request_timeout,
-            "messages": request_messages,
+            "messages": messages,
+            "attempt_id": attempt_id,
+            "dispatch_state": "prepared_not_dispatched",
             "tools": tool_schemas,
             "request_sha256": request_sha256,
             "attempt": attempt,
             "max_attempts": max_attempts,
         }
-        if attempt == 1 and ledger.state != AgentRunState.MODEL_REQUESTING:
-            ledger.transition(AgentRunState.MODEL_REQUESTING, "model_request_started", request_event)
-        else:
-            ledger.record("model_request_started", request_event)
         persist = getattr(session, "persist_progress", None)
         if persist is not None:
             # Preserve each actual attempt before dispatch, including retries.
             # A failed journal write must not leave an unrecorded model request.
-            await persist({"stage": "model_request", "model_request": copy.deepcopy({
-                key: value for key, value in request_event.items() if key != "base_url"
-            })})
+            try:
+                await persist({"stage": "model_request", "model_request": copy.deepcopy({
+                    key: value for key, value in request_event.items() if key != "base_url"
+                })})
+            except BaseException:
+                if session.budget is not None:
+                    session.budget.blocked = True
+                raise
+        budget = session.budget
+        reservation = None
+        if budget is not None:
+            reservation = await budget.reserve(session.role, max(estimate, len(encoded.encode("utf-8"))),
+                settings.max_output_tokens, scope=session.budget_scope, attempt_id=attempt_id,
+                metadata={"run_id": ledger.run_id, "cycle": cycle, "attempt": attempt,
+                          "request_sha256": request_sha256})
+            if reservation is None:
+                return ModelRequestResult(None, finalizing, ModelClientError(
+                    "agent_cumulative_budget", "The cumulative model budget cannot admit another request."))
+        if persist is not None and budget is not None:
+            try:
+                await persist({"stage": "model_request_admitted", "attempt_id": attempt_id,
+                               "dispatch_state": "admitted_not_dispatched"})
+            except BaseException:
+                budget.blocked = True
+                await asyncio.shield(budget.settle(reservation, {}, outcome="not_dispatched"))
+                raise
+        if budget is not None and not await budget.begin_dispatch(reservation):
+            return ModelRequestResult(None, finalizing, ModelClientError(
+                "agent_cumulative_budget", "The cumulative model budget cannot admit another request."))
+        if attempt == 1 and ledger.state != AgentRunState.MODEL_REQUESTING:
+            ledger.transition(AgentRunState.MODEL_REQUESTING, "model_request_started", request_event)
+        else:
+            ledger.record("model_request_started", request_event)
+        session.input_tokens_estimated += estimate
         session.model_calls += 1
+        session.received_model_turn = None
+        session.received_model_error = None
         try:
             async with asyncio.timeout(request_timeout):
-                turn = await model.complete(request_messages, tool_schemas, timeout=request_timeout)
+                turn = await model.complete(messages, tool_schemas, timeout=request_timeout)
+            if budget is not None:
+                session.received_model_turn = turn
+                session.model_receipt_unconfirmed = True
+                await budget.settle(reservation, turn.usage,
+                                    response={"audit": turn.as_audit_value()})
+                session.model_receipt_unconfirmed = False
             break
         except asyncio.CancelledError:
+            if budget is not None and turn is None:
+                await asyncio.shield(budget.settle(reservation, getattr(model, "last_usage", {})))
             ledger.record(
                 "model_request_cancelled",
                 {
@@ -142,6 +193,13 @@ async def request_model(
                     diagnostics=getattr(model, "last_diagnostics", {}),
                     usage=getattr(model, "last_usage", {}),
                 )
+            if budget is not None:
+                session.received_model_error = {"code": exception.code, "message": str(exception),
+                                                "diagnostics": copy.deepcopy(exception.diagnostics),
+                                                "usage": copy.deepcopy(exception.usage)}
+                session.model_receipt_unconfirmed = True
+                await budget.settle(reservation, exception.usage, response={"error": session.received_model_error})
+                session.model_receipt_unconfirmed = False
             if reserve > 0 and not finalizing and ledger.elapsed_seconds >= research_deadline:
                 ledger.record(
                     "research_request_expired",

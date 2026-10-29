@@ -50,6 +50,7 @@ from .knowledge import KnowledgeLibrary
 from .reports import ReportError, ReportStore
 from .tool_contracts import ToolExecutionError, ToolSetup
 from .workspace.runtime import FrontdeskService
+from .workspace.session_view import anchor_seq
 from .workspace.views import WorkspaceViews
 
 PLUGIN_VERSION = "3.2.0"
@@ -57,6 +58,7 @@ DEFAULT_PORT = 48919
 DEFAULT_DIAGNOSTIC_CAPACITY = 200
 MIN_TOKEN_LENGTH = 32
 MAX_TOKEN_LENGTH = 128
+AUTOPLAY_OPTIONAL_BUDGET_FIELDS = frozenset({"max_cost", "input_price", "output_price", "cache_read_price"})
 # Cooperative world/action reads have an eight-second game-side lifetime.
 # The transport must allow that operation to return its partial result.
 FRAME_READ_OPERATIONS = frozenset({
@@ -168,6 +170,30 @@ def _consultation_handoff(result, question):
     return handoff
 
 
+def _unresponsive_request_deadline(registry, run_id, request_limit):
+    """Distinguish a silent endpoint timeout from a run-limited or active stream."""
+    if not run_id or not isinstance(request_limit, (int, float)) or isinstance(request_limit, bool):
+        return False
+    try:
+        details = registry.get_details(run_id, event_offset=0, event_limit=100_000) if registry else None
+    except Exception:
+        return False
+    events = details.get("events", []) if isinstance(details, dict) else []
+    for index in range(len(events) - 1, -1, -1):
+        event = events[index]
+        data = event.get("data", {})
+        if event.get("event") != "model_request_failed" or data.get("error_code") != "model_request_deadline":
+            continue
+        diagnostics = data.get("diagnostics") or {}
+        if (not isinstance(diagnostics, Mapping) or diagnostics.get("first_useful_delta_ms") is not None
+                or diagnostics.get("phase") not in {"starting", "connecting", "connected", "tls", "tls_complete", "response_headers", "first_response"}):
+            return False
+        started = next((item for item in reversed(events[:index]) if item.get("event") == "model_request_started"), None)
+        timeout = (started.get("data") or {}).get("timeout_seconds") if started else None
+        return type(timeout) in (int, float) and timeout >= request_limit
+    return False
+
+
 @neko_plugin
 class NekoRimworldPlugin(NekoPluginBase):
     """Read-only RimWorld bridge with a Hosted TSX diagnostics surface."""
@@ -196,6 +222,11 @@ class NekoRimworldPlugin(NekoPluginBase):
         )
         self._workspace_service = None
         self._colony_scheduler = None
+        self._autoplay_delivery = None
+        self._autoplay_waiters = {}
+        self._autoplay_fault = None
+        self._autoplay_budget = None
+        self._autoplay_settings = {}
         self._frontdesk_entry_locks = {}
         self._consultation_tasks = set()
         self._settings_saves = SettingsSaveOperations()
@@ -223,6 +254,8 @@ class NekoRimworldPlugin(NekoPluginBase):
                 config_error = exception
 
             settings, warnings = _parse_settings(config)
+            root = config.get("neko_rimworld", {}) if isinstance(config, Mapping) else {}
+            self._autoplay_settings = dict(root.get("autoplay", {})) if isinstance(root, Mapping) and isinstance(root.get("autoplay", {}), Mapping) else {}
             agent_settings, agent_warnings = parse_agent_model_settings(config)
             self._agent_settings = agent_settings
             warnings.extend(agent_warnings)
@@ -255,10 +288,7 @@ class NekoRimworldPlugin(NekoPluginBase):
             task.cancel()
         if calls:
             await asyncio.gather(*calls, return_exceptions=True)
-        scheduler = getattr(self, "_colony_scheduler", None)
-        if scheduler is not None:
-            await scheduler.close()
-            self._colony_scheduler = None
+        await self._stop_autoplay()
         await self._agent_runtime.cancel_all()
         workspace = getattr(self, "_workspace_service", None)
         if workspace is not None:
@@ -320,6 +350,34 @@ class NekoRimworldPlugin(NekoPluginBase):
             # Full run data is read on demand via get_agent_run_details.
             safe["agent"] = agent_snapshot
             safe["consultations_in_progress"] = len(self._consultation_tasks)
+            budget = getattr(self, "_autoplay_budget", None)
+            safe["autoplay"] = {"enabled": getattr(self, "_colony_scheduler", None) is not None,
+                                "fault": getattr(self, "_autoplay_fault", None),
+                                "budget": await budget.status() if budget else None,
+                                "settings": getattr(self, "_autoplay_settings", {})}
+            current = getattr(self._bridge, "session", None)
+            if current is not None:
+                work = getattr(self, "_workspace_service", None)
+                if work is not None and not work.closed:
+                    activation = await work.call("latest_event", current.colony_id, "autoplay.activation")
+                else:
+                    views = WorkspaceViews(self.data_path("workspaces") / "events.sqlite")
+                    activation = await asyncio.to_thread(views.latest_activation, current.colony_id)
+                safe["autoplay"]["activation"] = activation
+            if work := getattr(self, "_workspace_service", None):
+                if current is not None:
+                    events = await work.call("events", current.colony_id)
+                    actions = []
+                    for event in events:
+                        write = event["payload"].get("write") if event["kind"] in {"planner.progress", "autoplay.undo"} else None
+                        if isinstance(write, dict) and write.get("stage") == "result" and write.get("mode") in {"commit", "undo"}:
+                            receipt = write.get("receipt") or {}
+                            actions.append({"seq": event["seq"], "epoch": event["load_epoch"],
+                                            "tick": event["game_tick"], "mode": write["mode"],
+                                            "status": receipt.get("status"), "changeset_id": receipt.get("changeset_id"),
+                                            "undo_available": event["load_epoch"] == current.load_epoch and bool(receipt.get("undo_token"))})
+                    safe["autoplay"].update(board=await work.call("board", current.colony_id),
+                                            takeovers=await work.call("takeovers", current.colony_id), actions=actions[-50:])
             work = self._workspace_service
             safe["workspaces"] = {
                 "revision": work.revision if work is not None else 0,
@@ -462,7 +520,7 @@ class NekoRimworldPlugin(NekoPluginBase):
         input_schema={"type": "object", "additionalProperties": False,
             "required": ["operation_id", "kind", "ui_nonce"], "properties": {
                 "operation_id": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
-                "kind": {"type": "string", "enum": ["bridge", "agent"]},
+                "kind": {"type": "string", "enum": ["bridge", "agent", "autoplay"]},
                 "ui_nonce": {"type": "string", "writeOnly": True},
                 "port": {"type": "integer", "minimum": 1, "maximum": 65535},
                 "pairing_token": {"type": "string", "writeOnly": True, "maxLength": 128},
@@ -476,21 +534,48 @@ class NekoRimworldPlugin(NekoPluginBase):
         if not self._valid_settings_ui_nonce(ui_nonce):
             return Err(SdkError("Refresh the panel before saving.", code="ui_only"))
         if (not isinstance(operation_id, str) or len(operation_id) != 32
-                or any(c not in "0123456789abcdef" for c in operation_id) or kind not in {"bridge", "agent"}):
+                or any(c not in "0123456789abcdef" for c in operation_id) or kind not in {"bridge", "agent", "autoplay"}):
             return Err(SdkError("Invalid settings operation.", code="invalid_settings_operation"))
-        allowed = {"port", "pairing_token"} if kind == "bridge" else {"base_url", "model", "api_key", "budgets"}
+        allowed = ({"port", "pairing_token"} if kind == "bridge" else
+                   {"budgets"} if kind == "autoplay" else {"base_url", "model", "api_key", "budgets"})
         if set(values) - allowed:
             return Err(SdkError("Unsupported settings fields.", code="invalid_settings_operation"))
         # Freeze validated invocation input; the existing business save owns all
         # validation, rollback and activation. No UI request waits on that work.
         arguments = copy.deepcopy(values)
         async def execute():
-            save = self.save_bridge_settings if kind == "bridge" else self.save_agent_settings
+            save = (self.save_bridge_settings if kind == "bridge" else
+                    self._save_autoplay_settings if kind == "autoplay" else self.save_agent_settings)
             return await save(ui_nonce=ui_nonce, **arguments)
         try:
             return Ok(self._settings_save_operations().start(operation_id, kind, execute))
         except ValueError as error:
             return Err(SdkError("A settings save is already pending or unavailable.", code=str(error)))
+
+    async def _save_autoplay_settings(self, ui_nonce="", budgets=None):
+        from .workspace.budget import BudgetSettings
+
+        if not self._valid_settings_ui_nonce(ui_nonce) or not isinstance(budgets, dict):
+            return Err(SdkError("Invalid settings.", code="invalid_autoplay_settings"))
+        try:
+            if set(budgets) - set(BudgetSettings.__dataclass_fields__):
+                raise ValueError("Unsupported budget field")
+            current = await self.config.dump(timeout=5.0)
+            root = current.get("neko_rimworld", {}) if isinstance(current, Mapping) else {}
+            section = root.get("autoplay", {}) if isinstance(root, Mapping) else {}
+            if not isinstance(section, Mapping):
+                raise ValueError("Existing autoplay settings are invalid")
+            encoded = {name: "" if value is None and name in AUTOPLAY_OPTIONAL_BUDGET_FIELDS else value
+                       for name, value in budgets.items()}
+            merged = {**section, **encoded}
+            normalized = {name: None if name in AUTOPLAY_OPTIONAL_BUDGET_FIELDS and value == "" else value
+                          for name, value in merged.items() if name in BudgetSettings.__dataclass_fields__}
+            BudgetSettings(**normalized)
+            await persist_settings(self.config, {"neko_rimworld": {"autoplay": merged}})
+            self._autoplay_settings = dict(merged)
+            return Ok({"summary": "Autoplay budget saved; applies on next enable."})
+        except (ValueError, TypeError, OSError, RuntimeError) as error:
+            return Err(SdkError(str(error), code="invalid_autoplay_settings"))
 
     @ui.action(id="get_settings_save", label="Check settings save", refresh_context=False)
     @plugin_entry(
@@ -923,7 +1008,7 @@ class NekoRimworldPlugin(NekoPluginBase):
         finally:
             self._consultation_tasks.discard(task)
 
-    async def start_colony_scheduler(self):
+    async def start_colony_scheduler(self, choices):
         """Explicit opt-in for the local scheduler; startup never enables it."""
         from .agent.runtime.colony_scheduler import ColonyScheduler
 
@@ -943,10 +1028,42 @@ class NekoRimworldPlugin(NekoPluginBase):
             return (getattr(bridge, "connection_key", None),
                     getattr(current, "colony_id", None), getattr(current, "load_epoch", None))
 
-        scheduler = ColonyScheduler(service, self._agent_settings, event_provider=self._load_agent_tools, binding=event_binding)
+        setup = await self._load_agent_tools()
+        required = {"colony_write.transactions.v1", "colony_write.ledger_snapshot.v1",
+                    "colony_events.v1", "colony_pause.v1", "colony_pause.policy.v1"}
+        if (setup.write_port is None or setup.write_identity is None or setup.write_identity() is None
+                or not required <= set(setup.write_port.capabilities) or setup.write_catalog is None
+                or setup.ledger_query is None or setup.write_fields_query is None):
+            raise ValueError("The connected Mod does not provide all autoplay capabilities")
+        from .workspace.budget import BudgetSettings, ColonyBudget
+
+        config = await self.config.dump(timeout=5.0)
+        section = config.get("neko_rimworld", {}).get("autoplay", {})
+        budget_settings = BudgetSettings(**{
+            k: None if k in AUTOPLAY_OPTIONAL_BUDGET_FIELDS and v == "" else v
+            for k, v in section.items() if k in BudgetSettings.__dataclass_fields__})
+        if (self._autoplay_budget is not None and self._autoplay_budget.game.colony_id != game.colony_id
+                and self._autoplay_budget.pending):
+            raise ValueError("A previous colony has an unrecorded usage receipt")
+        if self._autoplay_budget is None or self._autoplay_budget.game.colony_id != game.colony_id:
+            self._autoplay_budget = ColonyBudget(service, game, budget_settings)
+        else:
+            self._autoplay_budget.game = game
+            self._autoplay_budget.settings = budget_settings
+            await self._autoplay_budget.reenable()
+        scheduler = ColonyScheduler(service, self._agent_settings, event_provider=self._load_agent_tools, binding=event_binding,
+                                    budget=self._autoplay_budget, failure_handler=self._autoplay_failure)
+        identity = setup.write_identity()
+        current = getattr(self._bridge, "session", None)
+        if (identity is None or tuple(identity[1:]) != (game.colony_id, game.load_epoch) or current is None
+                or (current.colony_id, current.load_epoch) != (game.colony_id, game.load_epoch)):
+            raise ValueError("The active colony changed while enabling autoplay")
+        await service.call("record_autoplay_activation", game.colony_id, game.load_epoch, game.game_tick, choices)
         scheduler.start()
         scheduler.resume(game)
         self._colony_scheduler = scheduler
+        self._autoplay_fault = None
+        self._autoplay_delivery = asyncio.create_task(self._deliver_autoplay(scheduler))
         return scheduler
 
     async def _consultation(self, question, _ctx, game):
@@ -965,6 +1082,49 @@ class NekoRimworldPlugin(NekoPluginBase):
             )
         if game is None:
             return Err(SdkError("A connected colony is required for persistent frontdesk work.", code="colony_unavailable"))
+        scheduler = getattr(self, "_colony_scheduler", None)
+        if scheduler is not None:
+            if scheduler.halted:
+                return Err(SdkError("Autoplay is stopped after a failure; check the panel.", code="autoplay_halted"))
+            if scheduler._autoplay_colony != game.colony_id:
+                return Err(SdkError("Autoplay was enabled for another colony; enable it here first.", code="world_changed"))
+            request_id = _ctx.get("run_id") if isinstance(_ctx, Mapping) else None
+            request_id = request_id if isinstance(request_id, str) and request_id else None
+            if request_id:
+                retained = await scheduler.service.call("retained_response", game.colony_id, game.load_epoch,
+                                                        question, request_id)
+                if retained is not None:
+                    events = await scheduler.service.call("events", game.colony_id)
+                    anchor = anchor_seq(retained)
+                    wakes = [event for event in events if event["kind"] == "frontdesk.wake"
+                             and event["load_epoch"] == retained["load_epoch"]
+                             and anchor_seq(event) == anchor and event["seq"] < retained["seq"]]
+                    wake_seq = wakes[-1]["seq"] if wakes else None
+                    bindings = [event for event in events if event["kind"] == "frontdesk.run_binding"
+                                and event["payload"].get("wake_seq") == wake_seq
+                                and event["load_epoch"] == retained["load_epoch"] and event["seq"] < retained["seq"]]
+                    stale = any(event["kind"] == "autoplay.stale_delivery"
+                                and event["payload"].get("delivery_id") == wake_seq for event in events)
+                    current = getattr(self._bridge, "session", None)
+                    connection = getattr(self._bridge, "connection_key", None)
+                    if (wake_seq is None or not bindings or stale or not connection
+                            or bindings[-1]["payload"].get("connection") != connection or current is None
+                            or (current.colony_id, current.load_epoch) != (game.colony_id, game.load_epoch)):
+                        return Err(SdkError("The prepared response belongs to an earlier connection or expired world; start a new request.", code="world_changed"))
+                    delivery = json.loads(retained["delivery_payload"]) if retained.get("delivery_payload") else {}
+                    if delivery.get("handoff") is not None:
+                        return Ok(delivery["handoff"])
+                    return Ok(_consultation_handoff(retained["payload"]["result"], normalized))
+            seq = await scheduler.wake_frontdesk(game, question, request_id=request_id)
+            future = asyncio.get_running_loop().create_future()
+            self._autoplay_waiters[seq] = future
+            try:
+                result = await future
+            finally:
+                self._autoplay_waiters.pop(seq, None)
+            if result.get("report", {}).get("saved"):
+                result["report"]["export"] = await self._export_report(result["report"]["report_id"], _ctx)
+            return Ok(_consultation_handoff(result, normalized))
         try:
             service = getattr(self, "_workspace_service", None)
             if service is None or service.closed:
@@ -980,6 +1140,23 @@ class NekoRimworldPlugin(NekoPluginBase):
             current = getattr(self._bridge, "session", None)
             if current is None or (current.colony_id, current.load_epoch) != (game.colony_id, game.load_epoch):
                 return Err(SdkError("The active colony changed during lookup; retry in the current colony.", code="world_changed"))
+            if retained_response is not None:
+                payload = retained_response["payload"]
+                terminal = (payload.get("result") or {}).get("terminal") or {}
+                scheduled = "trigger_seq" in payload or terminal.get("kind") in {"reply", "update_only"}
+                if not scheduled:
+                    events = await service.call("events", game.colony_id)
+                    wake_ids = {event["seq"] for event in events if event["kind"] == "frontdesk.wake"
+                                and event["load_epoch"] == retained_response["load_epoch"]
+                                and anchor_seq(event) == anchor_seq(retained_response)
+                                and event["seq"] < retained_response["seq"]}
+                    scheduled = any(event["kind"] == "frontdesk.run_binding"
+                                    and event["load_epoch"] == retained_response["load_epoch"]
+                                    and event["seq"] < retained_response["seq"]
+                                    and event["payload"].get("wake_seq") in wake_ids for event in events)
+                if scheduled:
+                    return Err(SdkError("This prepared autoplay response has expired; start a new request in the current mode.",
+                                        code="world_changed"))
             if retained_response is not None and retained_response.get("delivery_payload"):
                 saved_delivery = json.loads(retained_response["delivery_payload"])
                 if saved_delivery.get("handoff") is not None:
@@ -1010,6 +1187,269 @@ class NekoRimworldPlugin(NekoPluginBase):
             except (OSError, sqlite3.Error, RuntimeError):
                 return Err(SdkError("The prepared response could not be saved; retry the same request.", code="delivery_unavailable"))
         return Ok(handoff)
+
+    @ui.action(id="autoplay_mode", label="Set autoplay mode", refresh_context=True)
+    @plugin_entry(id="autoplay_mode", name="Set autoplay mode", timeout=15.0,
+                  description="Explicitly enable or disable autoplay for this process.",
+                  metadata={"agent_auto": False},
+                  input_schema={"type": "object", "properties": {"enabled": {"type": "boolean"},
+                                "ui_nonce": {"type": "string", "writeOnly": True},
+                                "goal": {"type": "string", "minLength": 1, "maxLength": 2000},
+                                "constraints": {"type": "string", "minLength": 1, "maxLength": 2000},
+                                "goal_edited": {"type": "boolean"}, "constraints_edited": {"type": "boolean"}}, "required": ["enabled", "ui_nonce"],
+                                "additionalProperties": False})
+    async def autoplay_mode(self, enabled=False, ui_nonce="", goal="Prioritize survival and stability.",
+                            constraints="No cannibalism or live organ harvesting.", goal_edited=False,
+                            constraints_edited=False, **_):
+        if not self._valid_settings_ui_nonce(ui_nonce) or type(enabled) is not bool:
+            return Err(SdkError("Invalid panel action.", code="invalid_ui_action"))
+        lock = getattr(self, "_autoplay_mode_lock", None)
+        if lock is None:
+            lock = self._autoplay_mode_lock = asyncio.Lock()
+        async with lock:
+            return await self._set_autoplay_mode(enabled, goal, constraints, goal_edited, constraints_edited)
+
+    async def _set_autoplay_mode(self, enabled, goal, constraints, goal_edited, constraints_edited):
+        try:
+            if enabled and self._colony_scheduler is None:
+                choices = {"goal": goal, "constraints": constraints, "goal_edited": goal_edited,
+                           "constraints_edited": constraints_edited}
+                if (any(not isinstance(value, str) or not value.strip() or len(value) > 2000 for value in (goal, constraints))
+                        or type(goal_edited) is not bool or type(constraints_edited) is not bool):
+                    raise ValueError("Goal and constraints must be nonempty text of at most 2000 characters")
+                if ((not goal_edited and goal != "Prioritize survival and stability.") or
+                        (not constraints_edited and constraints != "No cannibalism or live organ harvesting.")):
+                    raise ValueError("Unedited choices must match the displayed defaults")
+                await self.start_colony_scheduler(choices)
+            elif not enabled:
+                game = getattr(self._bridge, "session", None)
+                scheduler = self._colony_scheduler
+                try:
+                    if game is not None and scheduler is not None:
+                        await scheduler.service.call("record", game.colony_id, game.load_epoch, game.game_tick,
+                                                     "user", "autoplay.disabled", {})
+                finally:
+                    await self._stop_autoplay()
+            return Ok({"enabled": self._colony_scheduler is not None})
+        except (ValueError, RuntimeError, OSError, sqlite3.Error) as error:
+            return Err(SdkError(str(error), code="autoplay_unavailable"))
+
+    async def _stop_autoplay(self):
+        worker = getattr(self, "_autoplay_delivery", None)
+        if worker is not None:
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+            self._autoplay_delivery = None
+        for future in getattr(self, "_autoplay_waiters", {}).values():
+            if not future.done():
+                future.cancel()
+        scheduler = getattr(self, "_colony_scheduler", None)
+        if scheduler is not None:
+            await scheduler.close()
+            self._colony_scheduler = None
+
+    @ui.action(id="autoplay_undo", label="Undo action", refresh_context=True)
+    @plugin_entry(id="autoplay_undo", name="Undo a colony action", timeout=15.0,
+                  description="Undo a current-epoch commit after checking user takeovers.",
+                  metadata={"agent_auto": False},
+                  input_schema={"type": "object", "properties": {"seq": {"type": "integer"},
+                                "ui_nonce": {"type": "string", "writeOnly": True}}, "required": ["seq", "ui_nonce"],
+                                "additionalProperties": False})
+    async def autoplay_undo(self, seq=0, ui_nonce="", **_):
+        if not self._valid_settings_ui_nonce(ui_nonce) or type(seq) is not int:
+            return Err(SdkError("Invalid panel action.", code="invalid_ui_action"))
+        scheduler = self._colony_scheduler
+        if scheduler is None or scheduler.halted:
+            return Err(SdkError("Autoplay must be running to undo an action.", code="undo_unavailable"))
+        async with scheduler.write_lock:
+            return await self._autoplay_undo_locked(seq, scheduler)
+
+    async def _autoplay_undo_locked(self, seq, scheduler):
+        try:
+            from .agent.write.service import WriteService
+            from .workspace.takeovers import TakeoverControl
+
+            game = getattr(self._bridge, "session", None)
+            work = self._workspace_service
+            if game is None or work is None:
+                raise ValueError("Current colony unavailable")
+            event = await work.call("event", game.colony_id, seq)
+            write = event["payload"].get("write") if event and event["kind"] == "planner.progress" else None
+            receipt = write.get("receipt") if isinstance(write, dict) else None
+            if (event is None or not isinstance(write, dict) or event["load_epoch"] != game.load_epoch or write.get("stage") != "result"
+                    or write.get("mode") != "commit" or not isinstance(receipt, dict)
+                    or receipt.get("status") != "committed" or not receipt.get("undo_token")):
+                raise ValueError("Current-epoch undo is unavailable")
+            setup = await self._load_agent_tools()
+            guard = TakeoverControl(work, setup.ledger_query, setup.write_identity, setup.write_fields_query)
+            async def record(event_data):
+                await work.call("record", game.colony_id, game.load_epoch, game.game_tick,
+                                "plugin", "autoplay.undo", {"source_seq": seq, "write": event_data})
+            writer = WriteService(setup.write_catalog, [], setup.write_port, setup.write_identity,
+                                  record=record, guard=guard)
+            await work.call("record", game.colony_id, game.load_epoch, game.game_tick, "user",
+                            "autoplay.undo_requested", {"source_seq": seq})
+            result = await writer.undo({"token": receipt["undo_token"]})
+            try:
+                message = f"User requested undo of action {seq}; game reported {result.get('status', 'unknown')}. Review the affected task and receipt."
+                await scheduler.wake(game, source="plugin", text=message)
+                await scheduler.wake_frontdesk(game, message, source="plugin")
+            except Exception:
+                await self._autoplay_failure("scheduler", {"audit": {"error_code": "workspace_unavailable"}}, game)
+                return Ok({"status": result.get("status"), "review_wake": "unconfirmed"})
+            return Ok({"status": result.get("status")})
+        except ToolExecutionError as error:
+            if error.code == "write_audit_failed":
+                await self._autoplay_failure("scheduler", {"audit": {"error_code": "workspace_unavailable"}}, game)
+                return Err(SdkError("Undo was dispatched but its record is unconfirmed; check the receipt before retrying.",
+                                    code=error.code, details=error.details))
+            return Err(SdkError(str(error), code=error.code))
+        except BridgeQueryTimeout:
+            await self._autoplay_failure("scheduler", {"audit": {"error_code": "undo_outcome_unknown"}}, game)
+            return Err(SdkError("Undo outcome is unknown; check the game and action log before retrying.",
+                                code="undo_outcome_unknown"))
+        except (ValueError, TypeError, KeyError, OSError, sqlite3.Error) as error:
+            return Err(SdkError(str(error), code="undo_unavailable"))
+
+    async def _deliver_autoplay(self, scheduler):
+        try:
+            await self._delivery_loop(scheduler)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            await self._autoplay_failure("frontdesk", {"audit": {"error_code": "workspace_unavailable"}})
+
+    async def _delivery_loop(self, scheduler):
+        while True:
+            item = await scheduler.next_frontdesk_result()
+            ident, result = item["delivery_id"], item["result"]
+            terminal = result.get("terminal", {}).get("kind")
+            pending = scheduler._pending_frontdesk
+            through = item.get("through_seq", ident)
+            waiters = [future for seq, future in self._autoplay_waiters.items()
+                       if ident is not None and through is not None and ident <= seq <= through and not future.done()]
+            if item.get("colony_id") is not None:
+                bridge = getattr(self, "_bridge", None)
+                current = getattr(bridge, "session", None)
+                connection_changed = item.get("require_connection") and (
+                    not item.get("connection_epoch") or getattr(bridge, "connection_key", None) != item["connection_epoch"])
+                if (current is None or (current.colony_id, current.load_epoch) != (item["colony_id"], item["load_epoch"])
+                        or connection_changed):
+                    if pending is not None:
+                        await scheduler.service.call("record", pending["colony_id"], pending["load_epoch"],
+                            pending["game_tick"], "plugin", "autoplay.stale_delivery",
+                            {"delivery_id": ident, "reason": "world_changed"})
+                    for waiter in waiters:
+                        waiter.set_result({"status": "failed", "audit": {"error_code": "world_changed"}})
+                    if pending is not None:
+                        await scheduler.ack_frontdesk_result(ident)
+                    continue
+            if pending is not None and terminal != "update_only":
+                handoff = _consultation_handoff(result, "")
+                await scheduler.service.call("record", pending["colony_id"], pending["load_epoch"],
+                    pending["game_tick"], "frontdesk", "agent.delivery",
+                    {"utterance_seq": int(result["workspace"]["turn_id"]), "summary": handoff["summary"],
+                     "delivery": handoff["delivery"], "report": result.get("report"), "prepared_at": utc_now(),
+                     "meaning": "Prepared host response; not a receipt of N.E.K.O consumption.", "handoff": handoff})
+            if waiters:
+                if pending is not None:
+                    await scheduler.service.call("record", pending["colony_id"], pending["load_epoch"],
+                        pending["game_tick"], "plugin", "autoplay.host_submission",
+                        {"delivery_id": ident, "outcome": "user_handoff", "meaning": "Prepared for the waiting host request; not user consumption."})
+                for waiter in waiters:
+                    waiter.set_result(result)
+            elif terminal != "update_only" and not item.get("failed"):
+                handoff = _consultation_handoff(result, "")
+                pending = scheduler._pending_frontdesk
+                if pending is not None:
+                    events = await scheduler.service.call("events", pending["colony_id"])
+                    already_attempted = any(e["kind"] == "autoplay.host_submission"
+                                            and e["payload"].get("delivery_id") == ident for e in events)
+                    if not already_attempted:
+                        # Record the attempt before crossing the SDK boundary. A crash in the
+                        # gap leaves the outcome unknown, never a reason for unlimited replay.
+                        await scheduler.service.call("record", pending["colony_id"], pending["load_epoch"],
+                            pending["game_tick"], "plugin", "autoplay.host_submission",
+                            {"delivery_id": ident, "outcome": "attempting", "meaning": "Submission outcome may be unknown; host may drop without a client."})
+                        try:
+                            submission = self.ctx.push_message(source="neko_rimworld", visibility=["chat"],
+                                ai_behavior="blind", parts=[{"type": "text", "text": handoff["summary"]}])
+                            outcome = "submitted" if isinstance(submission, dict) and submission.get("submitted") is True else "rejected"
+                        except Exception:
+                            outcome = "rejected"
+                        await scheduler.service.call("record", pending["colony_id"], pending["load_epoch"],
+                            pending["game_tick"], "plugin", "autoplay.host_submission_result",
+                            {"delivery_id": ident, "outcome": outcome, "meaning": "Local submission only; host may drop without a client."})
+            if ident is not None and not item.get("failed") and terminal != "update_only":
+                await scheduler.ack_frontdesk_result(ident)
+
+    async def _autoplay_failure(self, role, result, bound_game=None):
+        scheduler = self._colony_scheduler
+        if scheduler is None or scheduler.halted:
+            return
+        scheduler.halted = True
+        if scheduler.budget is not None:
+            scheduler.budget.blocked = True
+        code = (result.get("audit") or {}).get("error_code") or "run_failed"
+        endpoint = code in {"model_transport", "model_transport_timeout", "model_first_response_timeout",
+                            "model_incomplete_stream", "model_http_error", "model_stream_error"}
+        if code == "model_request_deadline":
+            endpoint = _unresponsive_request_deadline(
+                getattr(self, "_agent_audit", None), (result.get("audit") or {}).get("run_id"),
+                getattr(getattr(scheduler, "settings", None), "request_timeout_seconds", None))
+        kind = "endpoint" if endpoint else "budget" if code == "agent_cumulative_budget" else "execution"
+        self._autoplay_fault = {"role": role, "code": code, "kind": kind, "pause": "unknown"}
+        for waiter in self._autoplay_waiters.values():
+            if not waiter.done():
+                waiter.set_result({**result, "status": result.get("status", "failed")})
+        game = getattr(self._bridge, "session", None)
+        if game is None or (bound_game is not None and (game.colony_id, game.load_epoch) != (bound_game.colony_id, bound_game.load_epoch)):
+            self._autoplay_fault["pause"] = "unconfirmed" if endpoint else "unknown"
+            if endpoint:
+                self._notify_endpoint_failure(role, code, "pause unconfirmed")
+            else:
+                self._notify_autoplay_stop(role, code)
+            return
+        try:
+            await scheduler.service.call("record", game.colony_id, game.load_epoch, game.game_tick,
+                                         "plugin", "autoplay.halted", dict(self._autoplay_fault))
+        except Exception:
+            self._autoplay_fault["record"] = "unconfirmed"
+        if endpoint:
+            try:
+                setup = await self._load_agent_tools()
+                identity = setup.write_identity() if setup.write_identity else None
+                if (identity is None or tuple(identity[1:]) != (game.colony_id, game.load_epoch)
+                        or (bound_game is not None and getattr(bound_game, "connection_epoch", identity[0]) != identity[0])):
+                    raise ValueError("The game binding changed")
+                await setup.write_port.set_paused(True, role="policy")
+                self._autoplay_fault["pause"] = "requested"
+                await scheduler.service.call("record", game.colony_id, game.load_epoch, game.game_tick,
+                                             "plugin", "autoplay.policy_pause", {"role": role, "code": code})
+            except Exception:
+                if self._autoplay_fault["pause"] != "requested":
+                    self._autoplay_fault["pause"] = "unconfirmed"
+                else:
+                    self._autoplay_fault["record"] = "unconfirmed"
+        if endpoint:
+            pause_text = "pause requested" if self._autoplay_fault["pause"] == "requested" else "pause unconfirmed"
+            self._notify_endpoint_failure(role, code, pause_text)
+        else:
+            self._notify_autoplay_stop(role, code)
+
+    def _notify_endpoint_failure(self, role, code, pause_text):
+        try:
+            self.ctx.push_message(source="neko_rimworld", visibility=["chat"], ai_behavior="blind",
+                parts=[{"type": "text", "text": f"RimWorld autoplay: {role} model endpoint failed ({code}); {pause_text}."}])
+        except Exception:
+            pass
+
+    def _notify_autoplay_stop(self, role, code):
+        try:
+            self.ctx.push_message(source="neko_rimworld", visibility=["chat"], ai_behavior="blind",
+                parts=[{"type": "text", "text": f"RimWorld autoplay stopped: {role}, {code}. Game pause state is unknown."}])
+        except Exception:
+            pass
 
     async def _load_agent_tools(self) -> ToolSetup:
         setup = await self._catalog_tools.load()

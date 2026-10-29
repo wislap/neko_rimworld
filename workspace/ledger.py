@@ -20,7 +20,7 @@ LOAD_EVENT = "colony.load"
 TAKEOVER_EVENT = "user.takeover"
 RETURN_EVENT = "user.return"
 RUN_EVENT = "agent.run"
-RESERVED_EVENTS = frozenset({REVISION_EVENT, UTTERANCE_EVENT, LOAD_EVENT, TAKEOVER_EVENT, RETURN_EVENT, RUN_EVENT, "frontdesk.context_policy", "scheduler.policy", "scheduler.default_review", "wake.registered", "wake.cancelled", "wake.evaluated"})
+RESERVED_EVENTS = frozenset({REVISION_EVENT, UTTERANCE_EVENT, LOAD_EVENT, TAKEOVER_EVENT, RETURN_EVENT, RUN_EVENT, "frontdesk.context_policy", "scheduler.policy", "scheduler.default_review", "wake.registered", "wake.cancelled", "wake.evaluated", "autoplay.activation"})
 
 # SQLite INTEGER is a signed 64-bit value; larger Python integers cannot be stored.
 INTEGER_LIMIT = 2**63
@@ -241,12 +241,27 @@ class EventLedger:
         return row[0] if row else None
 
     def retained_response(self, colony_id, load_epoch, question, request_id):
+        # A run may start from a game/agent trigger and receive the host request
+        # later through the inbox. Resolve that wake to the original run anchor.
         row = self.db.execute(
-            "SELECT r.*, (SELECT d.payload FROM events d WHERE d.colony_id=r.colony_id AND d.kind='agent.delivery' AND json_extract(d.payload,'$.utterance_seq')=u.seq ORDER BY d.seq DESC LIMIT 1) AS delivery_payload FROM events r JOIN events u ON u.seq=json_extract(r.payload,'$.utterance_seq') "
-            "WHERE r.colony_id=? AND r.load_epoch=? AND u.load_epoch=? AND r.kind=? AND u.kind=? AND json_extract(u.payload,'$.text')=? "
-            "AND json_extract(u.payload,'$.request_id')=? AND json_extract(r.payload,'$.result.status') IN ('ok','degraded') "
-            "ORDER BY r.seq DESC LIMIT 1",
-            (colony_id, load_epoch, load_epoch, RUN_EVENT, UTTERANCE_EVENT, question, request_id),
+            """SELECT r.*, (SELECT d.payload FROM events d
+                 WHERE d.colony_id=r.colony_id AND d.load_epoch=r.load_epoch AND d.kind='agent.delivery'
+                   AND json_extract(d.payload,'$.utterance_seq')=coalesce(json_extract(r.payload,'$.utterance_seq'),json_extract(r.payload,'$.trigger_seq'))
+                 ORDER BY d.seq DESC LIMIT 1) AS delivery_payload
+               FROM events r JOIN events u ON u.colony_id=r.colony_id AND u.load_epoch=r.load_epoch
+               WHERE r.colony_id=? AND r.load_epoch=? AND r.kind=? AND u.kind=?
+                 AND json_extract(u.payload,'$.text')=? AND json_extract(u.payload,'$.request_id')=?
+                 AND json_extract(r.payload,'$.result.status') IN ('ok','degraded')
+                 AND (json_extract(r.payload,'$.utterance_seq')=u.seq OR EXISTS (
+                   SELECT 1 FROM events w JOIN events i ON i.colony_id=w.colony_id AND i.load_epoch=w.load_epoch
+                     AND i.kind='frontdesk.inbox' AND json_extract(i.payload,'$.wake_seq')=w.seq
+                   WHERE w.colony_id=r.colony_id AND w.load_epoch=r.load_epoch AND w.kind='frontdesk.wake'
+                     AND json_extract(w.payload,'$.utterance_seq')=u.seq
+                     AND coalesce(json_extract(i.payload,'$.utterance_seq'),json_extract(i.payload,'$.trigger_seq'))=
+                         coalesce(json_extract(r.payload,'$.utterance_seq'),json_extract(r.payload,'$.trigger_seq'))
+                     AND i.seq<r.seq))
+               ORDER BY r.seq DESC LIMIT 1""",
+            (colony_id, load_epoch, RUN_EVENT, UTTERANCE_EVENT, question, request_id),
         ).fetchone()
         return _event(row) if row else None
 

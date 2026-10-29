@@ -255,6 +255,19 @@ def parse_usage(value: object) -> dict[str, int]:
         item = details.get(key) if isinstance(details, Mapping) else None
         if type(item) is int and item >= 0:
             usage[key] = item
+    for raw_key, key in (("prompt_cache_hit_tokens", "cached_tokens"),
+                         ("prompt_cache_miss_tokens", "cache_miss_tokens")):
+        item = raw.get(raw_key)
+        if type(item) is int and item >= 0:
+            if key in usage and usage[key] != item:
+                # Conflicting aliases are not a trustworthy cache split.
+                usage.pop(key)
+            elif key not in usage:
+                usage[key] = item
+    if (all(key in usage for key in ("prompt_tokens", "cached_tokens", "cache_miss_tokens"))
+            and usage["cached_tokens"] + usage["cache_miss_tokens"] != usage["prompt_tokens"]):
+        usage.pop("cached_tokens")
+        usage.pop("cache_miss_tokens")
     return usage
 
 
