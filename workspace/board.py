@@ -24,6 +24,53 @@ STATUSES_BY_AUTHOR = {FRONTDESK: frozenset({"open", "blocked", "closed"}), PLANN
 TASK_TARGET_KINDS = frozenset({"strategy", "intent"})
 
 
+def entry_schema(actor):
+    """JSON Schema for a complete board submission by an author."""
+    if actor not in STATUSES_BY_AUTHOR:
+        raise ValueError(f"Unknown board author: {actor}")
+    text = {"type": "string", "pattern": r"\S"}
+    kinds = sorted(kind for kind, author in AUTHOR_OF.items() if author == actor)
+    links = {
+        "strategy": {"parent": {"type": "null"}, "source": {
+            "type": "object", "properties": {}, "additionalProperties": False}},
+        "task": {"parent": text, "source": {"type": "object", "properties": {"entry_id": text},
+            "required": ["entry_id"], "additionalProperties": False}},
+        "intent": {"parent": {"type": "null"}, "source": {"type": "object", "properties": {
+            "event_seq": {"type": "integer", "minimum": 0}}, "required": ["event_seq"],
+            "additionalProperties": False}},
+    }
+    return {
+        "type": "object",
+        "description": ("Submit every field. New entries use expected_revision 0; revisions use the last read revision. "
+                        "Strategy example: parent=null, source={}. Task example: parent=\"strategy-id\", "
+                        "source={\"entry_id\":\"strategy-id\"}; both references must name an existing strategy or intent. "
+                        "Intent example: parent=null, source={\"event_seq\":1}, citing original user words. "
+                        "Committed requires changesets; verified requires evidence."),
+        "properties": {
+            "entry_id": text, "expected_revision": {"type": "integer", "minimum": 0},
+            "kind": {"type": "string", "enum": kinds},
+            "status": {"type": "string", "enum": sorted(STATUSES_BY_AUTHOR[actor])},
+            "priority": {"type": "integer"}, "parent": {"type": ["string", "null"]},
+            "source": {"type": "object"},
+            "evidence": {"type": "array", "items": text},
+            "review_at_tick": {"type": ["integer", "null"], "minimum": 0},
+            "changesets": {"type": "array", "items": text}, "body": {"type": "string"},
+        },
+        "required": sorted(FIELDS), "additionalProperties": False,
+        "anyOf": [
+            {"properties": {"kind": {"type": "string", "enum": [kind]}, **links[kind]},
+             "anyOf": [
+                 {"properties": {"status": {"type": "string", "enum": sorted(STATUSES_BY_AUTHOR[actor] - {"committed", "verified"})}}},
+                 *({"properties": {"status": {"type": "string", "enum": [status]},
+                                  field: {"type": "array", "minItems": 1}}}
+                   for status, field in (("committed", "changesets"), ("verified", "evidence"))
+                   if status in STATUSES_BY_AUTHOR[actor]),
+             ]}
+            for kind in kinds
+        ],
+    }
+
+
 class BoardError(ValueError):
     pass
 
@@ -49,9 +96,9 @@ def check_shape(submission):
     if submission["review_at_tick"] is not None and not _count(submission["review_at_tick"]):
         raise BoardError("A review tick is a non-negative integer or null")
     if submission["parent"] is not None and not _text(submission["parent"]):
-        raise BoardError("A parent names an entry")
+        raise BoardError("parent must be null for strategy or intent; task requires a non-empty strategy or intent entry id")
     if not isinstance(submission["source"], dict):
-        raise BoardError("A source is an object")
+        raise BoardError("source must be an object: strategy uses {}, task uses {\"entry_id\":\"...\"}, intent uses {\"event_seq\":...}")
     for name in ("evidence", "changesets"):
         if not isinstance(submission[name], list) or not all(_text(item) for item in submission[name]):
             raise BoardError(f"{name} is a list of identifiers")
@@ -89,11 +136,11 @@ def check_revision(current, actor, submission):
 def _check_link_shape(submission):
     kind, source, parent = submission["kind"], submission["source"], submission["parent"]
     if kind == "strategy" and (parent is not None or source != {}):
-        raise BoardError("A strategy has no parent or source")
+        raise BoardError("A strategy requires parent=null and source={}")
     if kind == "intent" and (parent is not None or set(source) != {"event_seq"} or not _count(source["event_seq"])):
-        raise BoardError("An intent cites one user utterance by event sequence")
+        raise BoardError("An intent requires parent=null and source={\"event_seq\": <non-negative integer>} citing user words")
     if kind == "task" and (parent is None or set(source) != {"entry_id"} or not _text(source["entry_id"])):
-        raise BoardError("A task names its parent and the entry it implements")
+        raise BoardError("A task requires a non-empty parent and source={\"entry_id\": <non-empty entry id>}; both must reference a strategy or intent")
 
 
 def _text(value, allowed=None):

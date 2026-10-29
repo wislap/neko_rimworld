@@ -208,3 +208,24 @@ async def test_invalid_snapshot_retains_original(problem):
     assert payload["valid"] is False
     assert payload["tick_unknown"] is (problem == "bad_tick")
     assert payload["observation"] == (await provider()).to_dict()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry", [None, {"entry_id": "t", "author": "planner", "kind": "strategy", "status": "open"}, {"entry_id": "t", "author": "frontdesk", "kind": "task", "status": "open"}, {"entry_id": "t", "author": "planner", "kind": "task", "status": "closed"}])
+async def test_task_guard_rejects_before_native_queries(entry):
+    class BoardJournal:
+        async def call(self, name, colony):
+            assert (name, colony) == ("board", "x")
+            return [] if entry is None else [entry]
+    async def forbidden(*args):
+        raise AssertionError("native query must not run")
+    control = TakeoverControl(BoardJournal(), forbidden, lambda: ("c", "x", "e"), forbidden)
+    with pytest.raises(ToolExecutionError, match="existing open planner task"):
+        await control.guard_task("t")
+
+@pytest.mark.asyncio
+async def test_task_guard_accepts_current_open_planner_task():
+    class BoardJournal:
+        async def call(self, name, colony):
+            return [{"entry_id": "t", "author": "planner", "kind": "task", "status": "open"}]
+    control = TakeoverControl(BoardJournal(), None, lambda: ("c", "x", "e"), None)
+    await control.guard_task("t")

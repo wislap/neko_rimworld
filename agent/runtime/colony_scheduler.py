@@ -11,6 +11,9 @@ from types import SimpleNamespace
 
 from ...serialization import canonical
 from ...tool_contracts import ToolExecutionError, ToolSpec
+from ...workspace.board import entry_schema
+from ...workspace.ledger import PLANNER
+from ...workspace.planner_completion import validate_planner_completion
 from ...workspace.session_view import anchor_seq, trigger_message
 from ..runtime.audit import AgentAuditLedger, private_protocol_redacted
 from ..runtime.session import AgentRunSession
@@ -618,8 +621,12 @@ class ColonyScheduler:
                     return {"entries": await self.service.call("board", game.colony_id)}
                 if args.get("action") != "write":
                     raise ValueError("Unknown action")
+                entry = args["entry"]
+                if entry.get("status") in ("committed", "verified"):
+                    setup = await self._event_provider() if self._event_provider else None
+                    await validate_planner_completion(self.service, entry, colony_id, load_epoch, setup, session.observations)
                 seq = await self.service.call("submit", colony_id, load_epoch, current_tick(),
-                                              "planner", args["entry"])
+                                              "planner", entry)
                 return {"event_seq": seq}
             except (ValueError, KeyError) as error:
                 raise ToolExecutionError("board_invalid", str(error)) from error
@@ -642,20 +649,7 @@ class ColonyScheduler:
                       "required": ["text"], "additionalProperties": False}, message_frontdesk),
             ToolSpec("planner_board", "Read or revise strategy and task entries on the colony board.",
                      {"type": "object", "properties": {"action": {"type": "string", "enum": ["read", "write"]},
-                      "entry": {"type": "object", "properties": {
-                          "entry_id": {"type": "string"}, "expected_revision": {"type": "integer", "minimum": 0},
-                          "kind": {"type": "string", "enum": ["strategy", "task"]},
-                          "status": {"type": "string", "enum": ["open", "drafting", "decided", "committed", "verified", "blocked", "closed"]},
-                          "priority": {"type": "integer"}, "parent": {"type": ["string", "null"]},
-                          "source": {"type": "object", "properties": {"entry_id": {"type": "string"}},
-                                     "additionalProperties": False},
-                          "evidence": {"type": "array", "items": {"type": "string"}},
-                          "review_at_tick": {"type": ["integer", "null"]},
-                          "changesets": {"type": "array", "items": {"type": "string"}},
-                          "body": {"type": "string"}},
-                          "required": ["entry_id", "expected_revision", "kind", "status", "priority", "parent",
-                                       "source", "evidence", "review_at_tick", "changesets", "body"],
-                          "additionalProperties": False}}, "required": ["action"], "additionalProperties": False}, board_tool),
+                      "entry": entry_schema(PLANNER)}, "required": ["action"], "additionalProperties": False}, board_tool),
             ToolSpec("planner_yield", "Finish this run with progress, next steps and undecided thoughts.",
                      {"type": "object", "properties": {"handoff": {"type": "string", "minLength": 1}},
                       "required": ["handoff"], "additionalProperties": False}, yield_tool, terminal=True),

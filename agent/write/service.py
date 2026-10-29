@@ -318,6 +318,9 @@ class WriteService:
         return copy.deepcopy(result)
 
     async def _changeset_call(self, mode, args):
+        if self.guard is not None and hasattr(self.guard, 'guard_task'):
+            self._current()
+            await self.guard.guard_task(args.get('entry_id') if isinstance(args, dict) else None)
         changeset = self._prepare(args)
         if self.guard is not None:
             await self.guard.guard_changeset(changeset)

@@ -58,6 +58,19 @@ class TakeoverControl:
         self.service, self.provider, self.identity = service, provider, identity
         self.fields_provider = fields_provider
 
+    async def guard_task(self, entry_id):
+        """Tasks persist across loads; the subsequent write evidence must use the current binding."""
+        bound = self.identity()
+        if not bound or len(bound) != 3:
+            raise ToolExecutionError("world_changed", "A current colony connection is required.")
+        entries = await self.service.call("board", bound[1])
+        entry = next((row for row in entries if row.get("entry_id") == entry_id), None)
+        if (entry is None or entry.get("author") != "planner" or entry.get("kind") != "task"
+                or entry.get("status") == "closed"):
+            raise ToolExecutionError("task_required", "Create or select an existing open planner task on this colony board before submitting a changeset.")
+        if self.identity() != bound:
+            raise ToolExecutionError("world_changed", "Connection or loaded world changed.")
+
     async def snapshot(self):
         bound = self.identity()
         if not bound or self.provider is None:
