@@ -42,6 +42,9 @@ QUERY_REQUEST: Final = "query_request"
 QUERY_RESULT: Final = "query_result"
 WRITE_REQUEST: Final = "write_request"
 WRITE_RESULT: Final = "write_result"
+POLICY_REQUEST: Final = "policy_request"
+POLICY_RESULT: Final = "policy_result"
+GAME_EVENT: Final = "game_event"
 PROTOCOL_ERROR: Final = "protocol_error"
 
 OK: Final = "ok"
@@ -77,6 +80,9 @@ _MESSAGE_TYPES: Final = frozenset(
         QUERY_RESULT,
         WRITE_REQUEST,
         WRITE_RESULT,
+        POLICY_REQUEST,
+        POLICY_RESULT,
+        GAME_EVENT,
         PROTOCOL_ERROR,
     }
 )
@@ -107,6 +113,9 @@ _PAYLOAD_FIELDS: Final = {
     QUERY_RESULT: frozenset({"status", "data", "issues", "execution", "error_code", "message"}),
     WRITE_REQUEST: frozenset({"mode", "arguments"}),
     WRITE_RESULT: frozenset({"status", "data", "issues", "error_code", "message"}),
+    POLICY_REQUEST: frozenset({"arguments"}),
+    POLICY_RESULT: frozenset({"status", "data", "issues", "error_code", "message"}),
+    GAME_EVENT: frozenset({"data"}),
     PROTOCOL_ERROR: frozenset({"error_code", "message"}),
 }
 
@@ -155,8 +164,8 @@ _PRE_AUTH_DIRECTIONS: Final = {
     Direction.PLUGIN_TO_MOD: frozenset({CHALLENGE, WELCOME}),
 }
 _POST_AUTH_DIRECTIONS: Final = {
-    Direction.MOD_TO_PLUGIN: frozenset({SESSION_OPEN, SESSION_STALE, HEARTBEAT, QUERY_RESULT, WRITE_RESULT, PROTOCOL_ERROR}),
-    Direction.PLUGIN_TO_MOD: frozenset({QUERY_REQUEST, WRITE_REQUEST, HEARTBEAT, PROTOCOL_ERROR}),
+    Direction.MOD_TO_PLUGIN: frozenset({SESSION_OPEN, SESSION_STALE, HEARTBEAT, QUERY_RESULT, WRITE_RESULT, POLICY_RESULT, GAME_EVENT, PROTOCOL_ERROR}),
+    Direction.PLUGIN_TO_MOD: frozenset({QUERY_REQUEST, WRITE_REQUEST, POLICY_REQUEST, HEARTBEAT, PROTOCOL_ERROR}),
 }
 _ALL_DIRECTIONS: Final = {
     direction: _PRE_AUTH_DIRECTIONS[direction] | _POST_AUTH_DIRECTIONS[direction] for direction in Direction
@@ -606,7 +615,7 @@ def _parse_envelope(value: Any) -> Envelope:
     has_session = bool(colony_id)
     if has_session != bool(load_epoch):
         raise ValidationError(INVALID_FIELD, "Envelope load_epoch must be present exactly when colony_id is present.")
-    needs_session = message_type in {SESSION_OPEN, SESSION_STALE, QUERY_REQUEST, QUERY_RESULT, WRITE_REQUEST, WRITE_RESULT}
+    needs_session = message_type in {SESSION_OPEN, SESSION_STALE, QUERY_REQUEST, QUERY_RESULT, WRITE_REQUEST, WRITE_RESULT, POLICY_REQUEST, POLICY_RESULT, GAME_EVENT}
     allows_session = needs_session or message_type in {HEARTBEAT, PROTOCOL_ERROR}
     if needs_session and not has_session:
         raise ValidationError(INVALID_FIELD, "Envelope colony_id is required for this message type.")
@@ -616,7 +625,7 @@ def _parse_envelope(value: Any) -> Envelope:
         raise ValidationError(INVALID_FIELD, "Session counters must be non-negative.")
     if not has_session and (game_tick != -1 or snapshot_sequence != -1):
         raise ValidationError(INVALID_FIELD, "Counters must be -1 without a session.")
-    needs_request = message_type in {QUERY_REQUEST, QUERY_RESULT, WRITE_REQUEST, WRITE_RESULT}
+    needs_request = message_type in {QUERY_REQUEST, QUERY_RESULT, WRITE_REQUEST, WRITE_RESULT, POLICY_REQUEST, POLICY_RESULT}
     allows_request = needs_request or message_type == PROTOCOL_ERROR
     if needs_request and not request_id:
         raise ValidationError(INVALID_FIELD, "request_id is required for this message type.")
@@ -693,6 +702,20 @@ def _parse_payload(message_type: str, value: Any, game_tick: int, snapshot_seque
         except ValueError as exc:
             raise ValidationError(INVALID_PAYLOAD, "Invalid write request.") from exc
         return Payload(**raw)
+    if message_type == POLICY_REQUEST:
+        _require_present(raw, {"arguments"}, "Payload")
+        args = _require_object(raw["arguments"], "arguments")
+        if set(args) != {"pause_on_letter_defs", "source"} or args["source"] != "frontdesk" or not isinstance(args["pause_on_letter_defs"], list) or len(args["pause_on_letter_defs"]) > 128 or any(not isinstance(v, str) or not v.strip() or len(v.encode("utf-16-le")) // 2 > 128 for v in args["pause_on_letter_defs"]) or len(set(args["pause_on_letter_defs"])) != len(args["pause_on_letter_defs"]):
+            raise ValidationError(INVALID_PAYLOAD, "Invalid policy request.")
+        return Payload(**raw)
+    if message_type == POLICY_RESULT:
+        return _parse_policy_result(raw, game_tick, snapshot_sequence)
+    if message_type == GAME_EVENT:
+        _require_present(raw, {"data"}, "Payload")
+        data = _require_object(raw["data"], "data")
+        if type(data.get("cursor")) is not int or not 1 <= data["cursor"] <= 2**63 - 1 or not isinstance(data.get("kind"), str) or not data["kind"].strip():
+            raise ValidationError(INVALID_PAYLOAD, "Invalid game event.")
+        return Payload(**raw)
     if message_type == WRITE_RESULT:
         from .write_contract import validate_result
 
@@ -710,6 +733,13 @@ def _parse_payload(message_type: str, value: Any, game_tick: int, snapshot_seque
         return Payload(**raw)
     # session_open and heartbeat have an exactly empty payload.
     return Payload()
+
+
+def _parse_policy_result(raw: Mapping[str, Any], game_tick: int, snapshot_sequence: int) -> Payload:
+    result = _parse_query_result(raw, game_tick, snapshot_sequence)
+    if result.status == OK:
+        _parse_payload(POLICY_REQUEST, {"arguments": result.data}, game_tick, snapshot_sequence)
+    return result
 
 
 def _parse_query_result(raw: Mapping[str, Any], game_tick: int, snapshot_sequence: int) -> Payload:

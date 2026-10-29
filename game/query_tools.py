@@ -208,11 +208,13 @@ class CatalogTools:
             setup = make_game_tools(self._catalog, scoped_query, situation_provider=self._situation_provider)
             session = current
             write = self._catalog.get("colony_write")
-            if (session is not None and bool({"colony_write.v1", "colony_write.transactions.v1"} & bridge.capabilities)
+            capabilities = getattr(bridge, "capabilities", frozenset())
+            valid_write = (bool({"colony_write.v1", "colony_write.transactions.v1"} & capabilities)
                     and isinstance(write, dict) and write.get("version") == "colony_write.v1"
                     and write.get("capability") in {"colony_write.v1", "colony_write.transactions.v1"}
-                    and (write.get("capability") in bridge.capabilities
-                         or "colony_write.v1" in bridge.capabilities)):
+                    and (write.get("capability") in capabilities
+                         or "colony_write.v1" in capabilities))
+            if session is not None and (valid_write or {"colony_events.v1", "colony_pause.v1"} & capabilities):
                 bound = (epoch, session.colony_id, session.load_epoch)
 
                 def identity():
@@ -222,7 +224,7 @@ class CatalogTools:
                     current = (epoch, active.colony_id, active.load_epoch)
                     return current if current == bound else None
 
-                setup = replace(setup, write_catalog=copy.deepcopy(write),
+                setup = replace(setup, write_catalog=copy.deepcopy(write) if valid_write else None,
                                 write_port=BridgeGameWritePort(bridge, epoch, session),
                                 write_identity=identity)
             # The catalog and port must describe the same authenticated world.

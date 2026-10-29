@@ -60,9 +60,15 @@ class ScriptedGameWorld:
         self._receipts: dict[str, tuple[str, dict[str, Any]]] = {}
         self._undo: dict[str, _Undo] = {}
         self._events: list[dict[str, Any]] = []
+        self._event_active = False
+        self._session_origin = "new_game"
+        self._session_start_tick = 0
+        self._request_serial = 0
         self._hooks: dict[str, list[Callable[[ScriptedGameWorld], None]]] = {point: [] for point in HOOK_POINTS}
         self._lose_next_receipt = False
         self._fail_after: int | None = None
+
+    capabilities = frozenset({"colony_write.transactions.v1", "colony_events.v1", "colony_pause.v1"})
 
     @property
     def load_epoch(self) -> str:
@@ -78,7 +84,6 @@ class ScriptedGameWorld:
     def player_edit(self, object_id: str, field: str, value: Any) -> None:
         """A change made outside the AI (the player, or the game itself at seeding). Never enters the ledger."""
         self._set((object_id, field), value, "user")
-        self._emit({"type": "field_changed", "writer": "user", "object": object_id, "field": field, "value": value})
 
     def value(self, object_id: str, field: str) -> Any:
         return self._values.get((object_id, field))
@@ -112,7 +117,10 @@ class ScriptedGameWorld:
         self._ledger = state["ledger"]
         self._epoch += 1
         self._receipts.clear()
-        self._emit({"type": "loaded", "load_epoch": self.load_epoch})
+        self._event_active = False
+        self._events.clear()
+        self._session_origin = "loaded_game"
+        self._session_start_tick = self._tick
 
     async def dry_run(self, changeset: Mapping[str, Any]) -> dict[str, Any]:
         body = _changeset(changeset)
@@ -167,7 +175,7 @@ class ScriptedGameWorld:
             "undo_token": token,
         }
         self._receipts[key] = (fingerprint, receipt)
-        self._emit({"type": "committed", "changeset_id": body["changeset_id"]})
+        self._emit_write("commit", receipt)
         if self._lose_next_receipt:
             self._lose_next_receipt = False
             raise ReceiptLost(key)
@@ -190,24 +198,46 @@ class ScriptedGameWorld:
             ledger=lambda w: copy.deepcopy(record.ledger_before[w.address]),
         )
         record.consumed = True
-        return {
+        receipt = {
             "status": "undone",
             "changeset_id": record.changeset_id,
             "load_epoch": self.load_epoch,
             "readback": self._readback(record.writes),
         }
+        self._emit_write("undo", receipt)
+        return receipt
 
     async def events(self, since: int = 0) -> list[dict[str, Any]]:
-        return copy.deepcopy([event for event in self._events if event["seq"] > since])
+        if not self._event_active:
+            raise ToolExecutionError("events_not_subscribed", "Enable event delivery with push_policy first.")
+        if type(since) is not int or since < 0:
+            raise ValueError("Event cursor must be a non-negative integer.")
+        if since > len(self._events):
+            raise ToolExecutionError("event_gap", "Event cursor exceeds the current stream.", recoverable=False,
+                                     details={"requested_cursor": since, "latest_cursor": len(self._events),
+                                              "oldest_cursor": 1 if self._events else None,
+                                              "missing_from": None, "missing_to": None})
+        return copy.deepcopy([event for event in self._events if event["cursor"] > since])
 
     async def push_policy(self, policy: Mapping[str, Any]) -> dict[str, Any]:
-        return {"accepted": copy.deepcopy(dict(policy))}
+        from .protocol import POLICY_REQUEST, Payload, SessionDescriptor, make_envelope
+
+        make_envelope(POLICY_REQUEST, "0" * 32, 0, Payload(arguments=dict(policy)),
+                      SessionDescriptor("1" * 32, "2" * 32, 0, 0), "3" * 32)
+        if not self._event_active:
+            self._event_active = True
+            self._emit("session_snapshot", {"origin": self._session_origin, "start_tick": self._session_start_tick})
+        self._emit("policy_changed", dict(policy))
+        return copy.deepcopy(dict(policy))
 
     async def set_paused(self, paused: bool, *, role: str) -> dict[str, Any]:
-        if not isinstance(paused, bool):
+        if not isinstance(paused, bool) or role not in ("frontdesk", "planner") or (role == "frontdesk" and not paused):
             raise ToolExecutionError("invalid_argument", "paused must be a boolean.")
+        changed = self._paused != paused
         self._paused = paused
-        self._emit({"type": "paused", "paused": paused, "role": role, "tick": self._tick})
+        if changed:
+            self._emit("pause_changed", {"paused": paused, "speed_paused": paused,
+                                         "force_paused": False, "windows_force_paused": False, "source": role})
         return {"paused": paused, "role": role}
 
     def _run_hooks(self, point: str) -> None:
@@ -277,8 +307,21 @@ class ScriptedGameWorld:
             {"object": w.address[0], "field": w.address[1], "value": self._values.get(w.address)} for w in writes
         ]
 
-    def _emit(self, record: dict[str, Any]) -> None:
-        self._events.append({"seq": len(self._events) + 1, **record})
+    def _emit_write(self, mode: str, receipt: dict[str, Any]) -> None:
+        self._request_serial += 1
+        self._emit("write", {"mode": mode, "request_id": f"{self._request_serial:032x}",
+                             "receipt": copy.deepcopy(receipt)})
+
+    def _emit(self, kind: str, fields: dict[str, Any]) -> None:
+        if not self._event_active:
+            return
+        cursor = len(self._events) + 1
+        data = {"cursor": cursor, "kind": kind, **copy.deepcopy(fields)}
+        self._events.append({
+            "cursor": cursor, "kind": kind, "data": data,
+            "connection_epoch": "scripted", "colony_id": "scripted", "load_epoch": self.load_epoch,
+            "game_tick": self._tick, "snapshot_sequence": 0,
+        })
 
 
 def _changeset(raw: Mapping[str, Any]) -> dict[str, Any]:

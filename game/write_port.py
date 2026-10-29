@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..tool_contracts import ReceiptLost, ToolExecutionError
-from .bridge import BridgeQueryTimeout, BridgeServer
+from .bridge import BridgeEventGap, BridgeQueryTimeout, BridgeServer
 from .protocol import SessionDescriptor
 
 
@@ -26,6 +26,12 @@ class BridgeGameWritePort:
         self._bridge = bridge
         self._connection = connection
         self._session = session
+        self._capabilities = frozenset(getattr(bridge, "capabilities", ()))
+        self._events_subscribed = False
+
+    @property
+    def capabilities(self) -> frozenset[str]:
+        return self._capabilities
 
     async def _call(self, method: str, *args: Any) -> Mapping[str, Any]:
         cancel_event = threading.Event()
@@ -68,7 +74,18 @@ class BridgeGameWritePort:
         return await self._call("set_paused", paused, role)
 
     async def events(self, since: int = 0) -> list[Mapping[str, Any]]:
-        raise ToolExecutionError("unsupported", "Game event delivery is not available.")
+        if "colony_events.v1" not in self._capabilities:
+            raise ToolExecutionError("unsupported", "Game event delivery is not available.")
+        if not self._events_subscribed:
+            raise ToolExecutionError("events_not_subscribed", "Enable event delivery with push_policy first.")
+        try:
+            return self._bridge.game_events(since, expected_connection=self._connection, expected_session=self._session)
+        except BridgeEventGap as exc:
+            raise ToolExecutionError("event_gap", str(exc), recoverable=False, details=exc.details) from exc
 
     async def push_policy(self, policy: Mapping[str, Any]) -> Mapping[str, Any]:
-        raise ToolExecutionError("unsupported", "Game push policies are not available.")
+        if "colony_pause.v1" not in self._capabilities:
+            raise ToolExecutionError("unsupported", "Game push policies are not available.")
+        result = await self._call("push_policy", copy.deepcopy(dict(policy)))
+        self._events_subscribed = True
+        return result

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import queue
 import select
 import socket
@@ -9,16 +10,20 @@ import sys
 import threading
 import time
 import uuid
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from .protocol import (
     AUTHENTICATE,
+    GAME_EVENT,
     HEARTBEAT,
     HELLO,
     MAX_HANDSHAKE_FRAME_BYTES,
     MAX_MOD_TO_PLUGIN_FRAME_BYTES,
+    POLICY_REQUEST,
+    POLICY_RESULT,
     PROTOCOL_ERROR,
     QUERY_RESULT,
     READ_DEADLINE_EXCEEDED,
@@ -92,6 +97,14 @@ class BridgeBusyError(BridgeError):
     code = "bridge_busy"
 
 
+class BridgeEventGap(BridgeError):
+    code = "event_gap"
+
+    def __init__(self, message: str, *, details: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.details = details
+
+
 class BridgeUnsupportedError(BridgeError):
     code = "bridge_unsupported"
 
@@ -108,6 +121,7 @@ class _PendingQuery:
     error: BridgeError | None = None
     cancel_event: threading.Event | None = None
     dispatched: bool = False
+    arguments: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +132,7 @@ class _QueryRequest:
     operation: str
     arguments: dict[str, Any]
     write: bool = False
+    policy: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +201,10 @@ class BridgeServer:
         self._session: SessionDescriptor | None = None
         self._session_stale = False
         self._capabilities: frozenset[str] = frozenset()
+        self._game_events: deque[dict[str, Any]] = deque(maxlen=1024)
+        self._event_cursor = 0
+        self._event_floor = 0
+        self._event_gap: tuple[int, int] | None = None
         self._outbound: queue.Queue[_QueryRequest] = queue.Queue(maxsize=outbound_capacity)
         self._pending: dict[str, _PendingQuery] = {}
         # A caller deadline does not cancel work already running in the game.
@@ -356,7 +375,32 @@ class BridgeServer:
     def set_paused(self, paused: bool, role: str, timeout: float = 3.0, *, expected_connection=None, expected_session=None, cancel_event=None) -> Envelope:
         return self._request("set_paused", {"paused": paused, "role": role}, timeout, write=True, expected_connection=expected_connection, expected_session=expected_session, cancel_event=cancel_event)
 
-    def _request(self, operation: str, arguments: dict[str, Any], timeout: float, *, write: bool, expected_connection=None, expected_session=None, cancel_event=None) -> Envelope:
+    def push_policy(self, policy: dict[str, Any], timeout: float = 3.0, *, expected_connection=None, expected_session=None, cancel_event=None) -> Envelope:
+        return self._request("policy", policy, timeout, write=False, policy=True, expected_connection=expected_connection, expected_session=expected_session, cancel_event=cancel_event)
+
+    def game_events(self, since: int, *, expected_connection: str, expected_session: SessionDescriptor) -> list[dict[str, Any]]:
+        if type(since) is not int or since < 0:
+            raise ValueError("Event cursor must be a non-negative integer.")
+        with self._connection_lock:
+            if self._ready_epoch != expected_connection or self._session_stale or not self._same_session(self._session, expected_session):
+                raise BridgeNotConnected("The bound game session changed.")
+            if "colony_events.v1" not in self._capabilities:
+                raise BridgeUnsupportedError("The connected RimWorld Mod does not advertise events.")
+            oldest = self._game_events[0]["cursor"] if self._game_events else None
+            missing = self._event_gap
+            if oldest is not None and since < oldest - 1:
+                missing = (since + 1, oldest - 1)
+            if since > self._event_cursor or missing is not None:
+                raise BridgeEventGap("Game event continuity was lost; reconnect or resynchronize.", details={
+                    "requested_cursor": since,
+                    "latest_cursor": self._event_cursor,
+                    "oldest_cursor": oldest,
+                    "missing_from": missing[0] if missing else None,
+                    "missing_to": missing[1] if missing else None,
+                })
+            return copy.deepcopy([event for event in self._game_events if event["cursor"] > since])
+
+    def _request(self, operation: str, arguments: dict[str, Any], timeout: float, *, write: bool, policy: bool = False, expected_connection=None, expected_session=None, cancel_event=None) -> Envelope:
 
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
             raise ValueError("timeout must be a positive number")
@@ -374,21 +418,28 @@ class BridgeServer:
             if epoch is None or session is None or stale:
                 self._state.set_last_query("not_connected", 0.0, error_code=BridgeNotConnected.code)
                 raise BridgeNotConnected("No authenticated, active RimWorld session is available.")
-            if ((write and "colony_write.v1" not in capabilities and not (operation in {"dry_run", "commit", "undo"} and "colony_write.transactions.v1" in capabilities))
-                    or (not write and self.QUERY_CAPABILITY not in capabilities)):
+            supported = (
+                "colony_pause.v1" in capabilities if policy else
+                bool({"colony_pause.v1", "colony_write.v1"} & capabilities) if operation == "set_paused" else
+                ("colony_write.v1" in capabilities or "colony_write.transactions.v1" in capabilities) if write else
+                self.QUERY_CAPABILITY in capabilities
+            )
+            if not supported:
                 self._state.set_last_query("unsupported", 0.0, error_code=BridgeUnsupportedError.code)
                 raise BridgeUnsupportedError("The connected RimWorld Mod does not advertise the requested capability.")
 
             request_id = uuid.uuid4().hex
-            if write:
+            if policy:
+                validated = make_envelope(POLICY_REQUEST, epoch, 0, Payload(arguments=arguments), session, request_id)
+            elif write:
                 validated = make_envelope(WRITE_REQUEST, epoch, 0, Payload(mode=operation, arguments=arguments), session, request_id)
             else:
                 validated = make_query_request(epoch, 0, session, request_id, operation, arguments)
             arguments = validated.payload.to_dict()["arguments"]
             pending = _PendingQuery(
                 epoch, session, threading.Event(), time.monotonic(),
-                WRITE_RESULT if write else QUERY_RESULT, operation if write else None,
-                cancel_event=cancel_event,
+                POLICY_RESULT if policy else WRITE_RESULT if write else QUERY_RESULT, operation if write else None,
+                cancel_event=cancel_event, arguments=copy.deepcopy(arguments),
             )
             with self._pending_lock:
                 if cancel_event is not None and cancel_event.is_set():
@@ -398,7 +449,7 @@ class BridgeServer:
                     raise BridgeBusyError("The bridge already has too many pending requests.")
                 self._pending[request_id] = pending
                 try:
-                    self._outbound.put_nowait(_QueryRequest(epoch, session, request_id, operation, arguments, write))
+                    self._outbound.put_nowait(_QueryRequest(epoch, session, request_id, operation, arguments, write, policy))
                 except queue.Full:
                     self._pending.pop(request_id, None)
                     self._state.set_last_query("busy", 0.0, error_code=BridgeBusyError.code)
@@ -591,6 +642,9 @@ class BridgeServer:
             self._session = None
             self._session_stale = False
             self._capabilities = frozenset(handshake.capabilities)
+            self._game_events.clear()
+            self._event_cursor = self._event_floor = 0
+            self._event_gap = None
         self._state.set_connection(
             connection_epoch=epoch,
             mod_version=handshake.mod_version,
@@ -677,7 +731,9 @@ class BridgeServer:
             if not current:
                 self._complete_pending(item.request_id, error=BridgeNotConnected("The game session changed."))
                 continue
-            if item.write:
+            if item.policy:
+                envelope = make_envelope(POLICY_REQUEST, epoch, sequence, Payload(arguments=item.arguments), item.session, item.request_id)
+            elif item.write:
                 envelope = make_envelope(
                     WRITE_REQUEST, epoch, sequence, Payload(mode=item.operation, arguments=item.arguments),
                     item.session, item.request_id,
@@ -699,7 +755,9 @@ class BridgeServer:
             self._handle_session_open(envelope)
         elif envelope.type == SESSION_STALE:
             self._handle_session_stale(envelope)
-        elif envelope.type in {QUERY_RESULT, WRITE_RESULT}:
+        elif envelope.type == GAME_EVENT:
+            self._handle_game_event(envelope)
+        elif envelope.type in {QUERY_RESULT, WRITE_RESULT, POLICY_RESULT}:
             self._handle_query_result(envelope)
         elif envelope.type == PROTOCOL_ERROR:
             code = envelope.payload.error_code or "unknown"
@@ -712,6 +770,30 @@ class BridgeServer:
             )
         else:
             raise BridgeProtocolError("RimWorld sent an unsupported message type.")
+
+    def _handle_game_event(self, envelope: Envelope) -> None:
+        with self._connection_lock:
+            if ("colony_events.v1" not in self._capabilities or self._ready_epoch != envelope.connection_epoch
+                    or self._session_stale or not self._same_session(self._session, envelope.session)):
+                raise BridgeProtocolError("Game event did not match the active session.")
+            data = envelope.payload.data
+            assert data is not None
+            cursor = data["cursor"]
+            if cursor <= self._event_cursor:
+                raise BridgeProtocolError("Game event cursor repeated or regressed.")
+            if cursor != self._event_cursor + 1 and self._event_gap is None:
+                self._event_gap = (self._event_cursor + 1, cursor - 1)
+            self._event_cursor = cursor
+            self._game_events.append({
+                "connection_epoch": envelope.connection_epoch,
+                "colony_id": envelope.colony_id,
+                "load_epoch": envelope.load_epoch,
+                "game_tick": envelope.game_tick,
+                "snapshot_sequence": envelope.snapshot_sequence,
+                "cursor": cursor,
+                "kind": data["kind"],
+                "data": copy.deepcopy(data),
+            })
 
     def _handle_session_open(self, envelope: Envelope) -> None:
         session = envelope.session
@@ -728,6 +810,9 @@ class BridgeServer:
             self._session = session
             self._session_stale = False
             if old_session is not None and not self._same_session(old_session, session):
+                self._game_events.clear()
+                self._event_cursor = self._event_floor = 0
+                self._event_gap = None
                 self._fail_pending(BridgeNotConnected("The loaded RimWorld session changed."))
         self._state.set_session(**self._session_kwargs(session), stale=False)
         self._transition(BridgeStatus.READY)
@@ -790,6 +875,8 @@ class BridgeServer:
         if (
             envelope.type != pending.result_type
             or not self._write_result_matches_mode(envelope, pending.write_mode)
+            or (envelope.payload.status == "ok" and envelope.type == POLICY_RESULT and envelope.payload.data != pending.arguments)
+            or (envelope.payload.status == "ok" and pending.write_mode == "set_paused" and envelope.payload.data != pending.arguments)
             or envelope.connection_epoch != pending.connection_epoch
             or not self._same_session(response_session, pending.session)
             or response_session is None

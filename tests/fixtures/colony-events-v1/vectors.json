@@ -1,0 +1,327 @@
+{
+  "valid": [
+    {
+      "v": 2,
+      "type": "policy_request",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 100,
+      "snapshot_sequence": 1,
+      "payload": {
+        "arguments": {
+          "source": "frontdesk",
+          "pause_on_letter_defs": [
+            "ThreatBig",
+            "ThreatSmall",
+            "NegativeEvent"
+          ]
+        }
+      }
+    },
+    {
+      "v": 2,
+      "type": "policy_result",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 100,
+      "snapshot_sequence": 1,
+      "payload": {
+        "status": "ok",
+        "data": {
+          "source": "frontdesk",
+          "pause_on_letter_defs": [
+            "ThreatBig",
+            "ThreatSmall",
+            "NegativeEvent"
+          ]
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "type": "policy_result",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 100,
+      "snapshot_sequence": 1,
+      "payload": {
+        "status": "busy",
+        "error_code": "busy",
+        "message": "queue full",
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "type": "write_request",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 100,
+      "snapshot_sequence": 1,
+      "payload": {
+        "mode": "set_paused",
+        "arguments": {
+          "paused": true,
+          "role": "frontdesk"
+        }
+      }
+    },
+    {
+      "v": 2,
+      "type": "write_result",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 100,
+      "snapshot_sequence": 1,
+      "payload": {
+        "status": "ok",
+        "data": {
+          "paused": true,
+          "role": "frontdesk"
+        },
+        "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "type": "game_event",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "",
+      "game_tick": 100,
+      "snapshot_sequence": 1,
+      "payload": {
+        "data": {
+          "cursor": 1,
+          "kind": "session_snapshot",
+          "origin": "loaded_game",
+          "start_tick": 1
+        }
+      }
+    },
+    {
+      "v": 2,
+      "type": "game_event",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "",
+      "game_tick": 100,
+      "snapshot_sequence": 1,
+      "payload": {
+        "data": {
+          "cursor": 2,
+          "kind": "heartbeat"
+        }
+      }
+    },
+    {
+      "v": 2,
+      "type": "game_event",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "",
+      "game_tick": 100,
+      "snapshot_sequence": 1,
+      "payload": {
+        "data": {
+          "cursor": 3,
+          "kind": "letter",
+          "letter_id": "Letter_1",
+          "def": "ThreatBig",
+          "auto_pause_mode": "MajorThreat",
+          "is_choice_letter": false,
+          "reflected": true
+        }
+      }
+    },
+    {
+      "v": 2,
+      "type": "game_event",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "",
+      "game_tick": 100,
+      "snapshot_sequence": 1,
+      "payload": {
+        "data": {
+          "cursor": 4,
+          "kind": "pause_changed",
+          "paused": true,
+          "source": "reflex",
+          "force_paused": false,
+          "speed_paused": true,
+          "windows_force_paused": false
+        }
+      }
+    },
+    {
+      "v": 2,
+      "type": "game_event",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "",
+      "game_tick": 100,
+      "snapshot_sequence": 1,
+      "payload": {
+        "data": {
+          "cursor": 5,
+          "kind": "policy_changed",
+          "source": "frontdesk",
+          "pause_on_letter_defs": [
+            "ThreatBig",
+            "ThreatSmall",
+            "NegativeEvent"
+          ]
+        }
+      }
+    },
+    {
+      "v": 2,
+      "type": "game_event",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "",
+      "game_tick": 100,
+      "snapshot_sequence": 1,
+      "payload": {
+        "data": {
+          "cursor": 6,
+          "kind": "write",
+          "mode": "commit",
+          "request_id": "44444444444444444444444444444444",
+          "receipt": {
+            "status": "committed",
+            "changeset_id": "cs",
+            "load_epoch": "22222222222222222222222222222222",
+            "readback": [],
+            "undo_token": "u"
+          }
+        }
+      }
+    },
+    {
+      "v": 2,
+      "type": "game_event",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "",
+      "game_tick": 100,
+      "snapshot_sequence": 1,
+      "payload": {
+        "data": {
+          "cursor": 7,
+          "kind": "pause_changed",
+          "paused": true,
+          "source": "window",
+          "force_paused": true,
+          "speed_paused": false,
+          "windows_force_paused": true
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "v": 2,
+      "type": "policy_request",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 100,
+      "snapshot_sequence": 1,
+      "payload": {
+        "arguments": {
+          "source": "planner",
+          "pause_on_letter_defs": []
+        }
+      }
+    },
+    {
+      "v": 2,
+      "type": "policy_request",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 100,
+      "snapshot_sequence": 1,
+      "payload": {
+        "arguments": {
+          "source": "frontdesk",
+          "pause_on_letter_defs": [
+            "ThreatBig",
+            "ThreatBig"
+          ]
+        }
+      }
+    },
+    {
+      "v": 2,
+      "type": "game_event",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "",
+      "game_tick": 100,
+      "snapshot_sequence": 1,
+      "payload": {
+        "data": {
+          "kind": "heartbeat",
+          "cursor": 0
+        }
+      }
+    },
+    {
+      "v": 2,
+      "type": "write_request",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 100,
+      "snapshot_sequence": 1,
+      "payload": {
+        "mode": "set_paused",
+        "arguments": {
+          "paused": false,
+          "role": "frontdesk"
+        }
+      }
+    }
+  ]
+}

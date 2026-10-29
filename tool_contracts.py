@@ -43,8 +43,10 @@ class GameWritePort(Protocol):
     async def undo(self, token: str) -> Mapping[str, Any]: ...
 
     async def events(self, since: int = 0) -> list[Mapping[str, Any]]:
-        """Events with seq greater than since, oldest first. Every event carries an increasing seq;
-        the caller keeps the cursor, so reading never consumes events."""
+        """Events with cursor greater than since, oldest first. Cursor is scoped to the connection,
+        colony and load epoch. push_policy enables the stream; an empty definition list enables
+        events without pause reflection. The caller keeps the cursor; reading does not consume it.
+        A change of binding leaves the old stream's tail unknown."""
         ...
 
     async def push_policy(self, policy: Mapping[str, Any]) -> Mapping[str, Any]: ...

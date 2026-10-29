@@ -5,6 +5,7 @@ import pytest
 from plugin.plugins.neko_rimworld.game.scripted_world import ScriptedGameWorld
 from plugin.plugins.neko_rimworld.tool_contracts import GameWritePort, ReceiptLost, ToolExecutionError
 
+EMPTY_POLICY = {"pause_on_letter_defs": [], "source": "frontdesk"}
 PAWN = "Thing_Human123"
 BILL = "Bill_88"
 
@@ -43,6 +44,7 @@ async def test_scripted_world_satisfies_the_write_port():
 @pytest.mark.asyncio
 async def test_failed_apply_rolls_back_every_field_already_written():
     world = world_with()
+    await world.push_policy(EMPTY_POLICY)
     world.fail_next_apply_after(1)
     changeset = priority(1, 3)
     changeset["ops"].append(
@@ -53,7 +55,7 @@ async def test_failed_apply_rolls_back_every_field_already_written():
     assert world.value(PAWN, "set_work_priority/work=Doctor") == 3
     assert world.value(BILL, "set_bill/suspended") is False
     assert world.ledger(PAWN, "set_work_priority/work=Doctor") is None
-    assert not [e for e in await world.events() if e["type"] == "committed"]
+    assert not [e for e in await world.events() if e["kind"] == "write"]
     # Origin is restored too: the next conflict still names the seeding write, not the failed one.
     world.player_edit(BILL, "set_bill/suspended", False)
     receipt = await world.commit(priority(1, 2, key="cs-2"))
@@ -127,12 +129,13 @@ async def test_dict_op_conflict_names_only_the_mismatched_sub_fields():
 @pytest.mark.asyncio
 async def test_dry_run_that_would_succeed_changes_nothing():
     world = world_with()
+    await world.push_policy(EMPTY_POLICY)
     before = world.save()
     verdict = await world.dry_run(priority(1, 3))
     assert verdict["status"] == "ok" and verdict["preview"][0]["value"] == 1
     assert world.save() == before
     assert world.ledger(PAWN, "set_work_priority/work=Doctor") is None
-    assert not [e for e in await world.events() if e["type"] == "committed"]
+    assert not [e for e in await world.events() if e["kind"] == "write"]
     assert (await world.commit(priority(1, 3)))["status"] == "committed"
 
 
@@ -307,6 +310,7 @@ async def test_player_edit_before_apply_becomes_a_conflict_and_writes_nothing():
 @pytest.mark.asyncio
 async def test_lost_receipt_retry_with_the_same_key_returns_the_original_receipt():
     world = world_with()
+    await world.push_policy(EMPTY_POLICY)
     world.lose_next_receipt()
     changeset = bill(True, False, key="cs-lost")
     with pytest.raises(ReceiptLost) as lost:
@@ -315,7 +319,7 @@ async def test_lost_receipt_retry_with_the_same_key_returns_the_original_receipt
     assert world.value(BILL, "set_bill/suspended") is True
     retry = await world.commit(changeset)
     assert retry["status"] == "committed" and retry["undo_token"] == "undo-1"
-    assert [e["changeset_id"] for e in await world.events() if e["type"] == "committed"] == ["cs-lost"]
+    assert [e["data"]["receipt"]["changeset_id"] for e in await world.events() if e["kind"] == "write"] == ["cs-lost"]
 
 
 # Injected fault 3: a load happens while the commit is in progress; the commit must not write into the new epoch.
@@ -354,23 +358,28 @@ async def test_changeset_that_writes_one_field_twice_is_rejected():
 @pytest.mark.asyncio
 async def test_set_paused_is_not_a_changeset_and_leaves_no_ledger_entry():
     world = world_with()
+    await world.push_policy(EMPTY_POLICY)
     before = world.save()
     result = await world.set_paused(True, role="planner")
     assert result == {"paused": True, "role": "planner"} and world.paused
     assert world.value(PAWN, "set_work_priority/work=Doctor") == 3
     assert world.save()["ledger"] == {} and set(world.save()["origin"]) == set(before["origin"])
     events = await world.events()
-    assert events[-1]["type"] == "paused" and events[-1]["role"] == "planner"
+    assert events[-1]["kind"] == "pause_changed"
+    assert events[-1]["data"] == {"cursor": 3, "kind": "pause_changed", "paused": True,
+                                  "speed_paused": True, "force_paused": False,
+                                  "windows_force_paused": False, "source": "planner"}
 
 
 @pytest.mark.asyncio
 async def test_events_since_a_cursor_returns_only_newer_events():
     world = world_with()
+    await world.push_policy(EMPTY_POLICY)
     events = await world.events()
-    assert [e["seq"] for e in events] == [1, 2]
+    assert [e["cursor"] for e in events] == [1, 2]
     await world.set_paused(True, role="planner")
-    newer = await world.events(since=events[-1]["seq"])
-    assert [e["seq"] for e in newer] == [3] and newer[0]["type"] == "paused"
+    newer = await world.events(since=events[-1]["cursor"])
+    assert [e["cursor"] for e in newer] == [3] and newer[0]["kind"] == "pause_changed"
     assert len(await world.events()) == 3
 
 
@@ -395,4 +404,33 @@ async def test_set_paused_rejects_non_boolean_values():
 
 @pytest.mark.asyncio
 async def test_push_policy_is_accepted_as_given():
-    assert await ScriptedGameWorld().push_policy({"pause_on": ["raid"]}) == {"accepted": {"pause_on": ["raid"]}}
+    policy = {"pause_on_letter_defs": ["ThreatBig"], "source": "frontdesk"}
+    assert await ScriptedGameWorld().push_policy(policy) == policy
+
+
+@pytest.mark.asyncio
+async def test_event_subscription_scope_and_reload():
+    world = world_with()
+    world.advance(20)
+    with pytest.raises(ToolExecutionError) as error:
+        await world.events()
+    assert error.value.code == "events_not_subscribed"
+    await world.push_policy(EMPTY_POLICY)
+    assert not world.paused
+    first = await world.events()
+    assert [event["kind"] for event in first] == ["session_snapshot", "policy_changed"]
+    assert first[0]["data"] == {"cursor": 1, "kind": "session_snapshot", "origin": "new_game", "start_tick": 0}
+    assert first[0]["game_tick"] == 20
+    old_epoch = first[0]["load_epoch"]
+    saved = world.save()
+    world.load(saved)
+    with pytest.raises(ToolExecutionError) as error:
+        await world.events()
+    assert error.value.code == "events_not_subscribed"
+    world.advance(5)
+    await world.push_policy(EMPTY_POLICY)
+    second = await world.events()
+    assert [event["cursor"] for event in second] == [1, 2]
+    assert all(event["load_epoch"] == world.load_epoch != old_epoch for event in second)
+    assert second[0]["data"] == {"cursor": 1, "kind": "session_snapshot", "origin": "loaded_game", "start_tick": 20}
+    assert second[0]["game_tick"] == 25
