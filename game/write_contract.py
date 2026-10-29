@@ -45,7 +45,20 @@ def validate_request(mode, args):
             if any(not isinstance(v, str) or not v.strip() for v in targets.values()):
                 _bad()
             expected, value = op["expect"], op["value"]
-            if isinstance(expected, dict) or isinstance(value, dict):
+            if op["op"] == "add_production_bill":
+                _fields(op, ("op", "worktable", "value", "expect", "evidence"))
+                _text(op['worktable'])
+                _fields(expected, ("bill_ids",))
+                _fields(value, ("recipe",))
+                _text(value["recipe"])
+                identifiers = expected["bill_ids"]
+                if not isinstance(identifiers, list):
+                    _bad()
+                for identifier in identifiers:
+                    _text(identifier)
+                if len(set(identifiers)) != len(identifiers):
+                    _bad()
+            elif isinstance(expected, dict) or isinstance(value, dict):
                 if not isinstance(expected, dict) or not isinstance(value, dict) or not expected or expected.keys() != value.keys():
                     _bad()
     elif mode == "undo":

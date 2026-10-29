@@ -16,8 +16,10 @@ def _schema(schema):
     if not isinstance(schema, dict):
         return False
     allowed = {'type', 'const', 'enum', 'properties', 'required', 'additionalProperties', 'items',
-               'minLength', 'minimum', 'maximum', 'minItems', 'maxItems', 'minProperties'}
+               'minLength', 'minimum', 'maximum', 'minItems', 'maxItems', 'minProperties', 'description'}
     if set(schema) - allowed:
+        return False
+    if 'description' in schema and not isinstance(schema['description'], str):
         return False
     kind = schema.get('type')
     valid_types = {'object', 'array', 'string', 'integer', 'number', 'boolean', 'null'}
@@ -36,6 +38,26 @@ def _schema(schema):
     if 'items' in schema and not _schema(schema['items']):
         return False
     return True
+
+
+def _text(value):
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _path(value):
+    return isinstance(value, list) and bool(value) and all(_text(v) for v in value)
+
+
+def _expression(value):
+    if isinstance(value, dict):
+        if set(value) == {'arg'}:
+            return _text(value['arg'])
+        if set(value) == {'value_path'}:
+            return _path(value['value_path'])
+        return all(isinstance(key, str) and _expression(item) for key, item in value.items())
+    if isinstance(value, list):
+        return all(_expression(item) for item in value)
+    return value is None or isinstance(value, (str, int, float, bool))
 
 
 def validate_write_catalog(directory):
@@ -65,7 +87,7 @@ def validate_write_catalog(directory):
                 raise ValueError('Unsafe write operation schema.')
             read, extract = observation['read'], observation['extract']
             if (read.get('tool') != 'look' or not isinstance(read.get('native_operation'), str) or
-                    not isinstance(read.get('arguments'), dict) or extract.get('kind') not in {'field', 'keyed_row', 'object_fields'}):
+                    not isinstance(read.get('arguments'), dict) or extract.get('kind') not in {'field', 'keyed_row', 'object_fields', 'ordered_ids'}):
                 raise ValueError('Invalid evidence descriptor.')
             for key in ('path', 'objects_path', 'identity_path', 'status_path'):
                 if not isinstance(extract.get(key), list) or any(not isinstance(v, str) or not v for v in extract[key]):
@@ -76,5 +98,24 @@ def validate_write_catalog(directory):
                 raise ValueError('Invalid evidence selector.')
             if extract['kind'] == 'keyed_row' and not isinstance(extract.get('value_field'), str):
                 raise ValueError('Missing evidence value field.')
+            if 'expect_schema' in item and not _schema(item['expect_schema']):
+                raise ValueError('Invalid expected-value schema.')
+            if extract['kind'] == 'ordered_ids':
+                required = extract.get('require')
+                available = extract.get('available')
+                if (not _path(extract.get('complete_path')) or extract.get('complete_value') is not True or
+                        not _text(extract.get('id_field')) or not _text(extract.get('expect_field')) or
+                        not isinstance(required, list) or not required or
+                        any(not isinstance(rule, dict) or not _path(rule.get('path')) or 'value' not in rule or
+                            not _expression(rule['value'])
+                            for rule in required) or
+                        not _expression(extract.get('object_id')) or not _expression(read['arguments']) or
+                        not isinstance(available, dict) or not _path(available.get('path')) or
+                        not _text(available.get('key_field')) or not _text(available.get('value_field')) or
+                        available.get('value') is not True or
+                        not isinstance(available.get('key'), dict) or
+                        set(available['key']) != {'value_path'} or not _path(available['key']['value_path']) or
+                        'expect_schema' not in item):
+                    raise ValueError('Invalid ordered collection evidence descriptor.')
     except (KeyError, TypeError, OverflowError) as exc:
         raise ValueError('Invalid write catalog.') from exc

@@ -171,6 +171,8 @@ async def test_all_catalog_hints_dispatch_through_real_look():
               for key, prop in schema['properties'].items() if key in schema['required']}
         if descriptor['op'] == 'set_allowed_area':
             op['value'] = {'map_id': 'x', 'area_id': None}
+        elif descriptor['op'] == 'add_production_bill':
+            op['value'] = {'recipe': 'Meal'}
         session = AgentRunSession.create(ledger=AgentAuditLedger('plan'), question='plan', role='planner')
         service = WriteService(directory, session.observations, object(), lambda: ('c', 'colony', 'epoch'))
         reads.clear()

@@ -104,6 +104,8 @@ def test_advertised_operations_generate_valid_raw_evidence():
         op = {key: prop.get('const', values.get(prop.get('type') if isinstance(prop.get('type'), str) else 'string', 'x')) for key, prop in schema['properties'].items() if key in schema['required']}
         if descriptor['op'] == 'set_allowed_area':
             op['value'] = {'map_id': 'x', 'area_id': None}
+        elif descriptor['op'] == 'add_production_bill':
+            op['value'] = {'recipe': 'Meal'}
         extract = descriptor['observation']['extract']
         def resolve(item):
             return op[item['arg']] if isinstance(item, dict) and 'arg' in item else item
@@ -123,6 +125,13 @@ def test_advertised_operations_generate_valid_raw_evidence():
             expected = [{extract['key_field']: resolve(extract['key']), extract['value_field']: op['value']}]
         elif extract['kind'] == 'object_fields':
             expected = [{extract['key_field']: resolve(extract['key']), **extract.get('row_require', {}), **op['value']}]
+        elif extract['kind'] == 'ordered_ids':
+            expected = [{extract['id_field']: 'Bill2'}, {extract['id_field']: 'Bill1'}]
+            put(row, extract['complete_path'], True)
+            for rule in extract['require']:
+                put(row, rule['path'], rule['value'])
+            available = extract['available']
+            put(row, available['path'], [{available['key_field']: 'Meal', available['value_field']: True}])
         put(row, extract['path'], expected)
         data = {'objects': [row]} if extract['objects_path'] else row
         obs = observation()
@@ -130,7 +139,8 @@ def test_advertised_operations_generate_valid_raw_evidence():
         obs['response']['payload'] = {'status': 'ok', 'data': data, 'issues': []}
         service = WriteService(directory, [obs], Port(), lambda: IDENTITY)
         result = service._prepare({'entry_id': 'task', 'ops': [op]})
-        assert result['ops'][0]['expect'] == op['value'], descriptor['op']
+        wanted = {extract['expect_field']: ['Bill2', 'Bill1']} if extract['kind'] == 'ordered_ids' else op['value']
+        assert result['ops'][0]['expect'] == wanted, descriptor['op']
         broken = copy.deepcopy(obs)
         broken['response']['payload']['data'] = {}
         service = WriteService(directory, [obs, broken], Port(), lambda: IDENTITY)

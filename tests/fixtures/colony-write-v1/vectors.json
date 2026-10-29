@@ -384,6 +384,78 @@
         },
         "issues": []
       }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_request",
+      "payload": {
+        "mode": "commit",
+        "arguments": {
+          "changeset_id": "cs-1",
+          "author": "planner",
+          "entry_id": "t-1",
+          "load_epoch": "22222222222222222222222222222222",
+          "idempotency_key": "key-1",
+          "ops": [
+            {
+              "op": "add_production_bill",
+              "worktable": "Thing_1",
+              "expect": {
+                "bill_ids": [
+                  "Bill_Recipe_1"
+                ]
+              },
+              "value": {
+                "recipe": "CookMealSimple"
+              },
+              "evidence": "e-1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_request",
+      "payload": {
+        "mode": "commit",
+        "arguments": {
+          "changeset_id": "cs-1",
+          "author": "planner",
+          "entry_id": "t-1",
+          "load_epoch": "22222222222222222222222222222222",
+          "idempotency_key": "key-1",
+          "ops": [
+            {
+              "op": "add_production_bill",
+              "worktable": "tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt",
+              "expect": {
+                "bill_ids": [
+                  "Bill_Recipe_1"
+                ]
+              },
+              "value": {
+                "recipe": "CookMealSimple"
+              },
+              "evidence": "e-1"
+            }
+          ]
+        }
+      }
     }
   ],
   "invalid": [
@@ -841,6 +913,223 @@
           "load_epoch": "not-a-uuid"
         },
         "issues": []
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_request",
+      "payload": {
+        "mode": "commit",
+        "arguments": {
+          "changeset_id": "cs-1",
+          "author": "planner",
+          "entry_id": "t-1",
+          "load_epoch": "22222222222222222222222222222222",
+          "idempotency_key": "key-1",
+          "ops": [
+            {
+              "op": "add_production_bill",
+              "worktable": "Thing_1",
+              "expect": {
+                "bill_ids": [
+                  "Bill_Recipe_1",
+                  "Bill_Recipe_1"
+                ]
+              },
+              "value": {
+                "recipe": "CookMealSimple"
+              },
+              "evidence": "e-1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_request",
+      "payload": {
+        "mode": "commit",
+        "arguments": {
+          "changeset_id": "cs-1",
+          "author": "planner",
+          "entry_id": "t-1",
+          "load_epoch": "22222222222222222222222222222222",
+          "idempotency_key": "key-1",
+          "ops": [
+            {
+              "op": "add_production_bill",
+              "worktable": "Thing_1",
+              "expect": {
+                "bill_ids": [
+                  " "
+                ]
+              },
+              "value": {
+                "recipe": "CookMealSimple"
+              },
+              "evidence": "e-1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_request",
+      "payload": {
+        "mode": "commit",
+        "arguments": {
+          "changeset_id": "cs-1",
+          "author": "planner",
+          "entry_id": "t-1",
+          "load_epoch": "22222222222222222222222222222222",
+          "idempotency_key": "key-1",
+          "ops": [
+            {
+              "op": "add_production_bill",
+              "worktable": "Thing_1",
+              "expect": {
+                "bill_ids": [
+                  "Bill_Recipe_1"
+                ]
+              },
+              "value": {
+                "recipe": "CookMealSimple",
+                "extra": 1
+              },
+              "evidence": "e-1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_request",
+      "payload": {
+        "mode": "commit",
+        "arguments": {
+          "changeset_id": "cs-1",
+          "author": "planner",
+          "entry_id": "t-1",
+          "load_epoch": "22222222222222222222222222222222",
+          "idempotency_key": "key-1",
+          "ops": [
+            {
+              "op": "add_production_bill",
+              "worktable": "Thing_1",
+              "expect": {
+                "bill_ids": [
+                  "Bill_Recipe_1"
+                ]
+              },
+              "value": {
+                "recipe": "CookMealSimple"
+              },
+              "evidence": "e-1",
+              "recipe": "x"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_request",
+      "payload": {
+        "mode": "commit",
+        "arguments": {
+          "changeset_id": "cs-1",
+          "author": "planner",
+          "entry_id": "t-1",
+          "load_epoch": "22222222222222222222222222222222",
+          "idempotency_key": "key-1",
+          "ops": [
+            {
+              "op": "add_production_bill",
+              "worktable": "Thing_1",
+              "expect": {
+                "bill_ids": "Bill_Recipe_1"
+              },
+              "value": {
+                "recipe": "CookMealSimple"
+              },
+              "evidence": "e-1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "v": 2,
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "44444444444444444444444444444444",
+      "game_tick": 1,
+      "snapshot_sequence": 1,
+      "type": "write_request",
+      "payload": {
+        "mode": "commit",
+        "arguments": {
+          "changeset_id": "cs-1",
+          "author": "planner",
+          "entry_id": "t-1",
+          "load_epoch": "22222222222222222222222222222222",
+          "idempotency_key": "key-1",
+          "ops": [
+            {
+              "op": "add_production_bill",
+              "worktable": "ttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt",
+              "expect": {
+                "bill_ids": [
+                  "Bill_Recipe_1"
+                ]
+              },
+              "value": {
+                "recipe": "CookMealSimple"
+              },
+              "evidence": "e-1"
+            }
+          ]
+        }
       }
     }
   ]

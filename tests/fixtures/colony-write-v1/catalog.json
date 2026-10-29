@@ -8,6 +8,138 @@
   ],
   "operations": [
     {
+      "op": "add_production_bill",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "const": "add_production_bill"
+          },
+          "worktable": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "recipe": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "recipe"
+            ]
+          }
+        },
+        "required": [
+          "op",
+          "worktable",
+          "value"
+        ],
+        "description": "Add an ordinary production bill on an ordinary or heat-emitting player worktable. Other worktable types and specialized native bill types are unsupported."
+      },
+      "expect_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "bill_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "required": [
+          "bill_ids"
+        ]
+      },
+      "observation": {
+        "read": {
+          "tool": "look",
+          "arguments": {
+            "object": {
+              "kind": "thing",
+              "id": {
+                "arg": "worktable"
+              }
+            },
+            "aspects": [
+              "state"
+            ],
+            "focus": {
+              "state": [
+                "production"
+              ]
+            },
+            "detail": 100
+          },
+          "native_operation": "inspect_state"
+        },
+        "extract": {
+          "kind": "ordered_ids",
+          "object_id": {
+            "arg": "worktable"
+          },
+          "path": [
+            "facets",
+            "production",
+            "bills"
+          ],
+          "id_field": "bill_id",
+          "expect_field": "bill_ids",
+          "complete_path": [
+            "facets",
+            "production",
+            "complete"
+          ],
+          "complete_value": true,
+          "objects_path": [
+            "objects"
+          ],
+          "identity_path": [
+            "target",
+            "id"
+          ],
+          "status_path": [
+            "facets",
+            "production",
+            "status"
+          ],
+          "status_value": "observed",
+          "require": [
+            {
+              "path": [
+                "facets",
+                "production",
+                "bill_owner",
+                "role"
+              ],
+              "value": "worktable"
+            }
+          ],
+          "available": {
+            "path": [
+              "facets",
+              "production",
+              "available_recipes"
+            ],
+            "key_field": "recipe",
+            "key": {
+              "value_path": [
+                "recipe"
+              ]
+            },
+            "value_field": "available_now",
+            "value": true
+          }
+        }
+      }
+    },
+    {
       "op": "set_work_priority",
       "schema": {
         "type": "object",
@@ -652,5 +784,5 @@
     "partial": "affected paths unknown",
     "truncation": "absence is unknown unless explicitly complete"
   },
-  "catalog_id": "9e1dc764182a3881e189e75cd720950ef681d6a97cc489e068244eea747452f8"
+  "catalog_id": "46fb8573fbe294231686639e63d2602a3601f5d1ffaa21c29a2a22e0d2f9b19f"
 }

@@ -74,6 +74,8 @@ def _substitute(value, op):
     if isinstance(value, dict):
         if set(value) == {'arg'}:
             return op.get(value['arg'])
+        if set(value) == {'value_path'}:
+            return _path(op.get('value'), value['value_path'])
         return {k: _substitute(v, op) for k, v in value.items()}
     if isinstance(value, list):
         return [_substitute(v, op) for v in value]
@@ -199,9 +201,33 @@ class WriteService:
                 if not present and _path(row, extract['complete_path']) is not True:
                     return None
                 value = present
+            elif kind == 'ordered_ids':
+                # Structural creation compares the complete ordered collection,
+                # not the creation intent. All prerequisites come from this same
+                # original observation, including native recipe availability.
+                if (not isinstance(value, list) or
+                        _safe_path(row, extract['complete_path']) is not extract['complete_value'] or
+                        any(_safe_path(row, rule['path']) != _substitute(rule['value'], op)
+                            for rule in extract['require'])):
+                    return None
+                identifiers = [item.get(extract['id_field']) if isinstance(item, dict) and not _unsafe(item)
+                               else None for item in value]
+                if (any(not isinstance(item, str) or not item.strip() for item in identifiers) or
+                        len(set(identifiers)) != len(identifiers)):
+                    return None
+                availability = extract['available']
+                recipes = _safe_path(row, availability['path'])
+                if not isinstance(recipes, list):
+                    return None
+                matching = [item for item in recipes if isinstance(item, dict) and
+                            item.get(availability['key_field']) == _substitute(availability['key'], op)]
+                if (len(matching) != 1 or _unsafe(matching[0]) or
+                        matching[0].get(availability['value_field']) is not availability['value']):
+                    return None
+                value = {extract['expect_field']: identifiers}
             elif kind != 'field':
                 return None
-            value_schema = descriptor['schema']['properties']['value']
+            value_schema = descriptor.get('expect_schema', descriptor['schema']['properties']['value'])
             if (value is _MISSING or (value is None and not extract.get('allow_null', False))
                     or not _schema_check(value, value_schema)):
                 return None
