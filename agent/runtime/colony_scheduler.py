@@ -647,7 +647,11 @@ class ColonyScheduler:
             ToolSpec("message_frontdesk", "Send a message to the frontdesk.",
                      {"type": "object", "properties": {"text": {"type": "string", "minLength": 1}},
                       "required": ["text"], "additionalProperties": False}, message_frontdesk),
-            ToolSpec("planner_board", "Read or revise strategy and task entries on the colony board.",
+            ToolSpec("planner_board", "Read or revise strategy and task entries on the colony board. "
+                     "For BOTH creation and revision use {action: 'write', entry: {the full entry skeleton}}; "
+                     "never flatten entry_id, status or other entry fields onto the top level. "
+                     "Use actual changeset IDs from this task's commit receipts for committed. "
+                     "Verified needs matching observations from a later game tick; yield and recheck in a later run if time must advance.",
                      {"type": "object", "properties": {"action": {"type": "string", "enum": ["read", "write"]},
                       "entry": entry_schema(PLANNER)}, "required": ["action"], "additionalProperties": False}, board_tool),
             ToolSpec("planner_yield", "Finish this run with progress, next steps and undecided thoughts.",
