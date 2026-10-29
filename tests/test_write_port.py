@@ -210,3 +210,71 @@ async def test_session_change_waits_for_registration_then_cleans(monkeypatch):
     with pytest.raises(BridgeNotConnected):
         await task
     assert not server._pending and server._outbound.empty()
+
+async def test_queue_audit_failure_prevents_socket_write(monkeypatch):
+    server, session, port = bound_server()
+    sent = []
+    monkeypatch.setattr(server, '_write', lambda client, envelope: sent.append(envelope))
+    async def audit(stage, request_id, envelope):
+        raise ToolExecutionError('write_audit_failed', 'unavailable', recoverable=False)
+    with pytest.raises(ToolExecutionError, match='unavailable'):
+        await port.commit(changeset(session), audit=audit)
+    assert not sent and not server._pending and server._outbound.empty()
+
+
+async def test_cancel_while_queue_audit_waits_prevents_socket_write(monkeypatch):
+    server, session, port = bound_server()
+    sent, entered, release = [], asyncio.Event(), asyncio.Event()
+    monkeypatch.setattr(server, '_write', lambda client, envelope: sent.append(envelope))
+    async def audit(stage, request_id, envelope):
+        entered.set()
+        await release.wait()
+    task = asyncio.create_task(port.commit(changeset(session), audit=audit))
+    await entered.wait()
+    assert await asyncio.to_thread(server._flush_outbound, None, '3' * 32, 1) == 1
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    release.set()
+    await asyncio.sleep(0.05)
+    assert not sent and not server._pending and server._outbound.empty()
+
+async def test_timeout_before_dispatch_never_becomes_receipt_lost(monkeypatch):
+    from plugin.plugins.neko_rimworld.game.bridge import BridgeNotDispatched
+    server, session, port = bound_server()
+    commit = server.commit
+    monkeypatch.setattr(server, 'commit', lambda *args, **kwargs: commit(*args, timeout=0.03, **kwargs))
+    with pytest.raises(BridgeNotDispatched):
+        await port.commit(changeset(session))
+    sent = []
+    monkeypatch.setattr(server, '_write', lambda client, envelope: sent.append(envelope))
+    assert server._flush_outbound(None, '3' * 32, 1) == 1
+    assert not sent
+
+async def test_session_change_during_queue_audit_prevents_send(monkeypatch):
+    from plugin.plugins.neko_rimworld.game.bridge import BridgeNotDispatched
+    server, session, port = bound_server()
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def audit(stage, request_id, envelope):
+        entered.set()
+        await release.wait()
+    task = asyncio.create_task(port.commit(changeset(session), audit=audit))
+    await entered.wait()
+    with server._connection_lock:
+        server._session = SessionDescriptor(session.colony_id, '4' * 32, 1, 1)
+    release.set()
+    with pytest.raises(BridgeNotDispatched):
+        await task
+    assert server._outbound.empty() and not server._pending
+
+
+async def test_queue_audit_deadline_prevents_send(monkeypatch):
+    server, session, port = bound_server()
+    commit = server.commit
+    monkeypatch.setattr(server, 'commit', lambda *args, **kwargs: commit(*args, timeout=0.03, **kwargs))
+    async def audit(stage, request_id, envelope):
+        await asyncio.Event().wait()
+    with pytest.raises(ToolExecutionError) as error:
+        await port.commit(changeset(session), audit=audit)
+    assert error.value.code == 'write_audit_failed'
+    assert server._outbound.empty() and not server._pending

@@ -510,6 +510,11 @@ class AgentRuntime:
 
             if turn is None:
                 continue
+            if session.frontdesk_update_only:
+                from ..delivery.references import visible_references
+                session.visible_reply_references = visible_references(
+                    request_messages, session.observations, session.colony_id,
+                    session.budget_scope[1], session.run_start)
             ledger.transition(
                 AgentRunState.MODEL_RESPONDED,
                 "model_response_received",
@@ -656,6 +661,10 @@ class AgentRuntime:
                     result = self._complete_submission(ledger, session, submitted_response)
                     if session.frontdesk_update_only:
                         result["terminal"] = {"kind": "reply"}
+                        if "references" in submitted_response:
+                            result["terminal"]["references"] = submitted_response["references"]
+                        if "detail_references" in submitted_response:
+                            result["terminal"]["detail_references"] = submitted_response["detail_references"]
                     return result
                 continue
 

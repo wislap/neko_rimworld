@@ -135,7 +135,12 @@ class TakeoverControl:
                 uncertain.add(key)
             decision = "takeover" if different and row["may_change_by_game"] is False else ("unknown" if not complete else "no_takeover")
             await self.service.call("record", colony, epoch, tick, "plugin", "takeover.assessment",
-                                    {"decision": decision, "field": copy.deepcopy(row), "snapshot_seq": snapshot_seq})
+                                    {"decision": decision, "field": copy.deepcopy(row), "snapshot_seq": snapshot_seq,
+                                     "comparison": {"complete": complete,
+                                                    "expected": copy.deepcopy(expected) if complete else None,
+                                                    "current_value": copy.deepcopy(row.get("current_value")) if complete else None,
+                                                    "may_change_by_game": row.get("may_change_by_game") if complete else None,
+                                                    "basis": ("accepted_baseline" if same_version else "ledger") if complete else None}})
             if decision == "takeover" and key not in identities:
                 await self.service.call("record_takeover", colony, epoch, tick,
                     {"object": key[0], "field": key[1], "value_read": row["current_value"],

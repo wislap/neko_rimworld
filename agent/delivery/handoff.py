@@ -96,6 +96,7 @@ class SubmissionDraft:
     # Kept for callers reading the existing draft state. NLP checks no longer
     # block submission or force another model call.
     claims_blocked: bool = False
+    detail_references: dict[str, Any] | None = None
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -207,7 +208,7 @@ class SubmissionDraft:
         return result
 
 
-def submission_parameters(*, answer_only=False):
+def submission_parameters(*, answer_only=False, references=False):
     parameters = {
             "type": "object",
             "properties": {
@@ -222,24 +223,49 @@ def submission_parameters(*, answer_only=False):
     if answer_only:
         parameters["properties"] = {"answer": parameters["properties"]["answer"]}
         parameters["required"] = ["answer"]
+    if references:
+        parameters["properties"].update({
+            "board_refs": {"type": "array", "items": {"type": "object", "properties": {
+                "entry_id": {"type": "string"}, "revision": {"type": "integer", "minimum": 1}},
+                "required": ["entry_id", "revision"], "additionalProperties": False},
+                "description": "Board entry revisions explicitly cited in the reply, visible in this request."},
+            "evidence_ids": {"type": "array", "items": {"type": "string"},
+                "description": "Observation IDs explicitly cited in the reply, visible in this request."},
+        })
     return schema_contract(parameters)
 
 
-def make_submission_tool(draft: SubmissionDraft, observations, on_update=None, *, answer_only=False):
+def make_submission_tool(draft: SubmissionDraft, observations, on_update=None, *, answer_only=False, reference_session=None):
     async def submit(arguments):
+        references = {}
+        if reference_session is not None:
+            from .references import validate_references
+            try:
+                references = validate_references(arguments, reference_session.visible_reply_references)
+            except ValueError as error:
+                raise ToolExecutionError("invalid_references", str(error)) from error
+            arguments = {key: value for key, value in arguments.items() if key not in {"board_refs", "evidence_ids"}}
         try:
             result = draft.apply(arguments, observations=observations)
         except SubmissionPatchError as error:
+            if reference_session is not None and not answer_only and "detail" in arguments and "detail" not in draft.errors:
+                draft.detail_references = copy.deepcopy(references) if draft.detail is not None else None
             if on_update is not None:
                 on_update(draft.snapshot(), "submission_patch_rejected", error.details)
             raise ToolExecutionError(error.code, str(error), details=error.details) from None
+        if reference_session is not None and not answer_only and "detail" in arguments:
+            draft.detail_references = copy.deepcopy(references) if draft.detail is not None else None
         if on_update is not None:
             on_update(draft.snapshot(), "submission_patch_accepted",
                       {"saved_fields": draft.snapshot()["saved_fields"], "revision": draft.revision,
                        "claim_diagnostics": copy.deepcopy(draft.claim_diagnostics)})
+        if references:
+            result["references"] = references
+        if reference_session is not None and "detail" not in arguments and draft.detail is not None and draft.detail_references is not None:
+            result["detail_references"] = copy.deepcopy(draft.detail_references)
         return result
 
-    parameters = submission_parameters(answer_only=answer_only)
+    parameters = submission_parameters(answer_only=answer_only, references=reference_session is not None)
     return ToolSpec(
         name="submit_response", description=PLAIN_SUBMISSION_GUIDANCE,
         parameters=parameters, handler=submit, terminal=True,

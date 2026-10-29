@@ -402,3 +402,40 @@ async def test_native_failure_and_audit_failure_keep_failure_details():
         await service.commit({'entry_id': 'task', 'ops': [op()]})
     assert error.value.details == {'outcome': 'known_failure', 'error': 'busy', 'message': 'try later', 'details': {'reason': 'queue'}}
     assert not error.value.recoverable
+
+async def test_native_retry_audits_distinct_request_ids_and_same_key():
+    from types import SimpleNamespace
+
+    from ..game.bridge import BridgeQueryTimeout
+    from ..game.protocol import SessionDescriptor
+    from ..game.write_port import BridgeGameWritePort
+
+    class Bridge:
+        capabilities = {'colony_write.v1'}
+        def __init__(self):
+            self.calls = []
+        def commit(self, body, **kwargs):
+            self.calls.append(copy.deepcopy(body))
+            request_id = str(len(self.calls)) * 32
+            kwargs['audit_dispatch'](request_id, 3.0, kwargs['cancel_event'])
+            if len(self.calls) == 1:
+                raise BridgeQueryTimeout('lost')
+            wire = {'request_id': request_id, 'connection_epoch': IDENTITY[0], 'colony_id': IDENTITY[1],
+                    'load_epoch': IDENTITY[2], 'game_tick': 42, 'payload': {'status': 'ok', 'data': {'status': 'committed'}}}
+            return SimpleNamespace(request_id=request_id, payload=SimpleNamespace(status='ok', data=wire['payload']['data']), to_dict=lambda: wire)
+    bridge = Bridge()
+    port = BridgeGameWritePort(bridge, IDENTITY[0], SessionDescriptor(IDENTITY[1], IDENTITY[2], 1, 1))
+    events = []
+    async def record(event):
+        events.append(copy.deepcopy(event))
+    service = WriteService(catalog(), [observation()], port, lambda: IDENTITY, record=record)
+    assert (await service.commit({'entry_id': 'task', 'ops': [op()]}))['status'] == 'committed'
+    assert [event['stage'] for event in events] == ['prepared', 'queued', 'result', 'retry', 'queued', 'result']
+    first, second = events[1], events[4]
+    assert first['request_id'] != second['request_id']
+    assert first['attempt'] == 1 and second['attempt'] == 2
+    assert first['idempotency_key'] == second['idempotency_key'] == bridge.calls[0]['idempotency_key']
+    assert bridge.calls[0] == bridge.calls[1]
+    assert events[2]['outcome'] == 'unknown' and events[2]['request_id'] == first['request_id']
+    assert events[5]['request_id'] == events[5]['envelope']['request_id'] == second['request_id']
+    assert events[5]['envelope']['game_tick'] == 42

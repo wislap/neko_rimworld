@@ -92,6 +92,11 @@ async def test_unknown_and_game_changes_do_not_create_takeovers():
     row.update(current_status="observed", may_change_by_game=True)
     await control.guard([{"object": "p", "field": "work"}])
     assert not await journal.call("takeovers", "x")
+    assessments = [e["payload"]["comparison"] for e in journal.events if e["kind"] == "takeover.assessment"]
+    assert assessments[0] == {"complete": False, "expected": None, "current_value": None,
+                              "may_change_by_game": None, "basis": None}
+    assert assessments[1] == {"complete": True, "expected": 1, "current_value": 2,
+                              "may_change_by_game": True, "basis": "ledger"}
 
 
 @pytest.mark.asyncio
@@ -140,6 +145,9 @@ async def test_return_rebases_after_load_without_claiming_user_change():
     row.update(value=0, current_value=1, changeset_id="older", tick=0)
     await control.guard([{"object": "p", "field": "work"}])
     assert any(e["kind"] == "handover.rebased" for e in journal.events)
+    comparison = [e["payload"]["comparison"] for e in journal.events if e["kind"] == "takeover.assessment"][-1]
+    assert comparison == {"complete": True, "expected": 1, "current_value": 1,
+                          "may_change_by_game": False, "basis": "accepted_baseline"}
     assert not await journal.call("takeovers", "x")
     row["current_value"] = 3
     with pytest.raises(ToolExecutionError, match="controlled"):

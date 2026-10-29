@@ -636,3 +636,60 @@ async def test_request_deadline_classification_uses_actual_runtime_audit():
     result = await runtime.run("Test input", config)
     assert result["audit"]["error_code"] == "model_request_deadline"
     assert _unresponsive_request_deadline(registry, result["audit"]["run_id"], config.request_timeout_seconds)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode,outcome", [("no_client", "unknown"), ("reject", "rejected"), ("exception", "unknown")])
+async def test_failure_notification_persists_attempt_and_result(tmp_path, mode, outcome):
+    from ..workspace.runtime import FrontdeskService
+    game = SimpleNamespace(colony_id="old", load_epoch="old-epoch", game_tick=3, connection_epoch="old-connection")
+    service = FrontdeskService(tmp_path / "events.sqlite", None, game_session=lambda: game)
+    plugin = object.__new__(NekoRimworldPlugin)
+    plugin._autoplay_fault = {}
+    def push(**kwargs):
+        if mode == "exception":
+            raise RuntimeError("host failure")
+        return {"submitted": False}
+    plugin.ctx = SimpleNamespace() if mode == "no_client" else SimpleNamespace(push_message=push)
+    await plugin._audit_failure_notification(SimpleNamespace(service=service), game, "planner", "failure", "endpoint", "pause unconfirmed")
+    events = [e for e in await service.call("events", "old") if e["kind"] == "autoplay.failure_notification"]
+    assert [e["payload"]["phase"] for e in events] == ["attempting", "result"]
+    assert events[-1]["payload"]["outcome"] == outcome
+    assert all(e["load_epoch"] == "old-epoch" for e in events)
+    assert not await service.call("events", "new")
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_failure_notification_journal_failure_still_attempts_delivery():
+    class Service:
+        async def call(self, *args):
+            raise RuntimeError("journal failed")
+    plugin = object.__new__(NekoRimworldPlugin)
+    plugin._autoplay_fault = {}
+    sent = []
+    plugin.ctx = SimpleNamespace(push_message=lambda **kwargs: sent.append(kwargs) or {"submitted": True})
+    game = SimpleNamespace(colony_id="old", load_epoch="epoch", game_tick=3)
+    await plugin._audit_failure_notification(SimpleNamespace(service=Service()), game, "planner", "failure", "endpoint", "pause unconfirmed")
+    assert len(sent) == 1
+    assert plugin._autoplay_fault["notification_record"] == "unknown"
+    assert plugin._autoplay_fault["notification"] == "submitted"
+
+
+@pytest.mark.asyncio
+async def test_failure_notification_uses_old_binding_after_world_change(tmp_path):
+    from ..workspace.runtime import FrontdeskService
+    old = SimpleNamespace(colony_id="old", load_epoch="epoch-old", game_tick=5, connection_epoch="connection-old")
+    new = SimpleNamespace(colony_id="new", load_epoch="epoch-new", game_tick=9)
+    service = FrontdeskService(tmp_path / "events.sqlite", None, game_session=lambda: new)
+    plugin = object.__new__(NekoRimworldPlugin)
+    plugin.ctx = SimpleNamespace(push_message=lambda **kwargs: {"submitted": True})
+    plugin._bridge = SimpleNamespace(session=new)
+    plugin._autoplay_waiters = {}
+    plugin._colony_scheduler = SimpleNamespace(halted=False, budget=None, service=service)
+    await plugin._autoplay_failure("planner", {"audit": {"error_code": "model_transport"}}, bound_game=old)
+    events = await service.call("events", "old")
+    assert [e["payload"]["phase"] for e in events] == ["attempting", "result"]
+    assert all(e["load_epoch"] == "epoch-old" and e["payload"]["origin_connection_epoch"] == "connection-old" and e["payload"]["scope_kind"] == "failure_origin" and e["payload"]["host_delivery_binding"] == "unavailable" for e in events)
+    assert not await service.call("events", "new")
+    await service.close()

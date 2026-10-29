@@ -79,6 +79,10 @@ class BridgeQueryTimeout(BridgeError):
     code = "bridge_query_timeout"
 
 
+class BridgeNotDispatched(BridgeError):
+    code = "bridge_not_dispatched"
+
+
 class BridgeProtocolError(BridgeError):
     code = "bridge_protocol_error"
 
@@ -367,14 +371,14 @@ class BridgeServer:
         return self._request(operation, arguments, timeout, write=False, idle_only=idle_only,
                              expected_connection=expected_connection, expected_session=expected_session)
 
-    def dry_run(self, changeset: dict[str, Any], timeout: float = 3.0, *, expected_connection=None, expected_session=None, cancel_event=None) -> Envelope:
-        return self._request("dry_run", changeset, timeout, write=True, expected_connection=expected_connection, expected_session=expected_session, cancel_event=cancel_event)
+    def dry_run(self, changeset: dict[str, Any], timeout: float = 3.0, *, expected_connection=None, expected_session=None, cancel_event=None, audit_dispatch=None) -> Envelope:
+        return self._request("dry_run", changeset, timeout, write=True, expected_connection=expected_connection, expected_session=expected_session, cancel_event=cancel_event, audit_dispatch=audit_dispatch)
 
-    def commit(self, changeset: dict[str, Any], timeout: float = 3.0, *, expected_connection=None, expected_session=None, cancel_event=None) -> Envelope:
-        return self._request("commit", changeset, timeout, write=True, expected_connection=expected_connection, expected_session=expected_session, cancel_event=cancel_event)
+    def commit(self, changeset: dict[str, Any], timeout: float = 3.0, *, expected_connection=None, expected_session=None, cancel_event=None, audit_dispatch=None) -> Envelope:
+        return self._request("commit", changeset, timeout, write=True, expected_connection=expected_connection, expected_session=expected_session, cancel_event=cancel_event, audit_dispatch=audit_dispatch)
 
-    def undo(self, token: str, timeout: float = 3.0, *, expected_connection=None, expected_session=None, cancel_event=None) -> Envelope:
-        return self._request("undo", {"token": token}, timeout, write=True, expected_connection=expected_connection, expected_session=expected_session, cancel_event=cancel_event)
+    def undo(self, token: str, timeout: float = 3.0, *, expected_connection=None, expected_session=None, cancel_event=None, audit_dispatch=None) -> Envelope:
+        return self._request("undo", {"token": token}, timeout, write=True, expected_connection=expected_connection, expected_session=expected_session, cancel_event=cancel_event, audit_dispatch=audit_dispatch)
 
     def set_paused(self, paused: bool, role: str, timeout: float = 3.0, *, expected_connection=None, expected_session=None, cancel_event=None) -> Envelope:
         return self._request("set_paused", {"paused": paused, "role": role}, timeout, write=True, expected_connection=expected_connection, expected_session=expected_session, cancel_event=cancel_event)
@@ -404,7 +408,7 @@ class BridgeServer:
                 })
             return copy.deepcopy([event for event in self._game_events if event["cursor"] > since])
 
-    def _request(self, operation: str, arguments: dict[str, Any], timeout: float, *, write: bool, policy: bool = False, expected_connection=None, expected_session=None, cancel_event=None, idle_only: bool = False) -> Envelope:
+    def _request(self, operation: str, arguments: dict[str, Any], timeout: float, *, write: bool, policy: bool = False, expected_connection=None, expected_session=None, cancel_event=None, idle_only: bool = False, audit_dispatch=None) -> Envelope:
 
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
             raise ValueError("timeout must be a positive number")
@@ -455,6 +459,27 @@ class BridgeServer:
                     self._state.set_last_query("busy", 0.0, error_code=BridgeBusyError.code)
                     raise BridgeBusyError("The bridge already has too many pending requests.")
                 self._pending[request_id] = pending
+        if audit_dispatch is not None:
+            try:
+                audit_dispatch(request_id, float(timeout), cancel_event)
+            except BaseException:
+                with self._pending_lock:
+                    self._pending.pop(request_id, None)
+                self._update_metrics()
+                raise
+        # Audit runs without the connection lock and before the request is queued.
+        # A cancellation, timeout, or session change while it ran prevents sending.
+        with self._connection_lock:
+            with self._pending_lock:
+                if (self._pending.get(request_id) is not pending or
+                        (cancel_event is not None and cancel_event.is_set()) or
+                        self._ready_epoch != epoch or self._session_stale or
+                        not self._same_session(self._session, session)):
+                    self._pending.pop(request_id, None)
+                    raise BridgeNotDispatched("The write was cancelled or its session changed before dispatch.")
+                if time.monotonic() - pending.started_at >= timeout:
+                    self._pending.pop(request_id, None)
+                    raise BridgeNotDispatched("The request timed out before dispatch.")
                 try:
                     self._outbound.put_nowait(_QueryRequest(epoch, session, request_id, operation, arguments, write, policy))
                 except queue.Full:
@@ -464,7 +489,7 @@ class BridgeServer:
         self._update_metrics()
 
         try:
-            completed = pending.event.wait(float(timeout))
+            completed = pending.event.wait(max(0.0, float(timeout) - (time.monotonic() - pending.started_at)))
         except BaseException:
             with self._pending_lock:
                 if self._pending.pop(request_id, None) is pending:
@@ -494,6 +519,8 @@ class BridgeServer:
                     (time.monotonic() - pending.started_at) * 1000.0,
                     error_code=BridgeQueryTimeout.code,
                 )
+                if write and not pending.dispatched:
+                    raise BridgeNotDispatched("The write timed out before dispatch.", incident_id=incident)
                 raise BridgeQueryTimeout("The RimWorld query request timed out.", incident_id=incident)
             pending.event.wait(0.05)
 
@@ -733,8 +760,6 @@ class BridgeServer:
                     pending.error = BridgeNotConnected("The write was cancelled before dispatch.")
                     pending.event.set()
                     continue
-                if current:
-                    pending.dispatched = True
             if not current:
                 self._complete_pending(item.request_id, error=BridgeNotConnected("The game session changed."))
                 continue
@@ -749,6 +774,17 @@ class BridgeServer:
                 envelope = make_query_request(
                     epoch, sequence, item.session, item.request_id, item.operation, item.arguments
                 )
+            with self._connection_lock:
+                with self._pending_lock:
+                    if (self._pending.get(item.request_id) is not pending or
+                            (pending.cancel_event is not None and pending.cancel_event.is_set())):
+                        continue
+                    if (self._ready_epoch != epoch or self._session_stale or
+                            not self._same_session(self._session, item.session)):
+                        self._complete_pending(item.request_id, error=BridgeNotDispatched("The game session changed before dispatch."))
+                        continue
+                    # This boundary denotes an attempted socket write, not delivery.
+                    pending.dispatched = True
             self._write(client, envelope)
             sequence += 1
         self._update_metrics()

@@ -42,8 +42,19 @@ def test_write_roundtrip_and_unsupported():
         thread.join(2)
         assert not thread.is_alive()
         assert result[0].payload.status == "unsupported"
-        with pytest.raises(BridgeQueryTimeout):
-            server.undo("token", timeout=0.1)
+        errors = []
+        def invoke_timeout():
+            try:
+                server.undo("token", timeout=1.5)
+            except Exception as exc:
+                errors.append(exc)
+        timeout_thread = threading.Thread(target=invoke_timeout)
+        timeout_thread.start()
+        timed_request = read_until(client, WRITE_REQUEST)
+        assert timed_request.payload.arguments == {"token": "token"}
+        timeout_thread.join(2)
+        assert not timeout_thread.is_alive() and len(errors) == 1
+        assert isinstance(errors[0], BridgeQueryTimeout)
     finally:
         client.close()
         assert server.stop(timeout=2)
@@ -148,9 +159,19 @@ def test_late_write_receipt_does_not_retry_or_complete_next_request():
         session = SessionDescriptor("2" * 32, "3" * 32, 1, 0)
         write_frame(client, make_envelope(SESSION_OPEN, hello.connection_epoch, 2, session=session))
         wait_until(lambda: server._session is not None)
-        with pytest.raises(BridgeQueryTimeout):
-            server.undo("old", timeout=0.1)
+        errors = []
+        def invoke_old():
+            try:
+                server.undo("old", timeout=1.5)
+            except Exception as exc:
+                errors.append(exc)
+        old_thread = threading.Thread(target=invoke_old)
+        old_thread.start()
         old = read_until(client, WRITE_REQUEST)
+        assert old.payload.arguments == {"token": "old"}
+        old_thread.join(2)
+        assert not old_thread.is_alive() and len(errors) == 1
+        assert isinstance(errors[0], BridgeQueryTimeout)
         assert not server._pending
         result = []
         thread = threading.Thread(target=lambda: result.append(server.undo("new", timeout=2)))

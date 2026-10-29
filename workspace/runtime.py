@@ -82,7 +82,14 @@ class FrontdeskService:
                 if event is None:
                     raise KeyError("Unknown event")
                 progress = await self.call("progress", game.colony_id, anchor_seq(event)) if event["kind"] == RUN_EVENT else []
-                return {"original": recall([event], args["event_seq"], args.get("tool_call_id"), progress=progress, part=args.get("part", "result")), "historical": True, "current_observation": False}
+                original = recall([event], args["event_seq"], args.get("tool_call_id"), progress=progress, part=args.get("part", "result"))
+                result = {"original": original, "historical": True, "current_observation": False}
+                if event["kind"] == RUN_EVENT and args.get("tool_call_id") and args.get("part", "result") == "result":
+                    for message in event["payload"]["messages"]:
+                        for call in message.get("tool_calls", []):
+                            if call.get("id") == args["tool_call_id"]:
+                                result["original_tool"] = call.get("function", {}).get("name")
+                return result
             except (ValueError, KeyError) as error:
                 raise ToolExecutionError("recall_invalid", str(error)) from error
 

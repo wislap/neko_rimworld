@@ -1405,10 +1405,7 @@ class NekoRimworldPlugin(NekoPluginBase):
         game = getattr(self._bridge, "session", None)
         if game is None or (bound_game is not None and (game.colony_id, game.load_epoch) != (bound_game.colony_id, bound_game.load_epoch)):
             self._autoplay_fault["pause"] = "unconfirmed" if endpoint else "unknown"
-            if endpoint:
-                self._notify_endpoint_failure(role, code, "pause unconfirmed")
-            else:
-                self._notify_autoplay_stop(role, code)
+            await self._audit_failure_notification(scheduler, bound_game, role, code, kind, "pause unconfirmed")
             return
         try:
             await scheduler.service.call("record", game.colony_id, game.load_epoch, game.game_tick,
@@ -1431,11 +1428,34 @@ class NekoRimworldPlugin(NekoPluginBase):
                     self._autoplay_fault["pause"] = "unconfirmed"
                 else:
                     self._autoplay_fault["record"] = "unconfirmed"
-        if endpoint:
-            pause_text = "pause requested" if self._autoplay_fault["pause"] == "requested" else "pause unconfirmed"
-            self._notify_endpoint_failure(role, code, pause_text)
-        else:
-            self._notify_autoplay_stop(role, code)
+        pause_text = "pause requested" if self._autoplay_fault["pause"] == "requested" else "pause unconfirmed"
+        await self._audit_failure_notification(scheduler, bound_game or game, role, code, kind, pause_text)
+
+    async def _audit_failure_notification(self, scheduler, game, role, code, kind, pause_text):
+        text = (f"RimWorld autoplay: {role} model endpoint failed ({code}); {pause_text}." if kind == "endpoint"
+                else f"RimWorld autoplay stopped: {role}, {code}. Game pause state is unknown.")
+        payload = {"role": role, "code": code, "kind": kind, "text": text, "ai_behavior": "blind",
+                   "origin_connection_epoch": getattr(game, "connection_epoch", None),
+                   "scope_kind": "failure_origin", "host_delivery_binding": "unavailable",
+                   "outcome_meaning": "Local SDK submission only; user consumption is not confirmed."}
+        async def record(phase, outcome=None):
+            if game is None or not hasattr(game, "game_tick"):
+                self._autoplay_fault["notification_record"] = "unknown"
+                return
+            try:
+                await scheduler.service.call("record", game.colony_id, game.load_epoch, game.game_tick,
+                    "plugin", "autoplay.failure_notification", {**payload, "phase": phase, **({"outcome": outcome} if outcome else {})})
+            except Exception:
+                self._autoplay_fault["notification_record"] = "unknown"
+        await record("attempting")
+        try:
+            submission = self.ctx.push_message(source="neko_rimworld", visibility=["chat"], ai_behavior="blind",
+                parts=[{"type": "text", "text": text}])
+            outcome = "submitted" if isinstance(submission, dict) and submission.get("submitted") is True else "rejected"
+        except Exception:
+            outcome = "unknown"
+        self._autoplay_fault["notification"] = outcome
+        await record("result", outcome)
 
     def _notify_endpoint_failure(self, role, code, pause_text):
         try:

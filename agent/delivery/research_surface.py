@@ -20,6 +20,7 @@ class ReadOnlyResearchSurface:
             self.session.observations,
             self.update,
             answer_only=answer_only,
+            reference_session=self.session if getattr(self.session, "frontdesk_update_only", False) else None,
         )
 
     def tools(self):

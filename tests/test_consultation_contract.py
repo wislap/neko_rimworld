@@ -45,7 +45,7 @@ def test_execution_and_submission_have_one_current_contract():
     }
     assert set(inspect.signature(AgentRuntime.run).parameters) == {"self", "question", "settings", "capabilities"}
     assert set(inspect.signature(AgentRuntime.execute).parameters) == {"self", "session", "settings"}
-    assert set(inspect.signature(make_submission_tool).parameters) == {"draft", "observations", "on_update", "answer_only"}
+    assert set(inspect.signature(make_submission_tool).parameters) == {"draft", "observations", "on_update", "answer_only", "reference_session"}
     assert set(inspect.signature(SubmissionDraft.apply).parameters) == {"self", "patch", "observations"}
     schema = make_submission_tool(SubmissionDraft(), []).parameters
     assert schema["properties"]["answer"]["type"] == "string"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import copy
 import threading
 from collections.abc import Mapping
@@ -33,42 +34,55 @@ class BridgeGameWritePort:
     def capabilities(self) -> frozenset[str]:
         return self._capabilities
 
-    async def _call(self, method: str, *args: Any) -> Mapping[str, Any]:
+    async def _call(self, method: str, *args: Any, audit=None) -> Mapping[str, Any]:
         cancel_event = threading.Event()
+        loop = asyncio.get_running_loop()
+        def dispatch(request_id, timeout, cancellation):
+            if audit is None:
+                return
+            future = asyncio.run_coroutine_threadsafe(audit("queued", request_id, None), loop)
+            try:
+                future.result(timeout=timeout)
+            except concurrent.futures.TimeoutError as exc:
+                future.cancel()
+                raise ToolExecutionError("write_audit_failed", "Write audit timed out before dispatch.", recoverable=False) from exc
         try:
             result = await asyncio.to_thread(
                 getattr(self._bridge, method), *args,
                 expected_connection=self._connection, expected_session=self._session, cancel_event=cancel_event,
+                **({"audit_dispatch": dispatch} if audit is not None else {}),
             )
         except asyncio.CancelledError:
             # The bridge removes requests that have not crossed the dispatch boundary.
             # Once dispatched, cancellation cannot establish the write outcome.
             self._bridge.cancel_write(cancel_event)
             raise
+        if audit is not None:
+            await audit("envelope", result.request_id, result.to_dict())
         payload = result.payload
         if payload.status != "ok":
             raise ToolExecutionError(payload.error_code or payload.status or "write_failed", payload.message or "Game write failed.")
         return copy.deepcopy(payload.data)
 
-    async def dry_run(self, changeset: Mapping[str, Any]) -> Mapping[str, Any]:
-        return await self._changeset("dry_run", changeset)
+    async def dry_run(self, changeset: Mapping[str, Any], *, audit=None) -> Mapping[str, Any]:
+        return await self._changeset("dry_run", changeset, audit=audit)
 
-    async def commit(self, changeset: Mapping[str, Any]) -> Mapping[str, Any]:
-        return await self._changeset("commit", changeset)
+    async def commit(self, changeset: Mapping[str, Any], *, audit=None) -> Mapping[str, Any]:
+        return await self._changeset("commit", changeset, audit=audit)
 
-    async def _changeset(self, method: str, changeset: Mapping[str, Any]) -> Mapping[str, Any]:
+    async def _changeset(self, method: str, changeset: Mapping[str, Any], *, audit=None) -> Mapping[str, Any]:
         body = copy.deepcopy(dict(changeset))
         if body.get("load_epoch") != self._session.load_epoch:
             raise ToolExecutionError("stale_epoch", "Changeset does not belong to the bound game session.")
         try:
-            return await self._call(method, body)
+            return await self._call(method, body, audit=audit)
         except BridgeQueryTimeout as exc:
             if method != 'commit':
                 raise
             raise ReceiptLost(body['idempotency_key']) from exc
 
-    async def undo(self, token: str) -> Mapping[str, Any]:
-        return await self._call("undo", token)
+    async def undo(self, token: str, *, audit=None) -> Mapping[str, Any]:
+        return await self._call("undo", token, audit=audit)
 
     async def set_paused(self, paused: bool, *, role: str) -> Mapping[str, Any]:
         if role == "policy" and (not paused or "colony_pause.policy.v1" not in self._capabilities):
