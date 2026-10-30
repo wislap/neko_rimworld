@@ -138,6 +138,12 @@ AUTOPLAY_FRONTDESK = (
     "Tell the user when a choice requires "
     "their decision. message_planner wakes the planner: send material new information or urgent risks, user intents or decisions "
     "requiring coordination, but routine confirmations with no such new information need no wake. "
+    "If the user explicitly permits continued observation without waiting for an unsupported action, "
+    "record the unresolved fact and reason in the existing board or a handoff; do not claim the action happened. "
+    "If continued observation is authorized and a pause is confirmed to belong to the frontdesk, "
+    "ask the planner through message_planner to verify the owner and consider guarded recovery; "
+    "you cannot resume it yourself. Do not request recovery of a user, unknown or policy pause, "
+    "or treat authorization to observe as permission to bypass a force pause. "
     "Finish with submit_response when a reply is needed or update_only otherwise. "
     "By default prioritize survival and stability, do not eat human meat and do not harvest organs from living "
     "people; the user can change these defaults. Write in the user's language and distinguish orders, receipts "
@@ -157,7 +163,12 @@ AUTOPLAY_PLANNER = (
     "Send questions requiring user judgment through the frontdesk. message_frontdesk wakes the frontdesk: "
     "send material new information or urgent risks, user intents or decisions requiring coordination, but routine confirmations "
     "with no such new information need no wake. End with planner_yield and a nonempty "
-    "handoff describing progress, next steps and unresolved decisions.\n"
+    "handoff describing progress, next steps and unresolved decisions. "
+    "If the user explicitly permits continued observation without waiting for an unsupported action, "
+    "record the unresolved fact and reason on the existing board or in the handoff; do not claim the action happened. "
+    "When asked to recover a frontdesk-owned pause, verify the current owner and authorization, then use "
+    "the guarded pause tool only if supported and permitted. Never bypass a user, unknown or policy pause "
+    "or a native force pause; if ownership or recovery cannot be confirmed, record the uncertainty and leave it paused.\n"
 )
 
 def build_system_prompt(*, persistent_work=False, role="frontdesk", planner_loop=False, autoplay=False) -> str:

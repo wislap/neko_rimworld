@@ -74,6 +74,13 @@ and field. A request or intent alone is not a completed handback. Export failure
 preserve the existing response and add bounded failure-stage diagnostics; when the
 stored report cannot be read, its retention is reported as unknown.
 
+When the user explicitly permits continued observation, roles record unsupported
+actions and their reasons in the existing board or handoff. The frontdesk requests
+planner review of its pause; the planner checks authorization and native ownership
+before guarded recovery. This does not grant missing game actions or permission to
+bypass user, unknown, policy or forced pauses. Isolated bench operator recovery is
+recorded separately and does not prove model autonomy.
+
 The existing `rimworld_consult(question)` entry and shared runtime remain the
 only consultation path. Situation preparation below is distinct from the five
 domains: their detailed state is read only when requested, without automatic
