@@ -189,10 +189,12 @@ class FrontdeskService:
                             if set(args) != {"text"} or not isinstance(text, str) or not text.strip():
                                 raise ToolExecutionError("invalid_tool_arguments", "A nonempty message is required.")
                             return {"wake_seq": await wake_planner(text)}
-                        session.capabilities += (ToolSpec("message_planner", "Send a message to the planner.",
+                        session.capabilities += (ToolSpec("message_planner", "Send a message and wake the planner. Use for material new information, urgent risks, "
+                            "user intents or decisions requiring coordination; routine confirmations without such new information need no wake.",
                             {"type": "object", "properties": {"text": {"type": "string", "minLength": 1}},
                              "required": ["text"], "additionalProperties": False}, message_planner),)
-                    session.capabilities += (ToolSpec("update_only", "End without a user reply after updating the board.",
+                    session.capabilities += (ToolSpec("update_only", "End without a user reply after any needed board updates; "
+                                                     "routine confirmations need no planner message. Already sent messages and wakes remain in effect.",
                                                      {"type": "object", "properties": {}, "additionalProperties": False},
                                                      update_only, terminal=True),)
                     session.frontdesk_update_only = True

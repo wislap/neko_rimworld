@@ -644,7 +644,8 @@ class ColonyScheduler:
             return {"wake_seq": await self.wake_frontdesk(game, text, source="planner")}
 
         capabilities = (
-            ToolSpec("message_frontdesk", "Send a message to the frontdesk.",
+            ToolSpec("message_frontdesk", "Send a message and wake the frontdesk. Use for material new information, urgent risks, "
+                     "user intents or decisions requiring coordination; routine confirmations without such new information need no wake.",
                      {"type": "object", "properties": {"text": {"type": "string", "minLength": 1}},
                       "required": ["text"], "additionalProperties": False}, message_frontdesk),
             ToolSpec("planner_board", "Read or revise strategy and task entries on the colony board. "
@@ -654,7 +655,9 @@ class ColonyScheduler:
                      "Verified needs matching observations from a later game tick; yield and recheck in a later run if time must advance.",
                      {"type": "object", "properties": {"action": {"type": "string", "enum": ["read", "write"]},
                       "entry": entry_schema(PLANNER)}, "required": ["action"], "additionalProperties": False}, board_tool),
-            ToolSpec("planner_yield", "Finish this run with progress, next steps and undecided thoughts.",
+            ToolSpec("planner_yield", "Finish this run with a handoff of progress, next steps and undecided thoughts. "
+                     "The handoff is saved and does not wake the frontdesk. Record decisions and progress on the board; "
+                     "routine confirmations need no frontdesk message.",
                      {"type": "object", "properties": {"handoff": {"type": "string", "minLength": 1}},
                       "required": ["handoff"], "additionalProperties": False}, yield_tool, terminal=True),
         )
