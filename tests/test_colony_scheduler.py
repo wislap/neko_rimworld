@@ -323,11 +323,11 @@ async def test_pause_tool_uses_trusted_role_and_opt_in(monkeypatch):
     from ..tool_contracts import ToolExecutionError, ToolSetup
 
     class Port:
-        capabilities = {"colony_pause.v1"}
+        capabilities = {"colony_pause.v1", "colony_pause.resume_guard.v1"}
         def __init__(self):
             self.calls = []
-        async def set_paused(self, paused, *, role):
-            self.calls.append((paused, role))
+        async def set_paused(self, paused, *, role, expected_owner=None):
+            self.calls.append((paused, role, expected_owner))
             return {"paused": paused}
     port = Port()
     monkeypatch.setattr(environment, "semantic_interaction_factory", lambda *args: object())
@@ -344,8 +344,8 @@ async def test_pause_tool_uses_trusted_role_and_opt_in(monkeypatch):
     await tool.handler({"paused": True})
     session.role = "planner"
     planner_tool = environment.ExecutionEnvironment(setup, session, None).write_tools[0]
-    await planner_tool.handler({"paused": False})
-    assert port.calls == [(True, "frontdesk"), (False, "planner")]
+    await planner_tool.handler({"paused": False, "expected_owner": "frontdesk"})
+    assert port.calls == [(True, "frontdesk", None), (False, "planner", "frontdesk")]
 
 @pytest.mark.asyncio
 async def test_native_event_pump_persists_sample_and_installs_and_clears_policy(tmp_path):

@@ -1489,6 +1489,10 @@ class NekoRimworldPlugin(NekoPluginBase):
             return {"status": "unavailable", "reason": "no_host_run"}
         try:
             record = await asyncio.to_thread(self._reports.read, report_id)
+        except Exception:
+            return {"status": "unavailable", "reason": "export_failed", "report_retained": None,
+                    "diagnostic": {"stage": "report_read", "kind": "error"}}
+        try:
             outcome = await asyncio.wait_for(
                 self.export_push(
                     export_type="text",
@@ -1503,10 +1507,21 @@ class NekoRimworldPlugin(NekoPluginBase):
                 timeout=2.5,
             )
             if isinstance(outcome, Mapping) and outcome.get("success") is False:
-                raise RuntimeError("export rejected")
+                return {"status": "unavailable", "reason": "export_failed", "report_retained": True,
+                        "diagnostic": {"stage": "export_push", "kind": "rejected"}}
             return {"status": "exported"}
-        except Exception:
-            return {"status": "unavailable", "reason": "export_failed", "report_retained": True}
+        except Exception as error:
+            diagnostic = {"stage": "export_push", "kind": "error"}
+            if isinstance(error, (asyncio.TimeoutError, TimeoutError)):
+                diagnostic["kind"] = "timeout"
+            elif isinstance(error, SdkError):
+                diagnostic["kind"] = "sdk_error"
+                # SDK code values can be arbitrary strings; expose only recognized constants.
+                code = getattr(error, "code", None)
+                if isinstance(code, str) and code in {"TIMEOUT", "CAPABILITY_UNAVAILABLE", "TRANSPORT_ERROR"}:
+                    diagnostic["sdk_code"] = code
+            return {"status": "unavailable", "reason": "export_failed", "report_retained": True,
+                    "diagnostic": diagnostic}
 
     @ui.action(id="rimworld_report", label="Read saved reports", refresh_context=False)
     @plugin_entry(

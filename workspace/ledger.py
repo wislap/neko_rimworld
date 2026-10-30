@@ -448,10 +448,13 @@ class EventLedger:
         ).fetchone()
         return _revision(row) if row is not None else None
 
-    def revisions(self, colony_id):
-        rows = self.db.execute(
-            "SELECT * FROM board_revisions WHERE colony_id=? ORDER BY entry_id, revision", (colony_id,)
-        )
+    def revisions(self, colony_id, *, kind=None):
+        sql = "SELECT * FROM board_revisions WHERE colony_id=?"
+        params = [colony_id]
+        if kind is not None:
+            sql += " AND kind=?"
+            params.append(kind)
+        rows = self.db.execute(sql + " ORDER BY entry_id, revision", params)
         return [_revision(row) for row in rows]
 
     def add_revision(self, colony_id, event_seq, row):

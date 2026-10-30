@@ -596,6 +596,8 @@ class ColonyScheduler:
         context = {"strategy": [e for e in board if e["kind"] == "strategy" and e["status"] != "closed"],
                    "tasks": [e for e in board if e["kind"] == "task" and e["status"] != "closed"],
                    "intents": intents, "intent_utterances": words,
+                   "intent_source_history": await self.service.call("intent_source_history", game.colony_id,
+                                                                    referenced=[word["seq"] for word in words if word]),
                    "takeovers": await self.service.call("takeovers", game.colony_id),
                    "review_marks": await self.service.call("review_marks", game.colony_id),
                    "recent_closed": sorted((e for e in board if e["status"] == "closed"

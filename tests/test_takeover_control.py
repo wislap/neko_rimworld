@@ -67,7 +67,10 @@ async def test_takeover_return_and_new_write():
     async def setup():
         return Setup()
     tool = return_capability(journal, Game(), {42}, setup)
-    await tool.handler({"takeover_seq": takeover, "utterance_seq": 42})
+    returned = await tool.handler({"takeover_seq": takeover, "utterance_seq": 42})
+    assert returned == {"event_seq": journal.events[-1]["seq"], "takeover_seq": takeover,
+                        "utterance_seq": 42, "object": "p", "field": "work"}
+    assert journal.events[-1]["kind"] == "user.return"
     await control.guard_changeset({"ops": [{}]})
     row.update(value=3, current_value=3, changeset_id="two", tick=11)
     await control.guard_changeset({"ops": [{}]})
@@ -229,3 +232,22 @@ async def test_task_guard_accepts_current_open_planner_task():
             return [{"entry_id": "t", "author": "planner", "kind": "task", "status": "open"}]
     control = TakeoverControl(BoardJournal(), None, lambda: ("c", "x", "e"), None)
     await control.guard_task("t")
+
+
+@pytest.mark.asyncio
+async def test_return_request_without_open_takeover_cannot_produce_success_receipt():
+    journal = Journal()
+    async def provider():
+        return Observation({"ledger_status": "valid", "entries": []})
+    class Setup:
+        ledger_query = staticmethod(provider)
+        write_identity = staticmethod(lambda: ("c", "x", "e"))
+        write_fields_query = None
+    class Game:
+        colony_id, load_epoch, game_tick = "x", "e", 10
+    async def setup():
+        return Setup()
+    tool = return_capability(journal, Game(), {42}, setup)
+    with pytest.raises(ToolExecutionError, match="not open"):
+        await tool.handler({"takeover_seq": 9, "utterance_seq": 42})
+    assert not any(e["kind"] == "user.return" for e in journal.events)

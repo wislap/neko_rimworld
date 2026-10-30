@@ -65,10 +65,14 @@ def validate_request(mode, args):
         _fields(args, ("token",))
         _text(args["token"])
     elif mode == "set_paused":
-        _fields(args, ("paused", "role"))
+        guarded = isinstance(args, dict) and "expected_owner" in args
+        _fields(args, ("paused", "role", "expected_owner") if guarded else ("paused", "role"))
         if type(args["paused"]) is not bool or args["role"] not in ("planner", "frontdesk", "policy"):
             _bad()
         if args["role"] in ("frontdesk", "policy") and not args["paused"]:
+            _bad()
+        if guarded and (args["paused"] or args["role"] != "planner" or args["expected_owner"] not in
+                        ("planner", "frontdesk", "reflex", "automatic_letter")):
             _bad()
     else:
         _bad()
@@ -89,10 +93,14 @@ def validate_result(raw):
         _bad()
     kind = data.get("status")
     if kind is None and "status" not in data:
-        _fields(data, ("paused", "role"))
+        guarded = "expected_owner" in data
+        _fields(data, ("paused", "role", "expected_owner") if guarded else ("paused", "role"))
         if type(data["paused"]) is not bool or data["role"] not in ("planner", "frontdesk", "policy"):
             _bad()
         if data["role"] in ("frontdesk", "policy") and not data["paused"]:
+            _bad()
+        if guarded and (data["paused"] or data["role"] != "planner" or data["expected_owner"] not in
+                        ("planner", "frontdesk", "reflex", "automatic_letter")):
             _bad()
     elif kind in ("ok", "committed", "undone"):
         names = {"ok": ("status", "preview"), "committed": ("status", "changeset_id", "load_epoch", "readback", "undo_token"), "undone": ("status", "changeset_id", "load_epoch", "readback")}[kind]

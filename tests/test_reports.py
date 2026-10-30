@@ -246,3 +246,49 @@ async def test_successful_native_export_contains_unshortened_body_and_silent_del
     assert body in sent[0]["text"]
     assert sent[0]["delivery"] == "silent"
     assert sent[0]["run_id"] == "host-run"
+
+
+@pytest.mark.asyncio
+async def test_export_diagnostics_separate_failure_stage_without_exposing_errors():
+    from plugin.sdk.plugin import SdkError
+
+    plugin, _ = make_plugin({})
+    report_id = plugin._reports.save(record())['report_id']
+    context = {"run_id": "host-run"}
+
+    async def run_export(outcome):
+        async def export(**kwargs):
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+        plugin.export_push = export
+        return await plugin._export_report(report_id, context)
+
+    for outcome, expected in [
+        (TimeoutError("secret timeout"), {"stage": "export_push", "kind": "timeout"}),
+        ({"success": False, "message": "secret rejection"}, {"stage": "export_push", "kind": "rejected"}),
+        (SdkError("secret sdk", code="TRANSPORT_ERROR"),
+         {"stage": "export_push", "kind": "sdk_error", "sdk_code": "TRANSPORT_ERROR"}),
+        (SdkError("secret sdk", code="secret-code"), {"stage": "export_push", "kind": "sdk_error"}),
+        (RuntimeError("secret exception"), {"stage": "export_push", "kind": "error"}),
+    ]:
+        value = await run_export(outcome)
+        assert value == {"status": "unavailable", "reason": "export_failed", "report_retained": True,
+                         "diagnostic": expected}
+        assert "secret" not in str(value)
+    assert await run_export({"success": True}) == {"status": "exported"}
+    assert await plugin._export_report(report_id, {}) == {"status": "unavailable", "reason": "no_host_run"}
+    def failed_read(_):
+        raise OSError("secret path")
+    plugin._reports.read = failed_read
+    assert await plugin._export_report(report_id, context) == {
+        "status": "unavailable", "reason": "export_failed", "report_retained": None,
+        "diagnostic": {"stage": "report_read", "kind": "error"}}
+
+
+@pytest.mark.asyncio
+async def test_missing_report_export_does_not_claim_report_is_retained():
+    plugin, _ = make_plugin({})
+    outcome = await plugin._export_report("f" * 32, {"run_id": "host-run"})
+    assert outcome == {"status": "unavailable", "reason": "export_failed", "report_retained": None,
+                       "diagnostic": {"stage": "report_read", "kind": "error"}}

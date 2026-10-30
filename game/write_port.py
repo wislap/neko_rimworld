@@ -34,7 +34,7 @@ class BridgeGameWritePort:
     def capabilities(self) -> frozenset[str]:
         return self._capabilities
 
-    async def _call(self, method: str, *args: Any, audit=None) -> Mapping[str, Any]:
+    async def _call(self, method: str, *args: Any, audit=None, **arguments: Any) -> Mapping[str, Any]:
         cancel_event = threading.Event()
         loop = asyncio.get_running_loop()
         def dispatch(request_id, timeout, cancellation):
@@ -50,6 +50,7 @@ class BridgeGameWritePort:
             result = await asyncio.to_thread(
                 getattr(self._bridge, method), *args,
                 expected_connection=self._connection, expected_session=self._session, cancel_event=cancel_event,
+                **arguments,
                 **({"audit_dispatch": dispatch} if audit is not None else {}),
             )
         except asyncio.CancelledError:
@@ -84,9 +85,13 @@ class BridgeGameWritePort:
     async def undo(self, token: str, *, audit=None) -> Mapping[str, Any]:
         return await self._call("undo", token, audit=audit)
 
-    async def set_paused(self, paused: bool, *, role: str) -> Mapping[str, Any]:
+    async def set_paused(self, paused: bool, *, role: str, expected_owner: str | None = None) -> Mapping[str, Any]:
         if role == "policy" and (not paused or "colony_pause.policy.v1" not in self._capabilities):
             raise ToolExecutionError("unsupported", "Policy pause is unavailable.")
+        if expected_owner is not None:
+            if "colony_pause.resume_guard.v1" not in self._capabilities:
+                raise ToolExecutionError("unsupported", "Guarded pause recovery is unavailable.")
+            return await self._call("set_paused", paused, role, expected_owner=expected_owner)
         return await self._call("set_paused", paused, role)
 
     async def events(self, since: int = 0) -> list[Mapping[str, Any]]:

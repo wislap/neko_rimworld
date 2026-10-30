@@ -41,11 +41,14 @@ def return_capability(service, game, received_utterances, setup_provider=None):
                                      raw["response"]["game_tick"], takeover_seq=takeover_seq,
                                      utterance_seq=utterance_seq,
                                      accepted_baseline={"field": rows[0], "observation": raw})
-            return {"event_seq": seq}
+            return {"event_seq": seq, "takeover_seq": takeover_seq, "utterance_seq": utterance_seq,
+                    "object": key[0], "field": key[1]}
         except (ValueError, KeyError) as error:
             raise ToolExecutionError("return_invalid", str(error)) from error
 
-    return ToolSpec("return_takeover", "Return a taken-over field only when the user requests it in words received in this run.",
+    return ToolSpec("return_takeover", "Return an open taken-over field only when the user requests it in words received in this run. "
+                    "Only a successful result confirms a recorded return; cite its event_seq, object and field. "
+                    "A user request, intent or lack of an open takeover does not itself confirm a return.",
                     {"type": "object", "properties": {"takeover_seq": {"type": "integer"},
                      "utterance_seq": {"type": "integer"}}, "required": ["takeover_seq", "utterance_seq"],
                      "additionalProperties": False}, release, exclusive=True)

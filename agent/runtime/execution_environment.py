@@ -28,11 +28,21 @@ class ExecutionEnvironment:
                 and "colony_pause.v1" in getattr(port, "capabilities", ())):
             async def set_paused(args):
                 paused = args.get("paused")
-                if type(paused) is not bool or set(args) != {"paused"}:
+                expected_owner = args.get("expected_owner")
+                if type(paused) is not bool or set(args) - {"paused", "expected_owner"}:
                     raise ToolExecutionError("invalid_tool_arguments", "paused must be a boolean")
                 if session.role == "frontdesk" and not paused:
                     raise ToolExecutionError("pause_forbidden", "The frontdesk may only pause.")
+                if paused and "expected_owner" in args:
+                    raise ToolExecutionError("invalid_tool_arguments", "expected_owner is only for recovery.")
+                if not paused:
+                    if expected_owner not in ("planner", "frontdesk", "reflex", "automatic_letter"):
+                        raise ToolExecutionError("pause_owner_required", "Name the currently observed, authorized agent pause owner; never user, unknown or policy.")
+                    if "colony_pause.resume_guard.v1" not in port.capabilities:
+                        raise ToolExecutionError("unsupported", "This Mod cannot atomically guard pause recovery; explicit operator recovery is required.")
                 request = {"paused": paused, "role": session.role}
+                if not paused:
+                    request["expected_owner"] = expected_owner
                 try:
                     if session.persist_progress is not None:
                         await session.persist_progress({"pause_request": request})
@@ -40,7 +50,7 @@ class ExecutionEnvironment:
                     session.write_record_issue = "prepared"
                     raise
                 try:
-                    result = await port.set_paused(paused, role=session.role)
+                    result = await port.set_paused(paused, role=session.role, **({"expected_owner": expected_owner} if not paused else {}))
                 except ToolExecutionError:
                     raise
                 except BaseException:
@@ -56,8 +66,9 @@ class ExecutionEnvironment:
                 return result
 
             self.write_tools = (ToolSpec("set_paused", "Pause the game" +
-                (" or resume an agent-owned pause" if session.role == "planner" else "") + ".",
-                {"type": "object", "properties": {"paused": {"type": "boolean"}},
+                (" or resume a currently observed and user-authorized agent pause. Recovery requires expected_owner and native atomic support; user, unknown, policy and force pauses cannot be recovered. A changed owner rejects the request; do not retry blindly" if session.role == "planner" else "") + ".",
+                {"type": "object", "properties": {"paused": {"type": "boolean"},
+                    **({"expected_owner": {"type": "string", "enum": ["planner", "frontdesk", "reflex", "automatic_letter"]}} if session.role == "planner" else {})},
                  "required": ["paused"], "additionalProperties": False}, set_paused, exclusive=True),)
         if (session.role == "planner" and setup.write_catalog is not None
                 and setup.write_port is not None and setup.write_identity is not None

@@ -54,6 +54,7 @@ class ScriptedGameWorld:
         self._tick = 0
         self._serial = 0
         self._paused = False
+        self._pause_owner = "none"
         self._values: dict[Address, Any] = {}
         self._origin: dict[Address, tuple[str, int]] = {}
         self._ledger: dict[Address, dict[str, Any]] = {}
@@ -68,7 +69,7 @@ class ScriptedGameWorld:
         self._lose_next_receipt = False
         self._fail_after: int | None = None
 
-    capabilities = frozenset({"colony_write.transactions.v1", "colony_events.v1", "colony_pause.v1", "colony_pause.policy.v1"})
+    capabilities = frozenset({"colony_write.transactions.v1", "colony_events.v1", "colony_pause.v1", "colony_pause.policy.v1", "colony_pause.resume_guard.v1"})
 
     @property
     def load_epoch(self) -> str:
@@ -230,15 +231,21 @@ class ScriptedGameWorld:
         self._emit("policy_changed", dict(policy))
         return copy.deepcopy(dict(policy))
 
-    async def set_paused(self, paused: bool, *, role: str) -> dict[str, Any]:
+    async def set_paused(self, paused: bool, *, role: str, expected_owner: str | None = None) -> dict[str, Any]:
         if not isinstance(paused, bool) or role not in ("frontdesk", "planner", "policy") or (role in ("frontdesk", "policy") and not paused):
             raise ToolExecutionError("invalid_argument", "paused must be a boolean.")
+        if expected_owner is not None:
+            if paused or role != "planner" or expected_owner not in ("planner", "frontdesk", "reflex", "automatic_letter"):
+                raise ToolExecutionError("invalid_argument", "Invalid expected pause owner.")
+            if not self._paused or self._pause_owner != expected_owner:
+                raise ToolExecutionError("pause_owner_changed", "The expected agent pause is no longer current.")
         changed = self._paused != paused
         self._paused = paused
         if changed:
+            self._pause_owner = role if paused else "none"
             self._emit("pause_changed", {"paused": paused, "speed_paused": paused,
                                          "force_paused": False, "windows_force_paused": False, "source": role})
-        return {"paused": paused, "role": role}
+        return {"paused": paused, "role": role, **({"expected_owner": expected_owner} if expected_owner is not None else {})}
 
     def _run_hooks(self, point: str) -> None:
         actions, self._hooks[point] = self._hooks[point], []

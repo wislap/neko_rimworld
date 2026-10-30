@@ -380,8 +380,13 @@ class BridgeServer:
     def undo(self, token: str, timeout: float = 3.0, *, expected_connection=None, expected_session=None, cancel_event=None, audit_dispatch=None) -> Envelope:
         return self._request("undo", {"token": token}, timeout, write=True, expected_connection=expected_connection, expected_session=expected_session, cancel_event=cancel_event, audit_dispatch=audit_dispatch)
 
-    def set_paused(self, paused: bool, role: str, timeout: float = 3.0, *, expected_connection=None, expected_session=None, cancel_event=None) -> Envelope:
-        return self._request("set_paused", {"paused": paused, "role": role}, timeout, write=True, expected_connection=expected_connection, expected_session=expected_session, cancel_event=cancel_event)
+    def set_paused(self, paused: bool, role: str, timeout: float = 3.0, *, expected_owner: str | None = None, expected_connection=None, expected_session=None, cancel_event=None) -> Envelope:
+        arguments = {"paused": paused, "role": role}
+        if expected_owner is not None:
+            if "colony_pause.resume_guard.v1" not in self.capabilities:
+                raise BridgeUnsupportedError("Guarded pause recovery is unavailable.")
+            arguments["expected_owner"] = expected_owner
+        return self._request("set_paused", arguments, timeout, write=True, expected_connection=expected_connection, expected_session=expected_session, cancel_event=cancel_event)
 
     def push_policy(self, policy: dict[str, Any], timeout: float = 3.0, *, expected_connection=None, expected_session=None, cancel_event=None) -> Envelope:
         return self._request("policy", policy, timeout, write=False, policy=True, expected_connection=expected_connection, expected_session=expected_session, cancel_event=cancel_event)

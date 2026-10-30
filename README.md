@@ -56,6 +56,24 @@ Background replies use the existing frontdesk delivery and local SDK submission
 receipt. A successful local submission does not prove a connected client or user
 received the message.
 
+Current source preserves the original user sources of each active intent across
+revisions and the recent-history window. Both roles share the same journal view;
+repeated words are referenced once, and closing an intent ends its pinned source
+history. Reopening starts a new history. Earlier words remain historical and may
+have been amended or withdrawn; their presence does not independently grant authority.
+
+Model-driven pause recovery requires an explicit `expected_owner` and the Mod's
+`colony_pause.resume_guard.v1` capability. The game checks the owner in the same
+main-thread action that resumes, rejecting changed, user, unknown, policy or forced
+pauses. Older Mods still support pausing and their existing wire contract, but the
+new model tool does not fall back to unguarded recovery. The model must also respect
+the user's narrower authorization; naming an owner does not itself grant permission.
+
+An actual `return_takeover` receipt identifies the recorded return, its user words
+and field. A request or intent alone is not a completed handback. Export failures
+preserve the existing response and add bounded failure-stage diagnostics; when the
+stored report cannot be read, its retention is reported as unknown.
+
 The existing `rimworld_consult(question)` entry and shared runtime remain the
 only consultation path. Situation preparation below is distinct from the five
 domains: their detailed state is read only when requested, without automatic
