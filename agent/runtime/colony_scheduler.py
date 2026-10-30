@@ -115,7 +115,8 @@ class ColonyScheduler:
         if request_id is not None:
             if source != "user" or not isinstance(request_id, str) or not request_id:
                 raise ValueError("A request identity is only valid for user messages")
-            events = await self.service.call("events", current.colony_id)
+            events = await self.service.call("events_by_kind", current.colony_id,
+                                             ("user.utterance", "frontdesk.wake"))
             matches = {event["seq"] for event in events if event["kind"] == "user.utterance"
                        and event["load_epoch"] == current.load_epoch
                        and event["payload"].get("request_id") == request_id
@@ -396,29 +397,30 @@ class ColonyScheduler:
             raise ValueError("The active colony changed before frontdesk execution")
         run_scope = await self._check_autoplay_binding(current)
         await self.service.settle_pending(game.colony_id)
-        events = await self.service.call("events", game.colony_id)
-        cursor = max((e["payload"]["through_seq"] for e in events
-                      if e["kind"] == "frontdesk.scheduler_consumed"), default=0)
-        wakes = [e for e in events if e["kind"] == "frontdesk.wake" and e["seq"] > cursor]
+        highwater = await self.service.call("event_highwater", game.colony_id)
+        consumed_events = await self.service.call("events_by_kind", game.colony_id, ("frontdesk.scheduler_consumed",))
+        cursor = max((e["payload"]["through_seq"] for e in consumed_events if e["seq"] <= highwater), default=0)
+        wakes = await self.service.call("events_by_kind", game.colony_id, ("frontdesk.wake",), after_seq=cursor)
+        wakes = [e for e in wakes if e["seq"] <= highwater]
+        if not wakes:
+            return
         # A prepared reply survives a reload and must be acknowledged before
         # any newer wake can advance the consumption cursor.
         for wake in wakes:
-            runs = [e for e in events if e["kind"] == "agent.run"
-                    and anchor_seq(e) == anchor_seq(wake)
-                    and (e["payload"].get("result") or {}).get("status") == "ok"]
-            if runs:
-                run = runs[-1]
-                delivered = [e["payload"]["wake_seq"] for e in events if e["kind"] == "frontdesk.inbox"
-                             and anchor_seq(e) == anchor_seq(wake)]
+            run = await self.service.call("successful_run", game.colony_id, anchor_seq(wake), through_seq=highwater)
+            if run:
+                inbox_events = await self.service.call("events_by_kind", game.colony_id, ("frontdesk.inbox",), anchor=anchor_seq(wake))
+                delivered = [e["payload"]["wake_seq"] for e in inbox_events if e["seq"] <= highwater]
                 binding = SimpleNamespace(colony_id=game.colony_id, load_epoch=run["load_epoch"],
                                           game_tick=run["game_tick"])
-                bindings = [e for e in events if e["kind"] == "frontdesk.run_binding"
-                            and e["payload"].get("wake_seq") == wake["seq"] and e["seq"] < run["seq"]]
+                binding_events = await self.service.call("events_by_kind", game.colony_id, ("frontdesk.run_binding",))
+                bindings = [e for e in binding_events if e["payload"].get("wake_seq") == wake["seq"] and e["seq"] < run["seq"]]
                 await self._offer_frontdesk(binding, run["game_tick"], wake["seq"],
                                             max([wake["seq"], *delivered]), run["payload"]["result"],
                                             connection=bindings[-1]["payload"]["connection"] if bindings else None)
                 return
-        marked = {e["payload"]["wake_seq"] for e in events if e["kind"] == "frontdesk.stale_wake"}
+        stale_events = await self.service.call("events_by_kind", game.colony_id, ("frontdesk.stale_wake",))
+        marked = {e["payload"]["wake_seq"] for e in stale_events if e["seq"] <= highwater}
         for event in wakes:
             if event["load_epoch"] != game.load_epoch and event["seq"] not in marked:
                 await self.service.call("record", game.colony_id, game.load_epoch, current.game_tick,
@@ -429,24 +431,12 @@ class ColonyScheduler:
         initial = pending[0]
         utterance = await self.service.call("event", game.colony_id, anchor_seq(initial))
         cursor = initial["seq"]
-        existing = [e for e in events if e["kind"] == "agent.run"
-                    and anchor_seq(e) == utterance["seq"]
-                    and (e["payload"].get("result") or {}).get("status") == "ok"]
-        if existing:
-            result = existing[-1]["payload"]["result"]
-            delivered = [e["payload"]["wake_seq"] for e in events if e["kind"] == "frontdesk.inbox"
-                         and anchor_seq(e) == utterance["seq"]]
-            cursor = max([cursor, *delivered])
-            await self._offer_frontdesk(game, current.game_tick, initial["seq"], cursor, result)
-            return
-
         intent_sources = {utterance["seq"]} if utterance["kind"] == "user.utterance" else set()
 
         async def inbox():
             nonlocal cursor
-            events = await self.service.call("events", game.colony_id)
-            incoming = [e for e in events if e["kind"] == "frontdesk.wake" and e["seq"] > cursor
-                        and e["load_epoch"] == game.load_epoch]
+            incoming = await self.service.call("events_by_kind", game.colony_id, ("frontdesk.wake",),
+                                               after_seq=cursor, load_epoch=game.load_epoch)
             messages = []
             for event in incoming:
                 original = await self.service.call("event", game.colony_id, anchor_seq(event))
@@ -555,10 +545,15 @@ class ColonyScheduler:
             last_tick = now.game_tick
             return last_tick
 
-        events = await self.service.call("events", colony_id)
-        consumed = max((e["payload"]["through_seq"] for e in events if e["kind"] == "planner.consumed"), default=0)
-        wakes = [e for e in events if e["kind"] == "planner.wake" and e["seq"] > consumed]
-        marked = {e["payload"]["wake_seq"] for e in events if e["kind"] == "planner.stale_wake"}
+        highwater = await self.service.call("event_highwater", colony_id)
+        consumed_events = await self.service.call("events_by_kind", colony_id, ("planner.consumed",))
+        consumed = max((e["payload"]["through_seq"] for e in consumed_events if e["seq"] <= highwater), default=0)
+        wakes = await self.service.call("events_by_kind", colony_id, ("planner.wake",), after_seq=consumed)
+        wakes = [e for e in wakes if e["seq"] <= highwater]
+        if not wakes:
+            return
+        stale_events = await self.service.call("events_by_kind", colony_id, ("planner.stale_wake",))
+        marked = {e["payload"]["wake_seq"] for e in stale_events if e["seq"] <= highwater}
         for event in wakes:
             if event["load_epoch"] != load_epoch and event["seq"] not in marked:
                 await self.service.call("record", colony_id, load_epoch, current_tick(), "plugin",
@@ -579,21 +574,25 @@ class ColonyScheduler:
         board = await self.service.call("board", game.colony_id)
         intents = [e for e in board if e["kind"] == "intent" and e["status"] != "closed"]
         words = [await self.service.call("event", game.colony_id, e["source"]["event_seq"]) for e in intents]
-        handoffs = [e for e in events if e["kind"] == "planner.yield"]
-        starts = [e for e in events if e["kind"] == "planner.started"]
-        ends = {e["payload"]["start_seq"] for e in events if e["kind"] == "planner.finished"
-                and e["payload"].get("result", {}).get("terminal", {}).get("kind") == "yield"}
+        projection = await self.service.call("events_by_kind", colony_id,
+                                             ("planner.yield", "planner.started", "autoplay.activation"))
+        projection = [e for e in projection if e["seq"] <= highwater]
+        handoffs = [e for e in projection if e["kind"] == "planner.yield"]
+        starts = [e for e in projection if e["kind"] == "planner.started"]
+        finished_events = await self.service.call("planner_finished_metadata", colony_id)
+        finished_events = [e for e in finished_events if e["seq"] <= highwater]
+        ends = {e["start_seq"] for e in finished_events if e["terminal_kind"] == "yield"}
         interrupted = []
         for entry in starts:
             if entry["seq"] in ends:
                 continue
-            finished = [e["seq"] for e in events if e["kind"] == "planner.finished"
-                        and e["payload"].get("start_seq") == entry["seq"]]
+            finished = [e["seq"] for e in finished_events if e["start_seq"] == entry["seq"]]
             later_starts = [e["seq"] for e in starts if e["seq"] > entry["seq"]]
-            end = finished[0] if finished else (min(later_starts) - 1 if later_starts else events[-1]["seq"])
+            end = finished[0] if finished else (min(later_starts) - 1 if later_starts else highwater)
             interrupted.append({"start_seq": entry["seq"], "end_seq": end})
-        ticks = {e["seq"]: e["game_tick"] for e in events}
-        activation = next((event for event in reversed(events) if event["kind"] == "autoplay.activation"), None)
+        ticks = await self.service.call("event_ticks", colony_id, [e["event_seq"] for e in board if e["status"] == "closed"])
+        ticks = {seq: tick for seq, tick in ticks.items() if seq <= highwater}
+        activation = next((event for event in reversed(projection) if event["kind"] == "autoplay.activation"), None)
         context = {"strategy": [e for e in board if e["kind"] == "strategy" and e["status"] != "closed"],
                    "tasks": [e for e in board if e["kind"] == "task" and e["status"] != "closed"],
                    "intents": intents, "intent_utterances": words,
@@ -674,9 +673,8 @@ class ColonyScheduler:
 
         async def inbox():
             nonlocal cursor
-            all_events = await self.service.call("events", game.colony_id)
-            incoming = [e for e in all_events if e["kind"] == "planner.wake" and e["seq"] > cursor
-                        and e["load_epoch"] == load_epoch]
+            incoming = await self.service.call("events_by_kind", game.colony_id, ("planner.wake",),
+                                               after_seq=cursor, load_epoch=load_epoch)
             if incoming:
                 cursor = incoming[-1]["seq"]
             messages = [{"role": "user", "name": "planner_inbox", "content":

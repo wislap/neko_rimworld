@@ -378,9 +378,51 @@ class EventLedger:
             by_index[row["idx"]].setdefault("tool_calls", []).append({"id": row["id"], "type": row["type"] or "function", "function": {"name": row["name"], "arguments": row["arguments"] or "{}"}})
         return messages
 
-    def events_by_kind(self, colony_id, kinds):
-        rows = self.db.execute("SELECT * FROM events WHERE colony_id=? AND kind IN (SELECT value FROM json_each(?)) ORDER BY seq", (colony_id, encode(list(kinds))))
+    def events_by_kind(self, colony_id, kinds, *, after_seq=0, load_epoch=None, anchor=None):
+        """Read selected full events, ordered by sequence, with optional scope filters."""
+        sql = ("SELECT * FROM events WHERE colony_id=? AND kind IN (SELECT value FROM json_each(?)) "
+               "AND seq>?")
+        params = [colony_id, encode(list(kinds)), after_seq]
+        if load_epoch is not None:
+            sql += " AND load_epoch=?"
+            params.append(load_epoch)
+        if anchor is not None:
+            sql += " AND CASE WHEN json_type(payload,'$.trigger_seq') IS NOT NULL THEN json_extract(payload,'$.trigger_seq') ELSE json_extract(payload,'$.utterance_seq') END=?"
+            params.append(anchor)
+        rows = self.db.execute(sql + " ORDER BY seq", params)
         return [_event(row) for row in rows]
+
+    def event_highwater(self, colony_id):
+        return self.db.execute("SELECT coalesce(max(seq),0) FROM events WHERE colony_id=?", (colony_id,)).fetchone()[0]
+
+    def event_ticks(self, colony_id, seqs):
+        rows = self.db.execute(
+            "SELECT seq,game_tick FROM events WHERE colony_id=? AND seq IN (SELECT value FROM json_each(?))",
+            (colony_id, encode(list(seqs))))
+        return {row["seq"]: row["game_tick"] for row in rows}
+
+    def planner_finished_metadata(self, colony_id):
+        """Only fields needed to reconstruct unfinished planner ranges; never load audits."""
+        rows = self.db.execute(
+            "SELECT seq, json_extract(payload,'$.start_seq') AS start_seq, "
+            "json_extract(payload,'$.result.terminal.kind') AS terminal_kind "
+            "FROM events WHERE colony_id=? AND kind='planner.finished' ORDER BY seq", (colony_id,))
+        return [{"seq": row["seq"], "start_seq": row["start_seq"], "terminal_kind": row["terminal_kind"]}
+                for row in rows]
+
+    def successful_run(self, colony_id, anchor, *, through_seq=None):
+        """Latest successful frontdesk run for an anchor, with its complete result only."""
+        row = self.db.execute(
+            "SELECT seq,colony_id,load_epoch,game_tick,wall_time,source,kind, "
+            "json_extract(payload,'$.result') AS result FROM events "
+            "WHERE colony_id=? AND kind=? AND "
+            "CASE WHEN json_type(payload,'$.trigger_seq') IS NOT NULL THEN json_extract(payload,'$.trigger_seq') ELSE json_extract(payload,'$.utterance_seq') END=? "
+            "AND json_extract(payload,'$.result.status')='ok' AND (? IS NULL OR seq<=?) ORDER BY seq DESC LIMIT 1",
+            (colony_id, RUN_EVENT, anchor, through_seq, through_seq)).fetchone()
+        if row is None:
+            return None
+        return {**{key: row[key] for key in row.keys() if key != "result"},
+                "payload": {"result": json.loads(row["result"])}}
 
     def latest_event(self, colony_id, kind):
         row = self.db.execute("SELECT * FROM events WHERE kind=? AND colony_id=? ORDER BY seq DESC LIMIT 1", (kind, colony_id)).fetchone()

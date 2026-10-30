@@ -189,11 +189,14 @@ async def test_frontdesk_reply_requires_ack_and_replays_after_restart(tmp_path):
     assert delivery["result"]["terminal"]["kind"] == "reply"
     assert not any(e["kind"] == "frontdesk.scheduler_consumed" for e in await service.call("events", "colony"))
     await scheduler.close()
+    game.load_epoch = "new_epoch"
     scheduler = ColonyScheduler(service, settings())
     scheduler.start()
     scheduler.resume(game)
     replay = await asyncio.wait_for(scheduler.next_frontdesk_result(), 5)
     assert replay["delivery_id"] == seq and replay["result"]["answer"] == "Hello"
+    assert replay["load_epoch"] == "epoch"
+    assert not any(e["kind"] == "frontdesk.stale_wake" for e in await service.call("events", "colony"))
     assert len(model.requests) == 1
     await scheduler.ack_frontdesk_result(seq)
     assert any(e["kind"] == "frontdesk.scheduler_consumed" for e in await service.call("events", "colony"))
@@ -561,3 +564,48 @@ def test_epoch_change_is_distinguished_from_reconnect_snapshot(tmp_path):
     journal.ingest_game_event("c", "e2", 10, "b", snapshot("b", "e2", 2))
     assert [e["kind"] for e in journal.events("c")][-7:] == ["colony.load", "game.event", "wake.registered", "scheduler.default_review", "frontdesk.trigger", "frontdesk.wake", "planner.wake"]
     journal.close()
+
+
+@pytest.mark.asyncio
+async def test_idle_scheduler_does_not_decode_whole_journal(tmp_path):
+    game = SimpleNamespace(colony_id="colony", load_epoch="epoch", game_tick=10)
+    runtime = AgentRuntime(audit_registry=AgentAuditRegistry(), logger=FakeLogger(),
+                           model_factory=lambda _: Script([]), tools_provider=semantic_tool_provider())
+    service = FrontdeskService(tmp_path / "events.sqlite", runtime, game_session=lambda: game)
+    await service.call("record", "colony", "epoch", 10, "plugin", "unrelated", {"blob": "x" * 10000})
+    original = service.call
+    calls = []
+    async def checked(method, *args, **kwargs):
+        calls.append(method)
+        assert method != "events"
+        return await original(method, *args, **kwargs)
+    service.call = checked
+    scheduler = ColonyScheduler(service, settings())
+    await scheduler._run_colony(game)
+    await scheduler._frontdesk_colony(game)
+    assert "events_by_kind" in calls
+    assert "planner_finished_metadata" not in calls
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_frontdesk_snapshot_excludes_wake_appended_between_queries(tmp_path):
+    game = SimpleNamespace(colony_id="colony", load_epoch="epoch", game_tick=10)
+    runtime = AgentRuntime(audit_registry=AgentAuditRegistry(), logger=FakeLogger(),
+                           model_factory=lambda _: Script([]), tools_provider=semantic_tool_provider())
+    service = FrontdeskService(tmp_path / "events.sqlite", runtime, game_session=lambda: game)
+    original = service.call
+    inserted = []
+    async def interleave(method, *args, **kwargs):
+        result = await original(method, *args, **kwargs)
+        if method == "event_highwater" and not inserted:
+            utterance = await original("record_utterance", "colony", "epoch", 10, "late words")
+            inserted.append(await original("record", "colony", "epoch", 10, "plugin",
+                                           "frontdesk.wake", {"source": "user", "utterance_seq": utterance}))
+        return result
+    service.call = interleave
+    scheduler = ColonyScheduler(service, settings())
+    await scheduler._frontdesk_colony(game)
+    assert inserted and scheduler._pending_frontdesk is None
+    assert not any(e["kind"] == "frontdesk.stale_wake" for e in await original("events", "colony"))
+    await service.close()

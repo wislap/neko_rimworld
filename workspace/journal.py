@@ -309,8 +309,20 @@ class Journal:
     def event(self, colony_id, seq):
         return self._ledger.event(colony_id, seq)
 
-    def events_by_kind(self, colony_id, kinds):
-        return self._ledger.events_by_kind(colony_id, kinds)
+    def events_by_kind(self, colony_id, kinds, *, after_seq=0, load_epoch=None, anchor=None):
+        return self._ledger.events_by_kind(colony_id, kinds, after_seq=after_seq, load_epoch=load_epoch, anchor=anchor)
+
+    def event_highwater(self, colony_id):
+        return self._ledger.event_highwater(colony_id)
+
+    def event_ticks(self, colony_id, seqs):
+        return self._ledger.event_ticks(colony_id, seqs)
+
+    def planner_finished_metadata(self, colony_id):
+        return self._ledger.planner_finished_metadata(colony_id)
+
+    def successful_run(self, colony_id, anchor, *, through_seq=None):
+        return self._ledger.successful_run(colony_id, anchor, through_seq=through_seq)
 
     def latest_event(self, colony_id, kind):
         return self._ledger.latest_event(colony_id, kind)
