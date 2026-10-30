@@ -34,3 +34,62 @@ def test_targeted_events_and_metadata(tmp_path):
     assert ledger.successful_run("a", 9, through_seq=original["seq"]) == result
     assert ledger.successful_run("a", 999) is None
     ledger.close()
+
+
+def test_kind_queries_preserve_order_and_do_not_decode_unrelated_audits(tmp_path, monkeypatch):
+    from plugin.plugins.neko_rimworld.workspace import ledger as ledger_module
+
+    ledger = EventLedger(tmp_path / "events.sqlite")
+    ledger.append("a", "old", 1, "plugin", "wake", {"trigger_seq": 7})
+    ledger.append("a", "new", 2, "plugin", "agent.run", {"audit": "x" * 1_000_000})
+    ledger.append("a", "new", 3, "plugin", "start", {"trigger_seq": 7})
+    ledger.append("a", "new", 4, "plugin", "wake", {"trigger_seq": 8})
+    ledger.append("b", "new", 5, "plugin", "wake", {"trigger_seq": 7})
+    original = ledger.events("a")
+    decode = ledger_module._event
+    decoded_kinds = []
+    def checked(row):
+        decoded_kinds.append(row["kind"])
+        assert row["kind"] != "agent.run"
+        return decode(row)
+    monkeypatch.setattr(ledger_module, "_event", checked)
+    assert ledger.events_by_kind("a", []) == []
+    assert ledger.events_by_kind("a", ["wake", "start", "wake"]) == [e for e in original if e["kind"] in {"wake", "start"}]
+    assert ledger.events_by_kind("a", ["wake", "start"], after_seq=1, load_epoch="new", anchor=7) == [original[2]]
+    assert ledger.events_by_kind("a", ["missing"] * 1200 + ["wake"]) == [e for e in original if e["kind"] == "wake"]
+    assert set(decoded_kinds) == {"wake", "start"}
+    ledger.close()
+
+
+def test_interrupted_events_match_correlated_query_with_cross_epoch_and_null_anchors(tmp_path):
+    from plugin.plugins.neko_rimworld.workspace.ledger import _event
+
+    ledger = EventLedger(tmp_path / "events.sqlite")
+    def append(colony, epoch, kind, payload):
+        return ledger.append(colony, epoch, 1, "plugin", kind, payload)
+    first = append("a", "old", "user.utterance", {"text": "first"})
+    trigger = append("a", "old", "frontdesk.trigger", {"text": "trigger"})
+    append("a", "new", "agent.progress", {"utterance_seq": first, "value": "completed"})
+    append("a", "new", "agent.progress", {"trigger_seq": trigger, "value": "completed across epoch"})
+    append("a", "new", "agent.progress", {"trigger_seq": None, "value": "no anchor"})
+    append("a", "new", "agent.progress", {"trigger_seq": None, "utterance_seq": first})
+    append("a", "new", "agent.progress", {"trigger_seq": "1", "value": "text anchor"})
+    append("a", "new", "agent.progress", {"trigger_seq": 0, "value": "zero anchor"})
+    append("a", "old", "agent.run", {"utterance_seq": first, "audit": "large" * 10000})
+    append("a", "new", "agent.run", {"utterance_seq": first})
+    append("a", "new", "agent.run", {"trigger_seq": trigger})
+    append("a", "new", "agent.run", {"trigger_seq": None})
+    append("a", "new", "agent.run", {"trigger_seq": 0})
+    append("b", "new", "agent.run", {"trigger_seq": "1"})
+    sql = ("SELECT e.* FROM events e WHERE e.colony_id=? AND "
+           "(e.kind IN ('user.utterance', 'frontdesk.trigger') OR e.kind='agent.progress') AND NOT EXISTS "
+           "(SELECT 1 FROM events r WHERE r.colony_id=e.colony_id AND r.kind='agent.run' AND "
+           "coalesce(json_extract(r.payload,'$.trigger_seq'),json_extract(r.payload,'$.utterance_seq'))="
+           "CASE WHEN e.kind IN ('user.utterance', 'frontdesk.trigger') THEN e.seq ELSE "
+           "coalesce(json_extract(e.payload,'$.trigger_seq'),json_extract(e.payload,'$.utterance_seq')) END) ORDER BY e.seq")
+    expected = [_event(row) for row in ledger.db.execute(sql, ("a",))]
+    actual = ledger.interrupted_events("a")
+    assert actual == expected
+    assert [e["payload"]["value"] for e in actual] == ["no anchor", "text anchor"]
+    assert ledger.interrupted_events("missing") == []
+    ledger.close()

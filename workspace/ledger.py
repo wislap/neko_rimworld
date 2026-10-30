@@ -291,10 +291,18 @@ class EventLedger:
         return _event(row) if row else None
 
     def interrupted_events(self, colony_id):
+        # GROUP BY materializes completed anchors once, without re-parsing each
+        # large run payload for every candidate progress event.
         rows = self.db.execute(
-            "SELECT e.* FROM events e WHERE e.colony_id=? AND (e.kind IN (?, 'frontdesk.trigger') OR e.kind='agent.progress') AND NOT EXISTS "
-            "(SELECT 1 FROM events r WHERE r.colony_id=e.colony_id AND r.kind=? AND coalesce(json_extract(r.payload,'$.trigger_seq'),json_extract(r.payload,'$.utterance_seq'))=CASE WHEN e.kind IN (?, 'frontdesk.trigger') THEN e.seq ELSE coalesce(json_extract(e.payload,'$.trigger_seq'),json_extract(e.payload,'$.utterance_seq')) END) ORDER BY e.seq",
-            (colony_id, UTTERANCE_EVENT, RUN_EVENT, UTTERANCE_EVENT),
+            "WITH completed AS (SELECT coalesce(json_extract(payload,'$.trigger_seq'),"
+            "json_extract(payload,'$.utterance_seq')) AS anchor FROM events "
+            "WHERE colony_id=? AND kind=? GROUP BY anchor) "
+            "SELECT e.* FROM events e LEFT JOIN completed c ON c.anchor="
+            "CASE WHEN e.kind IN (?, 'frontdesk.trigger') THEN e.seq ELSE "
+            "coalesce(json_extract(e.payload,'$.trigger_seq'),json_extract(e.payload,'$.utterance_seq')) END "
+            "WHERE e.colony_id=? AND e.kind IN (?, 'frontdesk.trigger', 'agent.progress') "
+            "AND c.anchor IS NULL ORDER BY e.seq",
+            (colony_id, RUN_EVENT, UTTERANCE_EVENT, colony_id, UTTERANCE_EVENT),
         )
         return [_event(row) for row in rows]
 
@@ -380,7 +388,8 @@ class EventLedger:
 
     def events_by_kind(self, colony_id, kinds, *, after_seq=0, load_epoch=None, anchor=None):
         """Read selected full events, ordered by sequence, with optional scope filters."""
-        sql = ("SELECT * FROM events WHERE colony_id=? AND kind IN (SELECT value FROM json_each(?)) "
+        sql = ("SELECT * FROM events INDEXED BY events_kind_colony_sequence "
+               "WHERE colony_id=? AND kind IN (SELECT value FROM json_each(?)) "
                "AND seq>?")
         params = [colony_id, encode(list(kinds)), after_seq]
         if load_epoch is not None:
