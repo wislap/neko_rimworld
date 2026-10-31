@@ -4,6 +4,8 @@ import asyncio
 import copy
 import hashlib
 import sqlite3
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from ..agent.context.narrative import SUMMARY_EVENT, select_narrative, summary_message, summary_request
@@ -31,9 +33,45 @@ class FrontdeskService:
         self.pending = {}
         self.revision = 0
         self.closed = False
+        self._journal_timing_lock = threading.Lock()
+        self._journal_timing = {}
+
+    def journal_timing_snapshot(self):
+        """Cumulative worker timings; sampled independently of bridge scope."""
+        with self._journal_timing_lock:
+            return {"sampled_monotonic": time.monotonic(),
+                    "meaning": "Service lifetime totals; worker includes guard, Journal, SQLite and serialization. Durations overlap across roles and are not wall time.",
+                    "methods": copy.deepcopy(self._journal_timing)}
 
     async def call(self, method, *args, command_binding_check=None, **kwargs):
+        submitted = time.monotonic()
+        with self._journal_timing_lock:
+            timing = self._journal_timing.setdefault(method, {"submitted": 0, "started": 0, "completed": 0,
+                "failed": 0, "await_cancelled": 0, "queue_seconds": 0.0, "worker_seconds": 0.0,
+                "queue_max_seconds": 0.0, "worker_max_seconds": 0.0})
+            timing["submitted"] += 1
+
         def invoke():
+            begun = time.monotonic()
+            with self._journal_timing_lock:
+                timing["started"] += 1
+                queued = begun - submitted
+                timing["queue_seconds"] += queued
+                timing["queue_max_seconds"] = max(timing["queue_max_seconds"], queued)
+            failed = True
+            try:
+                result = invoke_journal()
+                failed = False
+                return result
+            finally:
+                with self._journal_timing_lock:
+                    timing["completed"] += 1
+                    timing["failed"] += int(failed)
+                    duration = time.monotonic() - begun
+                    timing["worker_seconds"] += duration
+                    timing["worker_max_seconds"] = max(timing["worker_max_seconds"], duration)
+
+        def invoke_journal():
             if self.journal is None:
                 self.journal = Journal(self.path)
             # Business mutations must still belong to the active world when the
@@ -60,7 +98,12 @@ class FrontdeskService:
                 if method not in {"observe_epoch", "ingest_game_event"} and load and load["load_epoch"] != epoch:
                     raise ToolExecutionError("world_changed", "The recorded colony load changed before the command executed", recoverable=False)
             return getattr(self.journal, method)(*args, **kwargs)
-        return await asyncio.get_running_loop().run_in_executor(self._executor, invoke)
+        try:
+            return await asyncio.get_running_loop().run_in_executor(self._executor, invoke)
+        except asyncio.CancelledError:
+            with self._journal_timing_lock:
+                timing["await_cancelled"] += 1
+            raise
 
     async def _recover_interrupted(self, colony, *, pending_utterances=()):
         if colony in self._recovered:

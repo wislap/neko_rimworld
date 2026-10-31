@@ -676,13 +676,13 @@ async def test_frontdesk_model_response_rejects_same_epoch_reconnection(tmp_path
     scheduler = ColonyScheduler(service, settings(), binding=lambda: (state["connection"], "colony", "epoch"))
     scheduler.start()
     try:
-        await scheduler.wake_frontdesk(game, "Preserve food")
+        wake = await scheduler.wake_frontdesk(game, "Preserve food")
         await asyncio.wait_for(entered.wait(), 3)
         state["connection"] = "B"
         release.set()
         for _ in range(300):
             events = await service.call("events", "colony")
-            if len([e for e in events if e["kind"] == "agent.run"]) >= 2:
+            if any(e["kind"] == "frontdesk.scheduler_consumed" and e["payload"]["through_seq"] >= wake for e in events):
                 break
             await asyncio.sleep(.01)
         assert len(model.requests) == 2
@@ -691,6 +691,8 @@ async def test_frontdesk_model_response_rejects_same_epoch_reconnection(tmp_path
         assert len(runs) == 2 and runs[0]["payload"]["utterance_seq"] == runs[1]["payload"]["utterance_seq"]
         assert "prompt_tokens" in str(runs)
         assert runs[0]["payload"]["result"]["audit"]["error_code"] == "world_changed"
+        assert runs[1]["payload"]["result"]["status"] == "ok"
+        assert any(e["kind"] == "frontdesk.scheduler_consumed" and e["payload"]["through_seq"] == wake for e in events)
         messages = runs[0]["payload"]["messages"]
         calls = [call["id"] for msg in messages if msg["role"] == "assistant" for call in msg.get("tool_calls", [])]
         replies = [msg["tool_call_id"] for msg in messages if msg["role"] == "tool"]
@@ -698,6 +700,53 @@ async def test_frontdesk_model_response_rejects_same_epoch_reconnection(tmp_path
         assert all("world_changed" in msg["content"] and "do not infer execution" in msg["content"]
                    for msg in messages if msg["role"] == "tool")
         assert any(e["kind"] == "agent.progress" and e["payload"].get("stage") == "assistant" for e in events)
+        assert await service.call("board", "colony") == []
+    finally:
+        await scheduler.close()
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_frontdesk_reload_preserves_old_result_then_consumes_new_scope(tmp_path):
+    state = {"connection": "A", "game": SimpleNamespace(colony_id="colony", load_epoch="old", game_tick=10)}
+    entered, release = asyncio.Event(), asyncio.Event()
+    class Model(Script):
+        async def complete(self, messages, tools, *, timeout):
+            if not self.requests:
+                entered.set()
+                await release.wait()
+            return await super().complete(messages, tools, timeout=timeout)
+    model = Model([call("frontdesk_board", {"action": "write_intent",
+        "entry": {"entry_id": "stale", "expected_revision": 0, "status": "open", "priority": 1,
+                  "review_at_tick": None, "body": "Old intent"}}), call("update_only", {})])
+    runtime = AgentRuntime(audit_registry=AgentAuditRegistry(), logger=FakeLogger(),
+                           model_factory=lambda _: model, tools_provider=semantic_tool_provider())
+    service = FrontdeskService(tmp_path / "events.sqlite", runtime, game_session=lambda: state["game"])
+    scheduler = ColonyScheduler(service, settings(), binding=lambda: (state["connection"], "colony", state["game"].load_epoch))
+    scheduler.start()
+    try:
+        old_wake = await scheduler.wake_frontdesk(state["game"], "Old words")
+        await asyncio.wait_for(entered.wait(), 3)
+        state["connection"] = "B"
+        state["game"] = SimpleNamespace(colony_id="colony", load_epoch="new", game_tick=20)
+        release.set()
+        for _ in range(300):
+            events = await service.call("events", "colony")
+            if any(e["kind"] == "agent.run" and e["load_epoch"] == "old" for e in events):
+                break
+            await asyncio.sleep(.01)
+        old_runs = [e for e in events if e["kind"] == "agent.run" and e["load_epoch"] == "old"]
+        assert len(old_runs) == 1 and old_runs[0]["payload"]["result"]["audit"]["error_code"] == "world_changed"
+        new_wake = await scheduler.wake_frontdesk(state["game"], "New words")
+        for _ in range(300):
+            events = await service.call("events", "colony")
+            if any(e["kind"] == "frontdesk.scheduler_consumed" and e["payload"]["through_seq"] >= new_wake for e in events):
+                break
+            await asyncio.sleep(.01)
+        assert any(e["kind"] == "frontdesk.stale_wake" and e["payload"]["wake_seq"] == old_wake for e in events)
+        assert any(e["kind"] == "frontdesk.scheduler_consumed" and e["load_epoch"] == "new"
+                   and e["payload"]["through_seq"] == new_wake for e in events)
+        assert any(e["kind"] == "agent.run" and e["load_epoch"] == "new" and e["payload"]["result"]["status"] == "ok" for e in events)
         assert await service.call("board", "colony") == []
     finally:
         await scheduler.close()

@@ -39,6 +39,11 @@ async def test_queued_old_submit_is_rejected_after_new_load(tmp_path):
         await old_submit
     assert error.value.code == "world_changed"
     assert (await service.call("board", "c"))[0]["revision"] == 1
+    await service.call("record", "c", "old", 1, "planner", "planner.progress", {"start_seq": 1})
+    await service.call("submit", "c", "new", 2, "planner", strategy(1))
+    assert (await service.call("board", "c"))[0]["revision"] == 2
+    assert any(e["kind"] == "planner.progress" and e["load_epoch"] == "old"
+               for e in await service.call("events", "c"))
     await service.close()
 
 

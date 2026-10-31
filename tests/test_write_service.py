@@ -93,6 +93,26 @@ async def test_missing_null_and_old_epoch_are_unknown():
         assert error.value.code == 'evidence_required'
 
 
+def test_area_eligibility_catalog_reaches_model_write_tools():
+    import json
+    from pathlib import Path
+
+    from ..agent.runtime.tools import ToolRegistry
+    from ..tool_contracts import ToolSpec
+
+    directory = json.loads((Path(__file__).parent / 'fixtures/colony-write-v1/catalog.json').read_text(encoding='utf-8'))
+    description = next(item for item in directory['operations'] if item['op'] == 'set_allowed_area')['schema']['description']
+    service = WriteService(directory, [], object(), lambda: IDENTITY)
+    registry = ToolRegistry()
+    for tool in service.schemas():
+        function = tool['function']
+        registry.register(ToolSpec(function['name'], function['description'], function['parameters'], lambda _: None, exclusive=True))
+    actual = {tool['function']['name']: json.dumps(tool, ensure_ascii=False) for tool in registry.schemas()}
+    for name in ('dry_run', 'commit'):
+        assert description in actual[name]
+        assert 'no current job' in actual[name] and 'cannot stop a job' in actual[name]
+
+
 def test_advertised_operations_generate_valid_raw_evidence():
     import json
     from pathlib import Path

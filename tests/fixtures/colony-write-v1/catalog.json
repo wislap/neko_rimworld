@@ -494,6 +494,7 @@
       "schema": {
         "type": "object",
         "additionalProperties": false,
+        "description": "Requires a spawned eligible colonist with no current job and a safely restorable existing area. map_id must exactly identify the pawn current map; area_id must be null or an allowed area on that map. This operation cannot stop a job or perform rescue; waiting does not guarantee eligibility.",
         "properties": {
           "op": {
             "const": "set_allowed_area"
@@ -784,5 +785,5 @@
     "partial": "affected paths unknown",
     "truncation": "absence is unknown unless explicitly complete"
   },
-  "catalog_id": "46fb8573fbe294231686639e63d2602a3601f5d1ffaa21c29a2a22e0d2f9b19f"
+  "catalog_id": "d5175581edee0fb1515051dd226cb1942c1293435fb28884a40f8813a737b904"
 }
