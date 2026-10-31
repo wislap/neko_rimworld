@@ -110,7 +110,9 @@ def test_area_eligibility_catalog_reaches_model_write_tools():
     actual = {tool['function']['name']: json.dumps(tool, ensure_ascii=False) for tool in registry.schemas()}
     for name in ('dry_run', 'commit'):
         assert description in actual[name]
-        assert 'no current job' in actual[name] and 'cannot stop a job' in actual[name]
+        assert 'Active jobs do not prevent assignment' in actual[name]
+        assert 'may interrupt a current job' in actual[name]
+        assert 'not interrupted jobs' in actual[name]
 
 
 def test_advertised_operations_generate_valid_raw_evidence():
@@ -636,3 +638,22 @@ async def test_queued_audit_failure_reports_not_sent_using_real_bridge_port():
     assert error.value.details['outcome'] == 'not_sent'
     assert error.value.details['request_id'] == 'q' * 32 and bridge.sent == 0
     assert tuple(error.value.details[k] for k in ('connection_epoch', 'colony_id', 'load_epoch')) == IDENTITY
+
+
+def test_area_intent_uses_field_evidence_while_job_is_active():
+    import json
+    from pathlib import Path
+
+    directory = json.loads((Path(__file__).parent / 'fixtures/colony-write-v1/catalog.json').read_text(encoding='utf-8'))
+    obs = observation()
+    work = obs['response']['payload']['data']['objects'][0]['facets']['work']
+    work['write_allowed_area_key'] = {'map_id': 'Map_0', 'area_id': 7}
+    work['current_job'] = {'def': 'Skygaze'}
+    service = WriteService(directory, [obs], Port(), lambda: IDENTITY)
+    intent = {'op': 'set_allowed_area', 'pawn': 'Pawn1', 'value': {'map_id': 'Map_0', 'area_id': None}}
+    prepared = service._prepare({'entry_id': 'task', 'ops': [intent]})
+    assert prepared['ops'] == [{**intent, 'expect': {'map_id': 'Map_0', 'area_id': 7}, 'evidence': 'original'}]
+    obs['response']['load_epoch'] = 'b' * 32
+    with pytest.raises(ToolExecutionError) as error:
+        WriteService(directory, [obs], Port(), lambda: IDENTITY)._prepare({'entry_id': 'task', 'ops': [intent]})
+    assert error.value.code == 'evidence_required'
