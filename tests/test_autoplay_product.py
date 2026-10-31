@@ -37,7 +37,7 @@ async def test_host_submission_is_acknowledged_once_without_claiming_consumption
             self.events = []
         async def call(self, method, *args):
             self.events.append((method, args))
-            if method == "events":
+            if method == "events_by_kind":
                 return []
     class Scheduler:
         def __init__(self):
@@ -129,7 +129,7 @@ async def test_frontdesk_reuses_same_inflight_host_request(tmp_path):
 async def test_recorded_host_attempt_is_not_replayed_after_restart():
     class Service:
         async def call(self, method, *args):
-            if method == "events":
+            if method == "events_by_kind":
                 return [{"kind": "autoplay.host_submission", "payload": {"delivery_id": 1}}]
     class Scheduler:
         def __init__(self):

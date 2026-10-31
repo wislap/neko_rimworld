@@ -366,7 +366,7 @@ class NekoRimworldPlugin(NekoPluginBase):
                 safe["autoplay"]["activation"] = activation
             if work := getattr(self, "_workspace_service", None):
                 if current is not None:
-                    events = await work.call("events", current.colony_id)
+                    events = await work.call("action_events", current.colony_id)
                     actions = []
                     for event in events:
                         write = event["payload"].get("write") if event["kind"] in {"planner.progress", "autoplay.undo"} else None
@@ -1094,7 +1094,8 @@ class NekoRimworldPlugin(NekoPluginBase):
                 retained = await scheduler.service.call("retained_response", game.colony_id, game.load_epoch,
                                                         question, request_id)
                 if retained is not None:
-                    events = await scheduler.service.call("events", game.colony_id)
+                    events = await scheduler.service.call("events_by_kind", game.colony_id,
+                                                          ("frontdesk.wake", "frontdesk.run_binding", "autoplay.stale_delivery"))
                     anchor = anchor_seq(retained)
                     wakes = [event for event in events if event["kind"] == "frontdesk.wake"
                              and event["load_epoch"] == retained["load_epoch"]
@@ -1145,7 +1146,8 @@ class NekoRimworldPlugin(NekoPluginBase):
                 terminal = (payload.get("result") or {}).get("terminal") or {}
                 scheduled = "trigger_seq" in payload or terminal.get("kind") in {"reply", "update_only"}
                 if not scheduled:
-                    events = await service.call("events", game.colony_id)
+                    events = await service.call("events_by_kind", game.colony_id,
+                                                ("frontdesk.wake", "frontdesk.run_binding"))
                     wake_ids = {event["seq"] for event in events if event["kind"] == "frontdesk.wake"
                                 and event["load_epoch"] == retained_response["load_epoch"]
                                 and anchor_seq(event) == anchor_seq(retained_response)
@@ -1362,7 +1364,7 @@ class NekoRimworldPlugin(NekoPluginBase):
                 handoff = _consultation_handoff(result, "")
                 pending = scheduler._pending_frontdesk
                 if pending is not None:
-                    events = await scheduler.service.call("events", pending["colony_id"])
+                    events = await scheduler.service.call("events_by_kind", pending["colony_id"], ("autoplay.host_submission",))
                     already_attempted = any(e["kind"] == "autoplay.host_submission"
                                             and e["payload"].get("delivery_id") == ident for e in events)
                     if not already_attempted:

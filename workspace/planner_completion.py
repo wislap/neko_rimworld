@@ -23,7 +23,7 @@ async def validate_planner_completion(service, entry, colony_id, load_epoch, set
         validate_write_catalog(directory)
     except (ValueError, TypeError, KeyError) as exc:
         raise ValueError("A valid current write catalog is required") from exc
-    events = await service.call("events", colony_id)
+    events = await service.call("planner_completion_events", colony_id)
     receipts = []
     for identifier in ids:
         try:

@@ -93,3 +93,46 @@ def test_interrupted_events_match_correlated_query_with_cross_epoch_and_null_anc
     assert [e["payload"]["value"] for e in actual] == ["no anchor", "text anchor"]
     assert ledger.interrupted_events("missing") == []
     ledger.close()
+
+
+def test_completion_and_dashboard_queries_keep_original_records_and_order(tmp_path, monkeypatch):
+    from plugin.plugins.neko_rimworld.workspace import ledger as ledger_module
+
+    ledger = EventLedger(tmp_path / "events.sqlite")
+    def add(colony, epoch, kind, payload):
+        return ledger.append(colony, epoch, 10, "plugin", kind, payload)
+    add("a", "old", "planner.progress", {"write": {"stage": "queued", "mode": "commit", "request_id": "r"}})
+    add("b", "old", "planner.progress", {"write": {"stage": "result", "mode": "commit"}})
+    add("a", "old", "planner.finished", {"audit": "x" * 100_000})
+    add("a", "new", "planner.progress", {"observation": {"observation_id": "e", "response": {"game_tick": 8}}})
+    add("a", "new", "takeover.identities", {"valid": True, "fields": [{"object": "s", "field": "priority"}]})
+    add("a", "new", "planner.progress", {"write": {"stage": "result", "mode": "commit", "receipt": {"status": "committed"}}})
+    add("a", "old", "autoplay.undo", {"write": {"stage": "result", "mode": "undo", "receipt": {"status": "undone"}}})
+    add("a", "new", "planner.progress", {"stage": "model_request", "audit": "x" * 100_000})
+    original = ledger.events("a")
+    decode = ledger_module._event
+    def checked(row):
+        assert row["kind"] != "planner.finished"
+        assert '"model_request"' not in row["payload"]
+        return decode(row)
+    monkeypatch.setattr(ledger_module, "_event", checked)
+    assert ledger.planner_completion_events("a") == [original[0], original[2], original[3], original[4]]
+    assert ledger.action_events("a") == [original[4], original[5]]
+    ledger.close()
+
+
+def test_completion_queries_preserve_malformed_write_fail_closed_and_null_observations(tmp_path):
+    ledger = EventLedger(tmp_path / "events.sqlite")
+    def add(kind, payload):
+        return ledger.append("a", "e", 1, "plugin", kind, payload)
+    values = [None, False, "bad"]
+    for value in values:
+        add("plugin.note", {"write": value})
+        add("planner.progress", {"write": value})
+        add("planner.progress", {"observation": value})
+    add("planner.progress", {"write": {"stage": "result", "mode": "commit", "receipt": {}}})
+    add("autoplay.undo", {"write": {"stage": "result", "mode": "undo", "receipt": {}}})
+    original = ledger.events("a")
+    assert ledger.planner_completion_events("a") == original[:-1]
+    assert ledger.action_events("a") == original[-2:]
+    ledger.close()

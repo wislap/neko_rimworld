@@ -354,6 +354,12 @@ class Journal:
     def events_by_kind(self, colony_id, kinds, *, after_seq=0, load_epoch=None, anchor=None):
         return self._ledger.events_by_kind(colony_id, kinds, after_seq=after_seq, load_epoch=load_epoch, anchor=anchor)
 
+    def planner_completion_events(self, colony_id):
+        return self._ledger.planner_completion_events(colony_id)
+
+    def action_events(self, colony_id):
+        return self._ledger.action_events(colony_id)
+
     def event_highwater(self, colony_id):
         return self._ledger.event_highwater(colony_id)
 

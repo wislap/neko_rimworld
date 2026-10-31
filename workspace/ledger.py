@@ -401,6 +401,28 @@ class EventLedger:
         rows = self.db.execute(sql + " ORDER BY seq", params)
         return [_event(row) for row in rows]
 
+    def planner_completion_events(self, colony_id):
+        """Original write, observation and identity records in one ordered snapshot."""
+        rows = self.db.execute(
+            "SELECT * FROM events WHERE colony_id=? AND "
+            "((kind='planner.progress' AND (json_type(payload,'$.write') IS NOT NULL "
+            "OR json_type(payload,'$.observation') IS NOT NULL)) OR kind='takeover.identities' "
+            # The previous full scan examined every top-level `write` before
+            # checking its kind. Preserve failure on non-object values even
+            # when they occur in another kind of event.
+            "OR (kind NOT IN ('planner.progress','takeover.identities') "
+            "AND json_type(payload,'$.write') IS NOT NULL AND json_type(payload,'$.write')!='object')) ORDER BY seq",
+            (colony_id,))
+        return [_event(row) for row in rows]
+
+    def action_events(self, colony_id):
+        """Original records that can contribute to the dashboard action view."""
+        rows = self.db.execute(
+            "SELECT * FROM events WHERE colony_id=? AND kind IN ('planner.progress','autoplay.undo') "
+            "AND json_type(payload,'$.write')='object' AND json_extract(payload,'$.write.stage')='result' "
+            "AND json_extract(payload,'$.write.mode') IN ('commit','undo') ORDER BY seq", (colony_id,))
+        return [_event(row) for row in rows]
+
     def event_highwater(self, colony_id):
         return self.db.execute("SELECT coalesce(max(seq),0) FROM events WHERE colony_id=?", (colony_id,)).fetchone()[0]
 
