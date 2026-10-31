@@ -501,3 +501,29 @@ async def test_decision_bindings_survive_projection_and_raw_audit(args, rows, ex
     for key in data:
         assert view["data"][key] == data[key]
     assert reader.session.observations[0]["response"]["payload"]["data"] == data
+
+
+@pytest.mark.asyncio
+async def test_storage_contract_rejects_unsupported_selectors_and_aspects():
+    from plugin.plugins.neko_rimworld.tool_contracts import ToolExecutionError
+    source = catalog()
+    source["colony_state"]["operations"].append({"operation": "inspect_storage", "parameters": {"type": "object", "properties": {"items": {"type": "array"}}}})
+    reader, calls = interaction(source=source)
+    tool = next(t for t in reader.tools() if t.name == "look")
+    registry = ToolRegistry()
+    registry.register(tool)
+    model_parameters = registry.schemas()[0]["function"]["parameters"]
+    validator = Draft202012Validator(model_parameters)
+    good = {"object": {"kind": "storage", "id": "Zone_0", "map": "Map_0"}, "aspects": ["priority"]}
+    assert validator.is_valid(good)
+    for bad in ({**good, "object": {"kind": "storage", "ids": ["a", "b"], "map": "Map_0"}},
+                {**good, "aspects": ["health"]}, {**good, "offset": 1}, {**good, "limit": 1}, {**good, "detail": 1},
+                {**good, "focus": {"skills": ["Shooting"]}}, {**good, "focus": {"state": ["storage"]}}):
+        assert not validator.is_valid(bad)
+        with pytest.raises(ToolExecutionError):
+            await tool.handler(bad)
+    assert validator.is_valid({**good, "offset": 0, "detail": 0})
+    assert "storage requires exact Def names" in tool.parameters["properties"]["focus"]["description"]
+    assert calls == []
+    await tool.handler({**good, "offset": 0, "detail": 0, "focus": {"items": ["MedicineIndustrial"]}})
+    assert calls == [{"operation": "inspect_storage", "arguments": {"ids": ["Zone_0"], "map": "Map_0", "items": ["MedicineIndustrial"]}}]

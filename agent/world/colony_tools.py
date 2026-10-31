@@ -98,23 +98,31 @@ def extend_look_spec(spec, directory):
     if "inspect_storage" in operations:
         props["object"]["oneOf"].append({"type": "object", "additionalProperties": False,
             "required": ["kind", "map"], "properties": {"kind": {"const": "storage"},
-            "id": {"type": "string", "minLength": 1}, "ids": _strings(),
+            "id": {"type": "string", "minLength": 1}, "ids": {**_strings(), "maxItems": 1},
             "map": {"type": "string", "minLength": 1}},
             "oneOf": [{"required": ["id"]}, {"required": ["ids"]}]})
-        spec["description"] += " Storage reads require map and exactly one id/ids; use the returned canonical map_id for storage writes."
+        spec["description"] += " Storage reads require map and exactly one ID; they return one object without pagination. Either storage aspect returns priority and permissions for requested items. Use the returned canonical map_id for storage writes."
+        spec["parameters"].setdefault("allOf", []).append({
+            "if": {"properties": {"object": {"properties": {"kind": {"const": "storage"}}, "required": ["kind"]}}, "required": ["object"]},
+            "then": {"not": {"required": ["limit"]}, "properties": {
+                "aspects": {"items": {"enum": ["priority", "allows"]}},
+                "focus": {"type": "object", "additionalProperties": False, "properties": {"items": _strings()}},
+                "offset": {"const": 0}, "detail": {"const": 0}}}})
     if "inspect_resources" in operations:
         props["object"]["oneOf"].append({"type": "object", "additionalProperties": False, "required": ["kind"], "properties": {"kind": {"const": "resources"}, "map": {"type": "string", "default": "current"}}})
-        spec["parameters"]["allOf"] = [{"if": {"properties": {"object": {"properties": {"kind": {"const": "resources"}}}}}, "then": {"required": ["focus"], "properties": {"focus": {"required": ["items"]}}}}]
+        spec["parameters"].setdefault("allOf", []).append({"if": {"properties": {"object": {"properties": {"kind": {"const": "resources"}}}}}, "then": {"required": ["focus"], "properties": {"focus": {"required": ["items"]}}}})
     extra_aspects = list(dict.fromkeys(a for kind in kinds for a in DOMAINS[kind][1]))
     props["aspects"]["items"]["enum"] = list(dict.fromkeys(props["aspects"]["items"]["enum"] + extra_aspects))
     rules = "; ".join(kind + ": " + ",".join(DOMAINS[kind][1]) for kind in kinds)
     maps = "/".join(kind for kind in ("traders", "resources") if kind in kinds)
     props["aspects"]["description"] += " Colony domains: " + rules + ". Read only requested aspects. Lists default to current/public objects; research to current projects. Names resolve directly. category/near: world/world_objects/caravans." + (" map: " + maps + "." if maps else "")
-    props["limit"] = {"type": "integer", "minimum": 1, "maximum": 100, "default": 20, "description": "Colony-domain row limit; use offset=page.next_offset to continue."}
+    props["limit"] = {"type": "integer", "minimum": 1, "maximum": 100, "default": 20,
+                      "description": "Colony-domain row limit; use offset=page.next_offset to continue." +
+                                     (" Storage has no limit or pagination." if "inspect_storage" in operations else "")}
     item_kinds = [kind for kind in ("traders", "research", "resources", "storage") if "items" in operation_properties(directory, DOMAINS[kind][0])]
     if item_kinds:
         props["focus"]["properties"]["items"] = _strings()
-        props["focus"]["description"] += " focus.items: exact item Def names/labels."
+        props["focus"]["description"] += " focus.items: exact item Def names/labels; storage requires exact Def names."
         if "resources" in item_kinds:
             props["focus"]["description"] += " Required for resources (ground/held/seller quantities)."
         if "research" in item_kinds:
@@ -155,7 +163,17 @@ async def read_colony(interaction, args, kind):
             raise SurfaceError("storage requires id or ids and map")
         if not isinstance(obj.get("map"), str) or not obj["map"].strip():
             raise SurfaceError("storage requires map")
-        ids = _list([obj["id"]] if "id" in obj else obj["ids"], "ids")
+        raw_ids = [obj["id"]] if "id" in obj else obj["ids"]
+        if not isinstance(raw_ids, list) or len(raw_ids) != 1:
+            raise SurfaceError("storage requires exactly one ID")
+        ids = _list(raw_ids, "ids")
+        aspects = args.get("aspects", ["priority", "allows"])
+        if not isinstance(aspects, list) or not aspects or any(a not in supported for a in aspects):
+            raise SurfaceError("storage aspects: priority, allows")
+        if "limit" in args or type(args.get("offset", 0)) is not int or args.get("offset", 0) != 0:
+            raise SurfaceError("storage reads one object without pagination")
+        if type(args.get("detail", 0)) is not int or args.get("detail", 0) != 0:
+            raise SurfaceError("storage does not accept detail")
         focus = args.get("focus", {})
         if not isinstance(focus, dict) or set(focus) - {"items"}:
             raise SurfaceError("storage focus accepts items")

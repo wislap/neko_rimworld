@@ -521,7 +521,25 @@ class Journal:
         _check_run_messages(messages)
         key = "utterance_seq" if self._ledger.has_event(colony_id, UTTERANCE_EVENT, utterance_seq) else "trigger_seq"
         payload = {key: utterance_seq, "messages": messages, "result": result, "audit": audit}
-        return self._ledger.append(colony_id, load_epoch, game_tick, FRONTDESK, RUN_EVENT, payload)
+        run_id = audit.get("run_id") if isinstance(audit, dict) else None
+        if not isinstance(run_id, str) or not run_id:
+            return self._ledger.append(colony_id, load_epoch, game_tick, FRONTDESK, RUN_EVENT, payload)
+        with self._ledger.transaction():
+            rows = self._ledger.db.execute(
+                "SELECT seq,colony_id FROM events WHERE kind=? "
+                "AND json_extract(payload,'$.audit.run_id')=? ORDER BY seq", (RUN_EVENT, run_id)
+            ).fetchall()
+            if rows:
+                if len(rows) != 1:
+                    raise ValueError("Frontdesk run identity is ambiguous")
+                prior = self._ledger.event(rows[0]["colony_id"], rows[0]["seq"])
+                same_payload = json.dumps(prior["payload"], ensure_ascii=False, allow_nan=False, sort_keys=True) == json.dumps(
+                    payload, ensure_ascii=False, allow_nan=False, sort_keys=True)
+                if (prior["colony_id"] != colony_id or prior["load_epoch"] != load_epoch
+                        or prior["game_tick"] != game_tick or prior["source"] != FRONTDESK or not same_payload):
+                    raise ValueError("Frontdesk run identity conflicts with the saved outcome")
+                return prior["seq"]
+            return self._ledger.append(colony_id, load_epoch, game_tick, FRONTDESK, RUN_EVENT, payload)
 
     def finish_planner(self, colony_id, load_epoch, game_tick, start_seq, cursor, result, audit):
         """Atomically retain the outcome, optional handoff and consumed wake position."""

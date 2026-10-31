@@ -107,3 +107,104 @@ async def test_scope_failure_settlement_survives_cancellation():
     with pytest.raises(asyncio.CancelledError): await task
     release.set()
     await asyncio.wait_for(finished.wait(), 1)
+
+@pytest.mark.asyncio
+async def test_pending_scope_cannot_dispatch_after_other_settlement_blocks_budget(tmp_path):
+    from ..workspace.budget import BudgetSettings, ColonyBudget
+    from ..workspace.journal import Journal
+    from ..message_contracts import AssistantTurn
+    class Service:
+        def __init__(self):
+            self.journal = Journal(tmp_path / 'events.sqlite')
+            self.other_id = None
+        async def call(self, method, *args, **kwargs):
+            if method == 'budget_reserve' and args[3]['role'] == 'other':
+                self.other_id = args[3]['id']
+            if method == 'budget_settle' and args[3]['id'] == self.other_id:
+                raise OSError('simulated journal failure')
+            return getattr(self.journal, method)(*args, **kwargs)
+    service = Service()
+    budget = ColonyBudget(service, SimpleNamespace(colony_id='c', load_epoch='e', game_tick=1), BudgetSettings())
+    entered, proceed = asyncio.Event(), asyncio.Event()
+    class Model:
+        calls = 0
+        @asynccontextmanager
+        async def request_scope(self):
+            entered.set()
+            await proceed.wait()
+            yield
+        async def complete(self, *args, **kwargs):
+            self.calls += 1
+            raise AssertionError('blocked budget dispatched')
+    model = Model()
+    ledger = AgentAuditLedger('q')
+    session = AgentRunSession.create(ledger=ledger, question='q', autoplay=True)
+    session.budget, session.budget_scope = budget, ('c', 'e', 1)
+    settings = build_agent_model_settings(base_url='http://localhost:11434/v1', model='test')
+    task = asyncio.create_task(request_model(model, settings, ledger, session, session.messages, [],
+        finalizing=True, reserve=0, research_deadline=900, cycle=1, request_sha256='', logger=FakeLogger()))
+    await entered.wait()
+    class OtherModel:
+        async def complete(self, *args, **kwargs):
+            return AssistantTurn('id', 'test', 'stop', 'done', usage={'prompt_tokens': 5, 'completion_tokens': 1})
+    other_ledger = AgentAuditLedger('other')
+    other_session = AgentRunSession.create(ledger=other_ledger, question='other', autoplay=True)
+    other_session.budget, other_session.budget_scope, other_session.role = budget, ('c', 'e', 1), 'other'
+    with pytest.raises(OSError):
+        await request_model(OtherModel(), settings, other_ledger, other_session, other_session.messages, [],
+                            finalizing=True, reserve=0, research_deadline=900, cycle=1, request_sha256='', logger=FakeLogger())
+    proceed.set()
+    result = await task
+    assert result.error.code == 'agent_cumulative_budget'
+    assert model.calls == 0
+    status = service.journal.budget_status('c')
+    assert status['not_dispatched'] == 1 and status['dispatch_unknown'] == 1
+    service.journal.close()
+
+@pytest.mark.asyncio
+async def test_rejected_admission_scope_exit_failure_does_not_settle_twice():
+    class Budget:
+        blocked = False
+        def __init__(self): self.settlements = 0
+        async def status(self, scope): return {}
+        async def reserve(self, *args, **kwargs): return 'reservation'
+        async def begin_dispatch(self, ident):
+            self.settlements += 1
+            return False
+        async def settle(self, *args, **kwargs): self.settlements += 1
+    class Model:
+        @asynccontextmanager
+        async def request_scope(self):
+            try: yield
+            finally: raise RuntimeError('scope exit failed')
+        async def complete(self, *args, **kwargs): raise AssertionError('must not dispatch')
+    budget = Budget()
+    ledger = AgentAuditLedger('q')
+    session = AgentRunSession.create(ledger=ledger, question='q', autoplay=True)
+    session.budget, session.budget_scope = budget, ('c', 'e', 1)
+    settings = build_agent_model_settings(base_url='http://localhost:11434/v1', model='test')
+    with pytest.raises(RuntimeError, match='scope exit failed'):
+        await request_model(Model(), settings, ledger, session, session.messages, [], finalizing=True,
+                            reserve=0, research_deadline=900, cycle=1, request_sha256='', logger=FakeLogger())
+    assert budget.settlements == 1
+
+@pytest.mark.asyncio
+async def test_admission_failure_does_not_repeat_its_pending_settlement():
+    class Budget:
+        blocked = False
+        def __init__(self): self.settlements = 0
+        async def status(self, scope): return {}
+        async def reserve(self, *args, **kwargs): return 'reservation'
+        async def begin_dispatch(self, ident):
+            self.settlements += 1
+            raise OSError('settlement failed inside admission')
+        async def settle(self, *args, **kwargs): self.settlements += 1
+    budget = Budget()
+    ledger = AgentAuditLedger('q')
+    session = AgentRunSession.create(ledger=ledger, question='q', autoplay=True)
+    session.budget, session.budget_scope = budget, ('c', 'e', 1)
+    settings = build_agent_model_settings(base_url='http://localhost:11434/v1', model='test')
+    with pytest.raises(OSError, match='settlement failed'):
+        await request_model(SimpleNamespace(), settings, ledger, session, session.messages, [], finalizing=True,
+                            reserve=0, research_deadline=900, cycle=1, request_sha256='', logger=FakeLogger())
+    assert budget.settlements == 1

@@ -180,7 +180,8 @@ class FrontdeskService:
         pending = self.pending.get(colony_id)
         if pending is not None:
             await self.call("record_run", *pending[0], **pending[1])
-            del self.pending[colony_id]
+            if self.pending.get(colony_id) is pending:
+                del self.pending[colony_id]
 
     async def consult(self, game, question, settings, *, request_id=None,
                       explicit_update_only=False, inbox=None, utterance_seq=None, pending_utterances=(), trigger_seq=None,
@@ -324,13 +325,15 @@ class FrontdeskService:
                     _complete_tool_pairs(messages, reason=(result.get("audit") or {}).get("error_code"))
                     args = (game.colony_id, game.load_epoch, game.game_tick, FRONTDESK, seq, messages)
                     kwargs = {"result": private_protocol_redacted(result), "audit": private_protocol_redacted(trace)}
-                    self.pending[workspace_id] = (args, kwargs)
+                    pending = (args, kwargs)
+                    self.pending[workspace_id] = pending
                     try:
                         await self.call("record_run", *args, **kwargs)
                     except (OSError, sqlite3.Error):
                         pass
                     else:
-                        del self.pending[workspace_id]
+                        if self.pending.get(workspace_id) is pending:
+                            del self.pending[workspace_id]
                     finally:
                         self.active.pop(workspace_id, None)
                         self.revision += 1

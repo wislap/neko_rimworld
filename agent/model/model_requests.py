@@ -165,17 +165,24 @@ async def request_model(
                 budget.blocked = True
                 await asyncio.shield(budget.settle(reservation, {}, outcome="not_dispatched"))
                 raise
-        if budget is not None and not await budget.begin_dispatch(reservation):
-            return ModelRequestResult(None, finalizing, ModelClientError(
-                "agent_cumulative_budget", "The cumulative model budget cannot admit another request."))
         session.received_model_turn = None
         session.received_model_error = None
         turn = None
         settlement_started = False
         dispatched = False
+        settled_without_dispatch = False
+        admission_pending = False
         try:
             request_scope = getattr(model, "request_scope", None)
             async with request_scope() if callable(request_scope) else nullcontext():
+                if budget is not None:
+                    admission_pending = True
+                    admitted = await budget.begin_dispatch(reservation)
+                    admission_pending = False
+                    if not admitted:
+                        settled_without_dispatch = True
+                        return ModelRequestResult(None, finalizing, ModelClientError(
+                            "agent_cumulative_budget", "The cumulative model budget cannot admit another request."))
                 if not _binding_valid(session):
                     raise ModelClientError("world_changed", "The active colony connection changed before model dispatch.")
                 if attempt == 1 and ledger.state != AgentRunState.MODEL_REQUESTING:
@@ -190,14 +197,14 @@ async def request_model(
                     if budget is not None:
                         session.received_model_turn = turn
                         session.model_receipt_unconfirmed = True
-            if budget is not None:
+            if budget is not None and not settled_without_dispatch and not admission_pending:
                 settlement_started = True
                 await budget.settle(reservation, turn.usage,
                                     response={"audit": turn.as_audit_value()})
                 session.model_receipt_unconfirmed = False
             break
         except asyncio.CancelledError:
-            if budget is not None:
+            if budget is not None and not settled_without_dispatch and not admission_pending:
                 if turn is None:
                     await asyncio.shield(budget.settle(reservation, getattr(model, "last_usage", {}) if dispatched else {},
                                                        outcome="attempted" if dispatched else "not_dispatched"))
@@ -228,7 +235,7 @@ async def request_model(
                     diagnostics=getattr(model, "last_diagnostics", {}),
                     usage=getattr(model, "last_usage", {}),
                 )
-            if budget is not None:
+            if budget is not None and not settled_without_dispatch and not admission_pending:
                 session.received_model_error = {"code": exception.code, "message": str(exception),
                                                 "diagnostics": copy.deepcopy(exception.diagnostics),
                                                 "usage": copy.deepcopy(exception.usage)}
@@ -323,7 +330,7 @@ async def request_model(
             ledger.transition(AgentRunState.DEGRADED, "model_request_failed", failure)
             return ModelRequestResult(None, finalizing, error=exception)
         except Exception:
-            if budget is not None and not settlement_started:
+            if budget is not None and not settlement_started and not settled_without_dispatch and not admission_pending:
                 if turn is not None:
                     settlement_started = True
                     await asyncio.shield(budget.settle(reservation, turn.usage,
