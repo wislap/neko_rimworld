@@ -6,7 +6,9 @@ and stop this service; E2 is responsible for deciding when wakes are warranted.
 
 import asyncio
 import copy
+import ntpath
 import sqlite3
+from collections import deque
 from types import SimpleNamespace
 
 from ...serialization import canonical
@@ -418,6 +420,35 @@ class ColonyScheduler:
                               "value": {"type": "number"}}, "required": ["kind"], "additionalProperties": False},
                           "changes": {"type": "object"}}, "required": ["action"], "additionalProperties": False}, manage),)
 
+    async def _record_dispatch_error(self, role, error, game, code):
+        """Record bounded location metadata without exception text or frame locals."""
+        frames = deque(maxlen=8)
+        frame_count = 0
+        tb = error.__traceback__
+        while tb is not None:
+            code_object = tb.tb_frame.f_code
+            frames.append({"file": ntpath.basename(code_object.co_filename)[:128],
+                           "function": code_object.co_name[:128], "line": tb.tb_lineno})
+            frame_count += 1
+            tb = tb.tb_next
+        connection = getattr(game, "connection_epoch", None)
+        if not isinstance(connection, str) or not connection or len(connection) > 128:
+            connection = None
+        payload = {"role": role, "phase": "scheduler_dispatch", "exception_type": type(error).__name__[:128],
+                   "origin_connection_epoch": connection, "frames": list(frames), "frames_truncated": frame_count > 8}
+        diagnostic_seq = None
+        try:
+            async with asyncio.timeout(1):
+                value = await self.service.call("record", game.colony_id, game.load_epoch, game.game_tick,
+                                                "plugin", "autoplay.scheduler_exception", payload)
+            if type(value) is int and value > 0:
+                diagnostic_seq = value
+        except Exception:
+            pass  # The original failure still owns the stop decision.
+        return {"error_code": code, "phase": "scheduler_dispatch", "exception_type": payload["exception_type"],
+                "diagnostic_seq": diagnostic_seq,
+                "diagnostic_status": "recorded" if diagnostic_seq is not None else "unconfirmed"}
+
     async def _run_frontdesk(self):
         try:
             while True:
@@ -433,14 +464,16 @@ class ColonyScheduler:
                         await self._frontdesk_colony(game)
                     except (OSError, sqlite3.Error) as error:
                         self.error = error
+                        diagnostic = await self._record_dispatch_error("frontdesk", error, game, "workspace_unavailable")
                         if self.failure_handler is not None:
-                            await self.failure_handler("frontdesk", {"audit": {"error_code": "workspace_unavailable"}}, game)
+                            await self.failure_handler("frontdesk", {"audit": diagnostic}, game)
                         else:
                             asyncio.get_running_loop().call_later(1, self._frontdesk_signal.set)
                     except Exception as error:
                         self.error = error
+                        diagnostic = await self._record_dispatch_error("frontdesk", error, game, getattr(error, "code", "execution_failed"))
                         if self.failure_handler is not None:
-                            await self.failure_handler("frontdesk", {"audit": {"error_code": getattr(error, "code", "execution_failed"), "exception_type": type(error).__name__, "phase": "scheduler_dispatch"}}, game)
+                            await self.failure_handler("frontdesk", {"audit": diagnostic}, game)
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -584,14 +617,16 @@ class ColonyScheduler:
                             await self._run_colony(game)
                     except (OSError, sqlite3.Error) as error:
                         self.error = error
+                        diagnostic = await self._record_dispatch_error("planner", error, game, "workspace_unavailable")
                         if self.failure_handler is not None:
-                            await self.failure_handler("planner", {"audit": {"error_code": "workspace_unavailable"}}, game)
+                            await self.failure_handler("planner", {"audit": diagnostic}, game)
                         else:
                             asyncio.get_running_loop().call_later(1, self._signal.set)
                     except Exception as error:
                         self.error = error
+                        diagnostic = await self._record_dispatch_error("planner", error, game, getattr(error, "code", "execution_failed"))
                         if self.failure_handler is not None:
-                            await self.failure_handler("planner", {"audit": {"error_code": getattr(error, "code", "execution_failed"), "exception_type": type(error).__name__, "phase": "scheduler_dispatch"}}, game)
+                            await self.failure_handler("planner", {"audit": diagnostic}, game)
         except asyncio.CancelledError:
             raise
         except Exception as error:

@@ -1538,6 +1538,7 @@ class NekoRimworldPlugin(NekoPluginBase):
                         {"role": role, "code": audit.get("error_code") or "run_failed",
                          "phase": audit.get("phase"), "exception_type": audit.get("exception_type"),
                          "run_id": audit.get("run_id"), "wake_seq": audit.get("wake_seq"),
+                         "diagnostic_seq": audit.get("diagnostic_seq"), "diagnostic_status": audit.get("diagnostic_status"),
                          "connection_epoch": getattr(bound_game, "connection_epoch", None)})
                 except Exception:
                     logger = getattr(self, "logger", None)
@@ -1565,12 +1566,13 @@ class NekoRimworldPlugin(NekoPluginBase):
         audit = result.get("audit") or {}
         self._autoplay_fault = {"role": role, "code": code, "kind": kind, "pause": "unknown",
                                 "phase": None, "exception_type": None, "run_id": None, "wake_seq": None,
+                                "diagnostic_seq": None, "diagnostic_status": None,
                                 "origin_connection_epoch": origin_connection if same_world_reconciliation else observed_connection}
         if same_world_reconciliation:
             self._autoplay_fault["observed_connection_epoch"] = observed_connection
-        for key in ("phase", "exception_type", "run_id", "wake_seq"):
+        for key in ("phase", "exception_type", "run_id", "wake_seq", "diagnostic_seq", "diagnostic_status"):
             value = audit.get(key)
-            if (isinstance(value, str) and value and len(value) <= 128) or (key == "wake_seq" and type(value) is int):
+            if (isinstance(value, str) and value and len(value) <= 128) or (key in {"wake_seq", "diagnostic_seq"} and type(value) is int):
                 self._autoplay_fault[key] = value
         failure_binding = (scheduler, getattr(self._bridge, "connection_key", None),
                            getattr(current, "colony_id", None), getattr(current, "load_epoch", None))
