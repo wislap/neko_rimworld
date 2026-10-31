@@ -421,11 +421,28 @@ def normalize_object(raw):
     return obj
 
 
+PAUSE_WINDOW_FIELDS = (
+    "pause_windows.status", "pause_windows.sampled_tick", "pause_windows.count", "pause_windows.truncated",
+    "pause_windows.windows.window_id", "pause_windows.windows.type", "pause_windows.windows.stack_index",
+    "pause_windows.windows.opened_tick", "pause_windows.windows.opening_source.status",
+    "pause_windows.windows.opening_source.frames",
+)
+
+
+def supports_pause_windows(surface):
+    try:
+        return all(surface.path_type("game", path) for path in PAUSE_WINDOW_FIELDS)
+    except (SurfaceError, KeyError, TypeError):
+        return False
+
+
 def validate_aspects(kind, aspects):
     if not isinstance(aspects, list) or not aspects or not all(isinstance(x, str) for x in aspects):
         raise SurfaceError("aspects must be a nonempty string array")
     supported = supported_aspects(kind)
     for aspect in aspects:
+        if aspect == "pause_windows" and kind == "game":
+            continue
         if aspect not in ASPECTS:
             raise SurfaceError("unknown aspect: " + aspect)
         if aspect not in supported:
@@ -616,6 +633,11 @@ def _supported(surface, kind, fields):
 
 
 def _entries_for(surface, kind, aspect, detail):
+    if aspect == "pause_windows":
+        if kind != "game" or not supports_pause_windows(surface):
+            raise SurfaceError("Current pause window details are unavailable on this connection")
+        return [_entry(aspect, "pause_windows", "pause_windows",
+                       [path.removeprefix("pause_windows.") for path in PAUSE_WINDOW_FIELDS])]
     if aspect in ("quantity", "distribution"):
         return [_entry(aspect, "", aspect, LISTING_FIELDS.get(kind), listing=True)]
     if kind in PAWN_KINDS:

@@ -133,6 +133,15 @@ AUTOPLAY_EFFICIENCY = (
 )
 
 
+AUTOPLAY_PAUSE_WINDOWS = (
+    "For a force pause, report the sampled pause_windows types, IDs, sample tick and source status when available. "
+    "Multiple, partial, truncated or unavailable windows and unknown opening sources remain uncertain. "
+    "A cached situation is historical; when supported, look at game pause_windows for a fresh observation. "
+    "Opening stack frames do not identify the person or intention that opened a window. "
+    "Window metadata is not authorization to close a window or make a choice. "
+)
+
+
 AUTOPLAY_FRONTDESK = (
     "You are the colony frontdesk in N.E.K.O. Interpret user requests and game or planner messages, "
     "maintain user intents on the board, and communicate with the planner. You can pause the game when "
@@ -182,7 +191,7 @@ AUTOPLAY_PLANNER = (
 def build_system_prompt(*, persistent_work=False, role="frontdesk", planner_loop=False, autoplay=False) -> str:
     """One fixed system prompt per session; finalization is signalled in the advisory instead."""
     if autoplay or planner_loop:
-        return "".join((AUTOPLAY_PLANNER if role == "planner" else AUTOPLAY_FRONTDESK,
+        return "".join((AUTOPLAY_PLANNER if role == "planner" else AUTOPLAY_FRONTDESK, AUTOPLAY_PAUSE_WINDOWS,
                         AUTOPLAY_EFFICIENCY, EVIDENCE, SAMPLE_IDENTITY, SCOPE_SEMANTICS, PLANNER_COMPLETION,
                         STYLE, "\n\n", PLANNER_QUERY_GUIDE, "\n", GUIDE))
     if role == "planner":

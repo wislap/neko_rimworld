@@ -15,13 +15,14 @@ from .native_state import (
     state_contract,
 )
 from .object_identity import normalize_object_identities
-from .query_surface import SurfaceError
+from .query_surface import Surface, SurfaceError
 from .semantic_surface import (
     ASPECTS,
     KINDS,
     _object_schema,
     normalize_object,
     supported_aspects,
+    supports_pause_windows,
     validate_aspects,
     validate_detail,
 )
@@ -45,6 +46,14 @@ def look_spec(directory):
         },
     }
     props = spec["parameters"]["properties"]
+    public = directory.get("public_query", directory) if isinstance(directory, dict) else None
+    if (isinstance(public, dict) and isinstance(public.get("roots"), list)
+            and isinstance(public.get("field_index"), dict)
+            and all(isinstance(root, dict) and isinstance(root.get("from"), str) for root in public["roots"])
+            and supports_pause_windows(Surface(public))):
+        props["aspects"]["items"]["enum"].append("pause_windows")
+        spec["description"] += (" For a fresh current force-pause sample use object.kind=game and "
+                                "aspects=['pause_windows']; window identity is not authorization to act.")
     cell = {
         "type": "object",
         "additionalProperties": False,

@@ -256,3 +256,14 @@ Session context projection is mandatory. A caller-supplied current `ContextPrune
 The current consultation prompt is authored only in `agent/runtime/prompt.py`. Session creation binds its research policy and work identity once; finalization changes only the phase policy. Prepared callers supply the question, ordinary context and work identity, with no alternate system-prompt option. Query discovery and the overlapping standalone spatial backend are retired; activity and native world reads retain their existing roles.
 
 `preferred_cycles` has been retired: it did not control research or model calls. Configurations and settings writes containing that key are rejected; remove it explicitly. Research remains bounded by the existing deadlines, finalization reserve and tool/result limits. No cycle-count cutoff replaces it.
+
+
+Current-window evidence is available through the existing `look` tool when the
+native catalog advertises all required fields:
+`look(object={"kind":"game"}, aspects=["pause_windows"])`. This requests fresh
+native data, preserving sample tick, window IDs/types and bounded opening frames,
+including unknown, partial, truncated and unavailable states. Older catalogs do
+not advertise this aspect. A cached situation clock is historical; managed
+opening frames do not identify an operator or authorize closing a window. The
+plugin adds no window-dismissal, naming or decision action, and force-pause and
+pause-owner protections remain in effect.
