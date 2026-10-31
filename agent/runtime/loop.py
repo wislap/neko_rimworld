@@ -9,13 +9,13 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Protocol
 
 from ...message_contracts import PreparedToolCall
-from ...tool_contracts import ToolExecutionError, ToolSetup, ToolSpec
+from ...tool_contracts import UNKNOWN_WRITE_OUTCOME_CODES, ToolExecutionError, ToolSetup, ToolSpec, binding_is_current
 from ..context.situation_context import compile_situation, unavailable_situation
 from ..delivery.handoff import (
     attach_agent_handoff,
 )
 from ..model.model_client import AgentModelSettings, ModelClient, OpenAICompatibleModelClient
-from ..model.model_requests import MAX_MODEL_ATTEMPTS, _binding_valid, _canonical_hash, request_model
+from ..model.model_requests import MAX_MODEL_ATTEMPTS, _canonical_hash, request_model
 from .audit import (
     AgentAuditCapacityError,
     AgentAuditLedger,
@@ -123,6 +123,10 @@ class AgentRuntime:
                 },
                 session,
             )
+            if session.response_audit_pending and session.received_model_turn is not None:
+                result = {**result, "received_model_response": private_protocol_redacted(session.received_model_turn.as_audit_value()),
+                          "model_response_audit": "capacity_unrecorded"}
+                result.setdefault("model_response_recording", "audit_capacity_unrecorded")
             await self._retain_report(result, question, ledger, session)
             ledger.set_result(result)
             self._logger.warning("[agent] audit capacity reached run_id={}", ledger.run_id)
@@ -252,15 +256,35 @@ class AgentRuntime:
             result = {**result, "write_outcomes": copy.deepcopy(session.write_outcomes)}
         if session.write_record_issue:
             stage = session.write_record_issue
-            if stage == "prepared":
-                message = "The write was not sent because its preparation record could not be saved."
-            elif stage == "result" and session.write_outcomes and "receipt" in session.write_outcomes[-1]:
+            context = session.write_record_context
+            mode = context.get("mode")
+            declared_outcome = context.get("outcome")
+            retry_unknown = (type(context.get("attempt")) is int and context["attempt"] > 1
+                             and declared_outcome not in {"known", "known_failure"})
+            if retry_unknown:
+                outcome = "unknown"
+            elif declared_outcome == "not_sent" or stage in {"prepared", "queued"}:
+                outcome = "not_sent"
+            elif declared_outcome in {"known", "known_failure"}:
+                outcome = "known"
+            else:
+                outcome = "unknown"
+            needs_reconciliation = mode != "dry_run" and outcome != "not_sent"
+            result = {**result, "write_recording": {"stage": stage, "mode": mode, "outcome": outcome,
+                                                   "needs_reconciliation": needs_reconciliation}}
+            if outcome == "not_sent":
+                message = "The write was not sent; its preparation or non-dispatch record could not be confirmed."
+            elif outcome == "known" and session.write_outcomes and "receipt" in session.write_outcomes[-1]:
                 receipt = session.write_outcomes[-1]["receipt"]
                 if (session.write_outcomes[-1].get("mode") == "commit"
                         and isinstance(receipt, Mapping) and receipt.get("status") == "committed"):
                     message = "The game confirmed the write was committed, but recording was not confirmed. The known receipt is retained."
                 else:
                     message = "The game returned a write receipt, but recording it was not confirmed. The known receipt is retained."
+            elif outcome == "known":
+                message = "The game returned a known write result, but recording it was not confirmed."
+            elif mode == "dry_run":
+                message = "The dry run result and its recording are not confirmed; no game write was committed."
             else:
                 message = "The write may have been applied, but its outcome and recording are not confirmed."
             result = {**result, "answer": message, "caveats": [*result.get("caveats", []), message]}
@@ -421,6 +445,7 @@ class AgentRuntime:
                                              error_code="narrative_summary_invalid", observations=session.observations,
                                              fallback_answer=session.fallback_answer)
             ledger.transition(AgentRunState.MODEL_RESPONDED, "model_response_received", turn.as_audit_value())
+            session.response_audit_pending = False
             await session.accept_narrative_summary(turn.content)
         setup = await self._tools_provider()
 
@@ -521,11 +546,12 @@ class AgentRuntime:
                 "model_response_received",
                 turn.as_audit_value(),
             )
+            session.response_audit_pending = False
             session.append_assistant(turn)
             if session.persist_progress is not None:
                 await session.persist_progress({"stage": "assistant", "message": turn.as_message()})
 
-            if not _binding_valid(session):
+            if not binding_is_current(session.binding_check):
                 raise ToolExecutionError("world_changed", "The active colony connection changed.", recoverable=False)
             if turn.tool_calls:
                 ledger.transition(
@@ -538,7 +564,7 @@ class AgentRuntime:
                 terminal_name = None
                 isolated_batch = len(turn.tool_calls) > 1 and any(tools.is_exclusive(c.name) for c in turn.tool_calls)
                 for call in turn.tool_calls:
-                    if not _binding_valid(session):
+                    if not binding_is_current(session.binding_check):
                         raise ToolExecutionError("world_changed", "The active colony connection changed.", recoverable=False)
                     session.tool_calls += 1
                     ledger.record(
@@ -639,6 +665,22 @@ class AgentRuntime:
                     tool_messages.append(tool_message)
                     if session.evidence_views and session.evidence_views[-1]["call_id"] == result.call_id:
                         ledger.record("model_evidence_compiled", session.evidence_views[-1])
+                    error_code = result.value.get("error", {}).get("code") if not result.ok else None
+                    if error_code in UNKNOWN_WRITE_OUTCOME_CODES:
+                        for message in tool_messages:
+                            session.append_tool_message(message)
+                        for remaining in turn.tool_calls[len(tool_messages):]:
+                            skipped = tools.error_result(remaining, "write_outcome_unresolved",
+                                "Not executed because a preceding write outcome is unknown.", recoverable=False)
+                            skipped_message = session.tool_message(skipped)
+                            if session.persist_progress is not None:
+                                await session.persist_progress({"stage": "tool", "message": skipped_message,
+                                    "tool_call_id": skipped.call_id, "tool_result": skipped.value, "observation": None})
+                            session.append_tool_message(skipped_message)
+                        return self._finish_degraded(
+                            ledger, reason="A game write outcome is unknown; inspect the action log before further changes.",
+                            error_code=error_code, observations=session.observations,
+                        )
                     if result.terminal and result.ok:
                         data_value = result.value.get("data")
                         if isinstance(data_value, Mapping) and submitted_response is None:

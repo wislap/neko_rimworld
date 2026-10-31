@@ -128,6 +128,9 @@ def test_look_description_advertises_business_domains_only_when_supported():
     description = next(tool.description for tool in reader.tools() if tool.name == "look")
     base_description = next(tool.description for tool in before.tools() if tool.name == "look")
     assert description.startswith(base_description)
+    registry = ToolRegistry()
+    registry.register(next(tool for tool in reader.tools() if tool.name == "look"))
+    assert "Non-storage colony-domain detail is accepted for compatibility" in registry.schemas()[0]["function"]["description"]
     for phrase in ("world places/caravans", "faction relations", "quest requirements/rewards/deadlines",
                    "merchant stock", "research progress/prerequisites", 'object.kind="traders",aspects=["stock"]',
                    "count totals alone do not identify seller or ownership"):
@@ -527,3 +530,114 @@ async def test_storage_contract_rejects_unsupported_selectors_and_aspects():
     assert calls == []
     await tool.handler({**good, "offset": 0, "detail": 0, "focus": {"items": ["MedicineIndustrial"]}})
     assert calls == [{"operation": "inspect_storage", "arguments": {"ids": ["Zone_0"], "map": "Map_0", "items": ["MedicineIndustrial"]}}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name,argument", [("evaluate_trade", "buy"), ("evaluate_journey", "cargo_add")])
+async def test_computation_rejects_quantity_above_native_int32_before_query(name, argument):
+    from plugin.plugins.neko_rimworld.tool_contracts import ToolExecutionError
+    source = catalog()
+    for row in source["colony_state"]["operations"]:
+        if row["operation"] == "evaluate_journey":
+            row["parameters"]["properties"]["cargo_add"] = {"type": "array"}
+    reader, calls = interaction(source=source)
+    tool = next(t for t in reader.tools() if t.name == name)
+    registry = ToolRegistry()
+    registry.register(tool)
+    validator = Draft202012Validator(registry.schemas()[0]["function"]["parameters"])
+    refs = ({"trader": {"id": "t"}, "negotiator": {"id": "p"}} if name == "evaluate_trade"
+            else {"caravan": {"id": "c"}, "destinations": [{"id": "d"}]})
+    bad = {**refs, argument: [{"item": "Steel", "quantity": 2147483648}]}
+    assert not validator.is_valid(bad)
+    with pytest.raises(ToolExecutionError):
+        await tool.handler(bad)
+    assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name,field", [("evaluate_journey", "caravan"), ("evaluate_trade", "trader")])
+@pytest.mark.parametrize("text", ["   ", "x" * 257])
+async def test_computation_reference_schema_matches_handler(name, field, text):
+    from plugin.plugins.neko_rimworld.tool_contracts import ToolExecutionError
+    reader, calls = interaction()
+    tool = next(t for t in reader.tools() if t.name == name)
+    registry = ToolRegistry()
+    registry.register(tool)
+    validator = Draft202012Validator(registry.schemas()[0]["function"]["parameters"])
+    args = ({"caravan": {"id": "ok"}, "destinations": [{"id": "d"}]} if name == "evaluate_journey"
+            else {"trader": {"id": "ok"}, "negotiator": {"id": "p"}, "buy": [{"item": "Steel", "quantity": 1}]})
+    args[field] = {"id": text}
+    assert not validator.is_valid(args)
+    with pytest.raises(ToolExecutionError):
+        await tool.handler(args)
+    assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("obj,focus", [
+    ({"kind": "research", "names": ["   "]}, None),
+    ({"kind": "research", "names": ["x" * 257]}, None),
+    ({"kind": "research", "id": "   "}, None),
+    ({"kind": "research", "id": "x" * 257}, None),
+    ({"kind": "storage", "id": "   ", "map": "Map_0"}, None),
+    ({"kind": "storage", "id": "x" * 257, "map": "Map_0"}, None),
+    ({"kind": "traders", "map": "   "}, None),
+    ({"kind": "world_objects", "category": "   "}, None),
+    ({"kind": "world_objects", "near": {"kind": "map", "map": "   "}}, None),
+    ({"kind": "resources"}, {"items": ["x" * 257]}),
+])
+async def test_colony_text_schema_rejects_same_values_as_handler(obj, focus):
+    from plugin.plugins.neko_rimworld.tool_contracts import ToolExecutionError
+    source = catalog()
+    source["colony_state"]["operations"].append({"operation": "inspect_storage", "parameters": {"type": "object", "properties": {"items": {"type": "array"}}}})
+    reader, calls = interaction(source=source)
+    tool = next(t for t in reader.tools() if t.name == "look")
+    registry = ToolRegistry()
+    registry.register(tool)
+    schema = registry.schemas()[0]["function"]["parameters"]
+    aspects = {"research": ["progress"], "storage": ["priority"], "traders": ["identity"],
+               "world_objects": ["identity"], "resources": ["quantity"]}[obj["kind"]]
+    args = {"object": obj, "aspects": aspects}
+    if focus is not None: args["focus"] = focus
+    assert not Draft202012Validator(schema).is_valid(args)
+    with pytest.raises(ToolExecutionError): await tool.handler(args)
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_basket_item_schema_preserves_internal_spaces_and_no_length_cap():
+    from plugin.plugins.neko_rimworld.tool_contracts import ToolExecutionError
+    reader, calls = interaction()
+    tool = next(t for t in reader.tools() if t.name == "evaluate_trade")
+    registry = ToolRegistry()
+    registry.register(tool)
+    schema = registry.schemas()[0]["function"]["parameters"]
+    base = {"trader": {"id": "trader"}, "negotiator": {"id": "pawn"}}
+    blank = {**base, "buy": [{"item": "   ", "quantity": 1}]}
+    assert not Draft202012Validator(schema).is_valid(blank)
+    with pytest.raises(ToolExecutionError): await tool.handler(blank)
+    for name in ("Simple meal", "x" * 257):
+        args = {**base, "buy": [{"item": name, "quantity": 1}]}
+        assert Draft202012Validator(schema).is_valid(args)
+        await tool.handler(args)
+    assert [call["arguments"]["buy"][0]["item"] for call in calls] == ["Simple meal", "x" * 257]
+
+
+@pytest.mark.asyncio
+async def test_colony_text_schema_accepts_internal_spaces_and_long_map():
+    source = catalog()
+    source["colony_state"]["operations"].append({"operation": "inspect_storage", "parameters": {"type": "object", "properties": {"items": {"type": "array"}}}})
+    reader, calls = interaction(source=source)
+    tool = next(t for t in reader.tools() if t.name == "look")
+    registry = ToolRegistry()
+    registry.register(tool)
+    schema = registry.schemas()[0]["function"]["parameters"]
+    samples = [
+        {"object": {"kind": "research", "names": ["Simple meal"]}, "aspects": ["progress"]},
+        {"object": {"kind": "storage", "id": "Storage id", "map": "x" * 257}, "aspects": ["priority"]},
+        {"object": {"kind": "world_objects", "near": {"kind": "map", "map": "x" * 257}}, "aspects": ["identity"]},
+    ]
+    for args in samples:
+        assert Draft202012Validator(schema).is_valid(args)
+        await tool.handler(args)
+    assert len(calls) == 3

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import copy
 
-from ...tool_contracts import ToolExecutionError, ToolSetup, ToolSpec
+from ...game.bridge import BridgeNotDispatched
+from ...tool_contracts import ToolExecutionError, ToolSetup, ToolSpec, binding_is_current
 from ..world.semantic_tools import semantic_interaction_factory
 from .tools import ToolRegistry
 
@@ -48,13 +49,21 @@ class ExecutionEnvironment:
                         await session.persist_progress({"pause_request": request})
                 except BaseException:
                     session.write_record_issue = "prepared"
+                    session.write_record_context = {"mode": "set_paused", "outcome": "not_sent"}
                     raise
+                if not binding_is_current(session.binding_check):
+                    raise ToolExecutionError("world_changed", "The active run is no longer authorized.", recoverable=False)
                 try:
                     result = await port.set_paused(paused, role=session.role, **({"expected_owner": expected_owner} if not paused else {}))
+                except BridgeNotDispatched as error:
+                    session.write_outcomes.append({"stage": "result", "mode": "set_paused", "outcome": "not_sent"})
+                    raise ToolExecutionError("write_not_dispatched", "The pause request was not sent.",
+                                             recoverable=False, details={"outcome": "not_sent"}) from error
                 except ToolExecutionError:
                     raise
                 except BaseException:
                     session.write_record_issue = "unknown"
+                    session.write_record_context = {"mode": "set_paused", "outcome": "unknown"}
                     raise
                 session.write_outcomes.append({"stage": "result", "mode": "set_paused", "receipt": copy.deepcopy(result)})
                 try:
@@ -62,6 +71,7 @@ class ExecutionEnvironment:
                         await session.persist_progress({"pause_result": copy.deepcopy(result)})
                 except BaseException:
                     session.write_record_issue = "result"
+                    session.write_record_context = {"mode": "set_paused", "outcome": "known"}
                     raise
                 return result
 
@@ -75,6 +85,9 @@ class ExecutionEnvironment:
                 and setup.observation_source == "native" and setup.write_identity() is not None):
             from ..write.service import WriteService
 
+            def authorized_identity():
+                return setup.write_identity() if binding_is_current(session.binding_check) else None
+
             async def record_write(event):
                 stage = event["stage"]
                 if stage == "result":
@@ -85,6 +98,7 @@ class ExecutionEnvironment:
                         await session.persist_progress({"write": copy.deepcopy(event)})
                 except BaseException:
                     session.write_record_issue = stage
+                    session.write_record_context = {key: event[key] for key in ("mode", "outcome", "attempt") if key in event}
                     raise
 
             guard = None
@@ -92,10 +106,10 @@ class ExecutionEnvironment:
                 raise ToolExecutionError("takeover_unknown", "The takeover journal is unavailable.", recoverable=False)
             if session.takeover_service is not None:
                 from ...workspace.takeovers import TakeoverControl
-                guard = TakeoverControl(session.takeover_service, setup.ledger_query, setup.write_identity,
+                guard = TakeoverControl(session.takeover_service, setup.ledger_query, authorized_identity,
                                         setup.write_fields_query)
             service = WriteService(setup.write_catalog, session.observations, setup.write_port,
-                                   setup.write_identity, source_kind=setup.observation_source,
+                                   authorized_identity, source_kind=setup.observation_source,
                                    record=record_write, guard=guard)
             specs = []
             for schema in service.schemas():

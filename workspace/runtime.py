@@ -12,7 +12,7 @@ from ..agent.context.narrative import SUMMARY_EVENT, select_narrative, summary_m
 from ..agent.runtime.audit import AgentAuditLedger, private_protocol_redacted
 from ..agent.runtime.session import AgentRunSession
 from ..serialization import canonical
-from ..tool_contracts import ToolExecutionError, ToolSpec
+from ..tool_contracts import ToolExecutionError, ToolSpec, binding_is_current
 from .journal import Journal
 from .ledger import FRONTDESK, RUN_EVENT, UTTERANCE_EVENT
 from .session_view import anchor_seq, frontdesk_messages, pinned_utterances, recall, trigger_message
@@ -87,13 +87,8 @@ class FrontdeskService:
                 current = self.game_session()
                 if current is None or (current.colony_id, current.load_epoch) != (colony, epoch):
                     raise ToolExecutionError("world_changed", "The active colony or epoch changed before the command executed", recoverable=False)
-                if command_binding_check is not None:
-                    try:
-                        valid = command_binding_check()
-                    except Exception:
-                        valid = False
-                    if not valid:
-                        raise ToolExecutionError("world_changed", "The active colony connection changed before the command executed", recoverable=False)
+                if not binding_is_current(command_binding_check):
+                    raise ToolExecutionError("world_changed", "The active colony connection changed before the command executed", recoverable=False)
                 load = self.journal.latest_event(colony, "colony.load")
                 if method not in {"observe_epoch", "ingest_game_event"} and load and load["load_epoch"] != epoch:
                     raise ToolExecutionError("world_changed", "The recorded colony load changed before the command executed", recoverable=False)

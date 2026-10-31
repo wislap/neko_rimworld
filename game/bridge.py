@@ -83,6 +83,11 @@ class BridgeNotDispatched(BridgeError):
     code = "bridge_not_dispatched"
 
 
+class BridgeWriteUnconfirmed(BridgeError):
+    """A commit or undo crossed the dispatch boundary but has no trusted receipt."""
+    code = "bridge_write_unconfirmed"
+
+
 class BridgeProtocolError(BridgeError):
     code = "bridge_protocol_error"
 
@@ -417,6 +422,7 @@ class BridgeServer:
 
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
             raise ValueError("timeout must be a positive number")
+        unavailable = BridgeNotDispatched if write and operation in {"commit", "undo"} else BridgeNotConnected
         # The session identity, pending registration and queue insertion share the
         # connection lock with session changes and shutdown.
         with self._connection_lock:
@@ -425,12 +431,12 @@ class BridgeServer:
             stale = self._session_stale
             capabilities = self._capabilities
             if cancel_event is not None and cancel_event.is_set():
-                raise BridgeNotConnected("The write was cancelled before dispatch.")
+                raise unavailable("The write was cancelled before dispatch.")
             if expected_connection is not None and (epoch != expected_connection or not self._same_session(session, expected_session)):
-                raise BridgeNotConnected("The bound game session changed before the request was queued.")
+                raise unavailable("The bound game session changed before the request was queued.")
             if epoch is None or session is None or stale:
                 self._state.set_last_query("not_connected", 0.0, error_code=BridgeNotConnected.code)
-                raise BridgeNotConnected("No authenticated, active RimWorld session is available.")
+                raise unavailable("No authenticated, active RimWorld session is available.")
             supported = (
                 "colony_pause.v1" in capabilities if policy else
                 ("colony_pause.policy.v1" in capabilities if arguments.get("role") == "policy" else
@@ -457,7 +463,7 @@ class BridgeServer:
             )
             with self._pending_lock:
                 if cancel_event is not None and cancel_event.is_set():
-                    raise BridgeNotConnected("The write was cancelled before dispatch.")
+                    raise unavailable("The write was cancelled before dispatch.")
                 if idle_only and self._pending:
                     raise BridgeBusyError("The read channel is busy; opportunistic reads are not queued.")
                 if len(self._pending) >= self._pending_capacity:
@@ -535,6 +541,11 @@ class BridgeServer:
                 (time.monotonic() - pending.started_at) * 1000.0,
                 error_code=pending.error.code,
             )
+            if write and operation in {"commit", "undo"}:
+                if pending.dispatched and not isinstance(pending.error, BridgeNotDispatched):
+                    raise BridgeWriteUnconfirmed("The write was dispatched but its receipt is unconfirmed.") from pending.error
+                if not pending.dispatched:
+                    raise BridgeNotDispatched("The write failed before dispatch.") from pending.error
             raise pending.error
         if pending.response is None:
             self._state.set_last_query(
@@ -542,6 +553,10 @@ class BridgeServer:
                 (time.monotonic() - pending.started_at) * 1000.0,
                 error_code=BridgeProtocolError.code,
             )
+            if write and operation in {"commit", "undo"}:
+                if pending.dispatched:
+                    raise BridgeWriteUnconfirmed("The write was dispatched but no receipt was received.")
+                raise BridgeNotDispatched("The write completed before dispatch without a receipt.")
             raise BridgeProtocolError("The query completed without a response.")
         self._state.set_last_query(
             pending.response.payload.status or "unknown",

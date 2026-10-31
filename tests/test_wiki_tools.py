@@ -73,7 +73,7 @@ async def test_one_minimal_tool_returns_mapping_not_observation(tmp_path):
     assert tool.name == "wiki"
     assert tool.parameters == {
         "type": "object",
-        "properties": {"query": {"type": "string", "maxLength": 4096}},
+        "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": r"\S"}},
         "required": ["query"],
         "additionalProperties": False,
     }
@@ -550,3 +550,18 @@ def test_entries_report_how_they_matched(tmp_path):
     assert store.query("verse.thingdef/steel")["entries"][0]["match"] == "exact_key"
     assert store.query("钢铁")["entries"][0]["match"] == "exact_name"
     assert store.query("钢铁的堆叠上限是多少")["entries"][0]["match"] == "name_in_query"
+
+
+@pytest.mark.asyncio
+async def test_wiki_model_schema_matches_nonblank_query_validation():
+    from jsonschema import Draft202012Validator
+    registry = ToolRegistry()
+    tool = make_wiki_tool(WikiStore(None))
+    registry.register(tool)
+    schema = registry.schemas()[0]["function"]["parameters"]
+    validator = Draft202012Validator(schema)
+    for query in ("", "   ", "x" * (wiki_tools.MAX_QUERY_CHARS + 1)):
+        assert not validator.is_valid({"query": query})
+        with pytest.raises(ToolExecutionError):
+            await tool.handler({"query": query})
+    assert validator.is_valid({"query": "Steel"})

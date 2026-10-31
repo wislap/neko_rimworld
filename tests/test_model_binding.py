@@ -208,3 +208,42 @@ async def test_admission_failure_does_not_repeat_its_pending_settlement():
         await request_model(SimpleNamespace(), settings, ledger, session, session.messages, [], finalizing=True,
                             reserve=0, research_deadline=900, cycle=1, request_sha256='', logger=FakeLogger())
     assert budget.settlements == 1
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('exit_kind', ['error', 'cancel'])
+async def test_unbudgeted_scope_exit_retains_received_response(exit_kind):
+    from ..message_contracts import AssistantTurn
+    class Model:
+        @asynccontextmanager
+        async def request_scope(self):
+            yield
+            if exit_kind == 'cancel': raise asyncio.CancelledError()
+            raise RuntimeError('scope exit failed')
+        async def complete(self, *args, **kwargs):
+            return AssistantTurn('provider-id', 'test', 'stop', 'retained answer', usage={'prompt_tokens': 7, 'completion_tokens': 3})
+    ledger = AgentAuditLedger('q')
+    session = AgentRunSession.create(ledger=ledger, question='q')
+    settings = build_agent_model_settings(base_url='http://localhost:11434/v1', model='test')
+    with pytest.raises(asyncio.CancelledError if exit_kind == 'cancel' else RuntimeError):
+        await request_model(Model(), settings, ledger, session, session.messages, [], finalizing=True,
+                            reserve=0, research_deadline=900, cycle=1, request_sha256='', logger=FakeLogger())
+    assert session.received_model_turn.content == 'retained answer'
+    assert session.model_receipt_unconfirmed is True
+    from ..agent.runtime.loop import AgentRuntime
+    retained = AgentRuntime._attach_handoff({'status': 'degraded'}, session)
+    assert retained['received_model_response']['content'] == 'retained answer'
+    assert retained['model_response_recording'] == 'unconfirmed'
+
+@pytest.mark.asyncio
+async def test_unbudgeted_success_clears_temporary_response_marker():
+    from ..message_contracts import AssistantTurn
+    class Model:
+        async def complete(self, *args, **kwargs):
+            return AssistantTurn('id', 'test', 'stop', 'success', usage={'prompt_tokens': 7, 'completion_tokens': 3})
+    ledger = AgentAuditLedger('q')
+    session = AgentRunSession.create(ledger=ledger, question='q')
+    settings = build_agent_model_settings(base_url='http://localhost:11434/v1', model='test')
+    result = await request_model(Model(), settings, ledger, session, session.messages, [], finalizing=True,
+                                 reserve=0, research_deadline=900, cycle=1, request_sha256='', logger=FakeLogger())
+    assert result.turn.content == 'success'
+    assert session.model_receipt_unconfirmed is False

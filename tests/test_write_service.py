@@ -312,9 +312,10 @@ async def test_two_lost_receipts_report_same_key_and_unknown_outcome():
     service = WriteService(catalog(), [observation()], port, lambda: IDENTITY)
     with pytest.raises(ToolExecutionError) as error:
         await service.commit({'entry_id': 'task', 'ops': [op()]})
-    assert error.value.code == 'write_receipt_lost'
+    assert error.value.code == 'write_receipt_lost' and error.value.recoverable is False
     assert port.calls[0] == port.calls[1]
-    assert error.value.details == {key: port.calls[0][key] for key in ('changeset_id', 'idempotency_key')}
+    assert error.value.details == {'outcome': 'unknown', **dict(zip(('connection_epoch', 'colony_id', 'load_epoch'), IDENTITY)),
+                                   **{key: port.calls[0][key] for key in ('changeset_id', 'idempotency_key')}}
 
 
 async def test_conflict_no_retry_and_audit_failure_prevents_send():
@@ -348,7 +349,8 @@ async def test_cancel_and_changed_epoch_never_retry():
     service = WriteService(catalog(), [observation()], port, lambda: identity)
     with pytest.raises(ToolExecutionError) as error:
         await service.commit({'entry_id': 'task', 'ops': [op()]})
-    assert error.value.code == 'world_changed' and len(port.calls) == 1
+    assert error.value.code == 'write_receipt_lost' and error.value.recoverable is False and len(port.calls) == 1
+    assert error.value.details['load_epoch'] == IDENTITY[2]
 
     class CancelPort(Port):
         async def commit(self, data):
@@ -392,8 +394,10 @@ async def test_lost_receipt_audit_failure_carries_unknown_identity(failed_stage)
     service = WriteService(catalog(), [observation()], port, lambda: IDENTITY, record=record)
     with pytest.raises(ToolExecutionError) as error:
         await service.commit({'entry_id': 'task', 'ops': [op()]})
-    assert error.value.code == 'write_audit_failed' and not error.value.recoverable
-    assert error.value.details == {'outcome': 'unknown', **{k: port.calls[0][k] for k in ('changeset_id', 'idempotency_key')}}
+    assert error.value.code == 'write_receipt_lost' and not error.value.recoverable
+    assert error.value.details == {'outcome': 'unknown', 'audit_recording': 'unconfirmed',
+                                   **dict(zip(('connection_epoch', 'colony_id', 'load_epoch'), IDENTITY)),
+                                   **{k: port.calls[0][k] for k in ('changeset_id', 'idempotency_key')}}
     assert len(port.calls) == (1 if failed_stage == 'retry' else 2)
 
 
@@ -459,3 +463,176 @@ async def test_native_retry_audits_distinct_request_ids_and_same_key():
     assert events[2]['outcome'] == 'unknown' and events[2]['request_id'] == first['request_id']
     assert events[5]['request_id'] == events[5]['envelope']['request_id'] == second['request_id']
     assert events[5]['envelope']['game_tick'] == 42
+
+
+async def test_native_undo_timeout_is_unknown_nonrecoverable_and_not_retried():
+    import json
+    from ..agent.runtime.tools import ToolRegistry
+    from ..game.bridge import BridgeQueryTimeout
+    from ..game.protocol import SessionDescriptor
+    from ..game.write_port import BridgeGameWritePort
+    from ..message_contracts import ToolCall
+    from ..tool_contracts import ToolSpec
+
+    class Bridge:
+        capabilities = {"colony_write.v1"}
+        def __init__(self): self.calls = 0
+        def undo(self, token, **kwargs):
+            self.calls += 1
+            kwargs["audit_dispatch"]("a" * 32, 3, kwargs["cancel_event"])
+            raise BridgeQueryTimeout("lost")
+    bridge = Bridge()
+    port = BridgeGameWritePort(bridge, IDENTITY[0], SessionDescriptor(IDENTITY[1], IDENTITY[2], 1, 1))
+    events = []
+    async def record(event): events.append(copy.deepcopy(event))
+    service = WriteService(catalog(), [], port, lambda: IDENTITY, record=record)
+    registry = ToolRegistry()
+    registry.register(ToolSpec("undo", "undo", {"type": "object"}, service.undo))
+    prepared = registry.prepare(ToolCall("call", "undo", json.dumps({"token": "opaque"})))
+    result = await registry.execute(prepared)
+    assert result.value["error"]["code"] == "undo_outcome_unknown"
+    assert result.value["recoverable"] is False
+    assert bridge.calls == 1
+    repeated = await registry.execute(registry.prepare(ToolCall("again", "undo", json.dumps({"token": "opaque"}))))
+    assert repeated.value["error"]["code"] == "undo_outcome_unknown"
+    assert repeated.value["recoverable"] is False and bridge.calls == 1
+    final = events[-1]
+    assert final["stage"] == "result" and final["outcome"] == "unknown"
+    assert final["undo_token"] == "opaque" and final["request_id"] == "a" * 32
+    assert (final["connection_epoch"], final["colony_id"], final["load_epoch"]) == IDENTITY
+
+
+async def test_undo_timeout_audit_failure_retains_unknown_scope_and_token():
+    from ..game.bridge import BridgeQueryTimeout
+    from ..game.protocol import SessionDescriptor
+    from ..game.write_port import BridgeGameWritePort
+
+    class Bridge:
+        capabilities = {"colony_write.v1"}
+        def undo(self, token, **kwargs):
+            kwargs["audit_dispatch"]("b" * 32, 3, kwargs["cancel_event"])
+            raise BridgeQueryTimeout("lost")
+    async def record(event):
+        if event["stage"] == "result": raise OSError("journal unavailable")
+    port = BridgeGameWritePort(Bridge(), IDENTITY[0], SessionDescriptor(IDENTITY[1], IDENTITY[2], 1, 1))
+    service = WriteService(catalog(), [], port, lambda: IDENTITY, record=record)
+    with pytest.raises(ToolExecutionError) as error:
+        await service.undo({"token": "opaque"})
+    assert error.value.code == "write_audit_failed" and not error.value.recoverable
+    assert error.value.details["outcome"] == "unknown" and error.value.details["undo_token"] == "opaque"
+    assert error.value.details["request_id"] == "b" * 32
+    assert tuple(error.value.details[k] for k in ("connection_epoch", "colony_id", "load_epoch")) == IDENTITY
+
+
+async def test_scope_change_while_recording_retry_keeps_unknown():
+    from ..tool_contracts import ReceiptLost
+    identity = list(IDENTITY)
+    class LostPort(Port):
+        async def commit(self, data):
+            self.calls.append(copy.deepcopy(data))
+            raise ReceiptLost(data['idempotency_key'])
+    port = LostPort()
+    async def record(event):
+        if event['stage'] == 'retry': identity[0] = 'new-connection'
+    service = WriteService(catalog(), [observation()], port, lambda: identity, record=record)
+    with pytest.raises(ToolExecutionError) as error:
+        await service.commit({'entry_id': 'task', 'ops': [op()]})
+    assert error.value.code == 'write_receipt_lost' and not error.value.recoverable
+    assert error.value.details['connection_epoch'] == IDENTITY[0]
+    assert error.value.details['idempotency_key'] == port.calls[0]['idempotency_key']
+    assert len(port.calls) == 1
+
+
+async def test_queued_audit_scope_change_is_not_dispatched():
+    from ..game.protocol import SessionDescriptor
+    from ..game.write_port import BridgeGameWritePort
+    identity = list(IDENTITY)
+    class Bridge:
+        capabilities = {'colony_write.v1'}
+        def __init__(self): self.sent = 0
+        def commit(self, body, **kwargs):
+            kwargs['audit_dispatch']('q' * 32, 3, kwargs['cancel_event'])
+            self.sent += 1
+            raise AssertionError('must not send')
+    bridge = Bridge()
+    events = []
+    async def record(event):
+        events.append(copy.deepcopy(event))
+        if event['stage'] == 'queued': identity[0] = 'new-connection'
+    port = BridgeGameWritePort(bridge, IDENTITY[0], SessionDescriptor(IDENTITY[1], IDENTITY[2], 1, 1))
+    service = WriteService(catalog(), [observation()], port, lambda: identity, record=record)
+    with pytest.raises(ToolExecutionError) as error:
+        await service.commit({'entry_id': 'task', 'ops': [op()]})
+    assert error.value.code == 'write_not_dispatched' and error.value.details['outcome'] == 'not_sent'
+    assert bridge.sent == 0
+    assert events[-1]['outcome'] == 'not_sent'
+    assert events[-1]['connection_epoch'] == IDENTITY[0]
+
+
+async def test_known_retry_receipt_is_not_misclassified_when_audit_fails():
+    from ..tool_contracts import ReceiptLost
+    class PortAfterLost(Port):
+        async def commit(self, data):
+            self.calls.append(copy.deepcopy(data))
+            if len(self.calls) == 1:
+                raise ReceiptLost(data['idempotency_key'])
+            return {'status': 'committed', 'undo_token': 'known'}
+    async def record(event):
+        if event['stage'] == 'result': raise OSError('journal unavailable')
+    port = PortAfterLost()
+    service = WriteService(catalog(), [observation()], port, lambda: IDENTITY, record=record)
+    with pytest.raises(ToolExecutionError) as error:
+        await service.commit({'entry_id': 'task', 'ops': [op()]})
+    assert error.value.code == 'write_audit_failed'
+    assert error.value.details['outcome'] == 'known'
+    assert error.value.details['receipt']['status'] == 'committed'
+    assert len(port.calls) == 2 and port.calls[0] == port.calls[1]
+
+
+async def test_first_native_lost_receipt_audit_failure_stays_unknown():
+    from ..game.bridge import BridgeQueryTimeout
+    from ..game.protocol import SessionDescriptor
+    from ..game.write_port import BridgeGameWritePort
+    class Bridge:
+        capabilities = {'colony_write.v1'}
+        def __init__(self): self.calls = []
+        def commit(self, body, **kwargs):
+            self.calls.append(copy.deepcopy(body))
+            kwargs['audit_dispatch']('r' * 32, 3, kwargs['cancel_event'])
+            raise BridgeQueryTimeout('lost')
+    bridge = Bridge()
+    async def record(event):
+        if event['stage'] == 'result': raise OSError('audit unavailable')
+    port = BridgeGameWritePort(bridge, IDENTITY[0], SessionDescriptor(IDENTITY[1], IDENTITY[2], 1, 1))
+    service = WriteService(catalog(), [observation()], port, lambda: IDENTITY, record=record)
+    with pytest.raises(ToolExecutionError) as error:
+        await service.commit({'entry_id': 'task', 'ops': [op()]})
+    assert error.value.code == 'write_receipt_lost' and not error.value.recoverable
+    assert error.value.details['audit_recording'] == 'unconfirmed'
+    assert error.value.details['request_id'] == 'r' * 32
+    assert error.value.details['idempotency_key'] == bridge.calls[0]['idempotency_key']
+    assert tuple(error.value.details[k] for k in ('connection_epoch', 'colony_id', 'load_epoch')) == IDENTITY
+    assert len(bridge.calls) == 1
+
+
+async def test_queued_audit_failure_reports_not_sent_using_real_bridge_port():
+    from ..game.protocol import SessionDescriptor
+    from ..game.write_port import BridgeGameWritePort
+    class Bridge:
+        capabilities = {'colony_write.v1'}
+        def __init__(self): self.sent = 0
+        def commit(self, body, **kwargs):
+            kwargs['audit_dispatch']('q' * 32, 3, kwargs['cancel_event'])
+            self.sent += 1
+            raise AssertionError('must not send')
+    async def record(event):
+        if event['stage'] == 'queued': raise OSError('audit unavailable')
+    bridge = Bridge()
+    port = BridgeGameWritePort(bridge, IDENTITY[0], SessionDescriptor(IDENTITY[1], IDENTITY[2], 1, 1))
+    service = WriteService(catalog(), [observation()], port, lambda: IDENTITY, record=record)
+    with pytest.raises(ToolExecutionError) as error:
+        await service.commit({'entry_id': 'task', 'ops': [op()]})
+    assert error.value.code == 'write_audit_failed' and not error.value.recoverable
+    assert error.value.details['outcome'] == 'not_sent'
+    assert error.value.details['request_id'] == 'q' * 32 and bridge.sent == 0
+    assert tuple(error.value.details[k] for k in ('connection_epoch', 'colony_id', 'load_epoch')) == IDENTITY

@@ -11,6 +11,16 @@ from .game.observation import Observation
 MAX_TOOL_RESULT_CHARS = 131_072
 
 
+def binding_is_current(check: Callable[[], bool] | None) -> bool:
+    """Optional run authority must be explicitly true; uncertainty fails closed."""
+    if check is None:
+        return True
+    try:
+        return check() is True
+    except Exception:  # noqa: BLE001 - unavailable authority must not admit an operation
+        return False
+
+
 class ToolExecutionError(RuntimeError):
     def __init__(
         self, code: str, message: str, *, recoverable: bool = True, details: dict[str, Any] | None = None
@@ -19,6 +29,10 @@ class ToolExecutionError(RuntimeError):
         self.code = code
         self.recoverable = recoverable
         self.details = details or {}
+
+
+# A write may already have taken effect; the owning run must stop after recording it.
+UNKNOWN_WRITE_OUTCOME_CODES = frozenset({"undo_outcome_unknown", "write_receipt_lost"})
 
 
 class ReceiptLost(RuntimeError):

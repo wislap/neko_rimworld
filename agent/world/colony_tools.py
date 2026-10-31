@@ -50,14 +50,22 @@ def colony_kind(value):
     return ALIASES.get(value, value) if isinstance(value, str) else None
 
 
+def _text(*, max_length=None):
+    schema = {"type": "string", "minLength": 1, "pattern": r"\S"}
+    if max_length is not None:
+        schema["maxLength"] = max_length
+    return schema
+
+
 def _strings():
-    return {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "string", "minLength": 1}}
+    return {"type": "array", "minItems": 1, "maxItems": 32, "items": _text(max_length=256)}
 
 
 def _reference(*, map_allowed=False):
     return {
         "type": "object", "additionalProperties": False,
-        "properties": {"id": {"type": "string", "minLength": 1}, "name": {"type": "string", "minLength": 1}, **({"map": {"type": "string"}} if map_allowed else {})},
+        "properties": {key: _text(max_length=256)
+                       for key in (("id", "name", "map") if map_allowed else ("id", "name"))},
         # oneOf already rejects the both-present case: it would match twice.
         "oneOf": [{"required": ["id"]}, {"required": ["name"]}],
     }
@@ -77,7 +85,7 @@ def extend_look_spec(spec, directory):
         ("inspect_resources", "resource quantities by source"),
         ("inspect_storage", "storage priority and item permissions"),
     ) if operation in operations]
-    spec["description"] += " Also read " + "; ".join(domains) + "."
+    spec["description"] += " Also read " + "; ".join(domains) + ". Non-storage colony-domain detail is accepted for compatibility but does not control returned content; select aspects and focus instead."
     if "inspect_trade" in operations:
         spec["description"] += ' Merchant offer quantities come from object.kind="traders",aspects=["stock"]; count totals alone do not identify seller or ownership.'
     aliases = [alias for alias, kind in ALIASES.items() if kind in kinds]
@@ -85,21 +93,21 @@ def extend_look_spec(spec, directory):
     selectors = {
         "kind": {"enum": [kind for kind in kinds + aliases if kind not in ("resources", "storage")]},
         "ids": _strings(), "names": _strings(),
-        "id": {"type": "string", "minLength": 1}, "name": {"type": "string", "minLength": 1},
+        "id": _text(max_length=256), "name": _text(max_length=256),
     }
     if "inspect_planet" in operations:
-        selectors.update(category={"type": "string"}, near={"oneOf": [_reference(), {
+        selectors.update(category=_text(), near={"oneOf": [_reference(), {
             "type": "object", "additionalProperties": False, "required": ["kind"],
-            "properties": {"kind": {"const": "map"}, "map": {"type": "string", "default": "current"}},
+            "properties": {"kind": {"const": "map"}, "map": {**_text(), "default": "current"}},
         }]})
     if {"inspect_trade", "inspect_resources", "inspect_storage"} & operations:
-        selectors["map"] = {"type": "string", "default": "current"}
+        selectors["map"] = {**_text(), "default": "current"}
     props["object"]["oneOf"].append({"type": "object", "additionalProperties": False, "required": ["kind"], "properties": selectors})
     if "inspect_storage" in operations:
         props["object"]["oneOf"].append({"type": "object", "additionalProperties": False,
             "required": ["kind", "map"], "properties": {"kind": {"const": "storage"},
-            "id": {"type": "string", "minLength": 1}, "ids": {**_strings(), "maxItems": 1},
-            "map": {"type": "string", "minLength": 1}},
+            "id": _text(max_length=256), "ids": {**_strings(), "maxItems": 1},
+            "map": _text()},
             "oneOf": [{"required": ["id"]}, {"required": ["ids"]}]})
         spec["description"] += " Storage reads require map and exactly one ID; they return one object without pagination. Either storage aspect returns priority and permissions for requested items. Use the returned canonical map_id for storage writes."
         spec["parameters"].setdefault("allOf", []).append({
@@ -109,7 +117,7 @@ def extend_look_spec(spec, directory):
                 "focus": {"type": "object", "additionalProperties": False, "properties": {"items": _strings()}},
                 "offset": {"const": 0}, "detail": {"const": 0}}}})
     if "inspect_resources" in operations:
-        props["object"]["oneOf"].append({"type": "object", "additionalProperties": False, "required": ["kind"], "properties": {"kind": {"const": "resources"}, "map": {"type": "string", "default": "current"}}})
+        props["object"]["oneOf"].append({"type": "object", "additionalProperties": False, "required": ["kind"], "properties": {"kind": {"const": "resources"}, "map": {**_text(), "default": "current"}}})
         spec["parameters"].setdefault("allOf", []).append({"if": {"properties": {"object": {"properties": {"kind": {"const": "resources"}}}}}, "then": {"required": ["focus"], "properties": {"focus": {"required": ["items"]}}}})
     extra_aspects = list(dict.fromkeys(a for kind in kinds for a in DOMAINS[kind][1]))
     props["aspects"]["items"]["enum"] = list(dict.fromkeys(props["aspects"]["items"]["enum"] + extra_aspects))
@@ -291,15 +299,15 @@ def computation_tools(interaction):
 
 
 def _basket_schema():
-    return {"type": "array", "maxItems": 32, "items": {"type": "object", "additionalProperties": False, "required": ["item", "quantity"], "properties": {"item": {"type": "string", "minLength": 1}, "quantity": {"type": "integer", "minimum": 1}}}}
+    return {"type": "array", "maxItems": 32, "items": {"type": "object", "additionalProperties": False, "required": ["item", "quantity"], "properties": {"item": _text(), "quantity": {"type": "integer", "minimum": 1, "maximum": 2147483647}}}}
 
 
 def _basket_rows(rows, name):
     if not isinstance(rows, list) or len(rows) > 32:
         raise SurfaceError(name + " requires at most 32 item/quantity rows")
     for row in rows:
-        if not isinstance(row, dict) or set(row) != {"item", "quantity"} or not isinstance(row["item"], str) or not row["item"].strip() or type(row["quantity"]) is not int or row["quantity"] <= 0:
-            raise SurfaceError(name + " rows require item name and positive integer quantity")
+        if not isinstance(row, dict) or set(row) != {"item", "quantity"} or not isinstance(row["item"], str) or not row["item"].strip() or type(row["quantity"]) is not int or not 1 <= row["quantity"] <= 2147483647:
+            raise SurfaceError(name + " rows require an item name and a quantity in 1..2147483647")
     return copy.deepcopy(rows)
 
 

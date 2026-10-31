@@ -101,6 +101,7 @@ class WriteService:
         self.record = record
         self.source_kind = source_kind
         self.guard = guard
+        self._unknown_undo_tokens = set()
         current = identity()
         self.bound = tuple(current) if current is not None else ()
         if len(self.bound) != 3 or not all(self.bound):
@@ -276,7 +277,7 @@ class WriteService:
         return dict(connection_epoch=self.bound[0], colony_id=self.bound[1], load_epoch=self.bound[2])
 
     async def _invoke(self, mode, argument, event, attempt):
-        from ...game.bridge import BridgeNotDispatched
+        from ...game.bridge import BridgeNotDispatched, BridgeQueryTimeout, BridgeWriteUnconfirmed
         from ...game.write_port import BridgeGameWritePort
         context = {**self._scope(), 'origin': self.source_kind, 'mode': mode, 'attempt': attempt}
         if mode == 'undo':
@@ -291,21 +292,68 @@ class WriteService:
                 try:
                     await self._record({'stage': 'queued', **context})
                 except Exception as exc:
-                    raise ToolExecutionError('write_audit_failed', 'Write audit failed before dispatch.', recoverable=False) from exc
+                    raise ToolExecutionError('write_audit_failed', 'Write audit failed before dispatch.',
+                                             recoverable=False, details={'outcome': 'not_sent', **context}) from exc
+                try:
+                    self._current()
+                except Exception as exc:
+                    raise BridgeNotDispatched('Write authority is unavailable before dispatch.') from exc
             else:
                 envelope = response
         try:
             method = getattr(self.port, mode)
             result = await method(copy.deepcopy(argument), audit=audit) if isinstance(self.port, BridgeGameWritePort) else await method(copy.deepcopy(argument))
         except BridgeNotDispatched as exc:
+            not_sent = {'outcome': 'not_sent', **context}
             await self._record({'stage': 'result', **event, **context, 'error': exc.code,
                                 'outcome': 'not_sent', 'transport_state': 'queued_not_sent'})
-            raise
-        except ReceiptLost:
+            raise ToolExecutionError('write_not_dispatched', 'The write was not sent; refresh authority before another action.',
+                                     recoverable=False, details=not_sent) from exc
+        except BridgeWriteUnconfirmed as exc:
+            if mode not in {'commit', 'undo'}:
+                raise
+            if mode == 'undo':
+                self._unknown_undo_tokens.add(argument)
+            code = 'undo_outcome_unknown' if mode == 'undo' else 'write_receipt_lost'
+            unknown = {'outcome': 'unknown', **context}
+            try:
+                await self._record_after({'stage': 'result', **event, **context,
+                                          'error': code, 'outcome': 'unknown',
+                                          'transport_state': 'attempted_write'}, unknown)
+            except ToolExecutionError as audit_error:
+                if audit_error.code != 'write_audit_failed':
+                    raise
+                raise ToolExecutionError(code, 'Write outcome is unknown and its audit is unconfirmed.',
+                                         recoverable=False, details={**unknown, 'audit_recording': 'unconfirmed'}) from audit_error
+            raise ToolExecutionError(code, 'Write outcome is unknown; inspect the game and action log before further action.',
+                                     recoverable=False, details=unknown) from exc
+        except BridgeQueryTimeout as exc:
+            if mode != 'undo':
+                raise
+            self._unknown_undo_tokens.add(argument)
+            unknown = {'outcome': 'unknown', 'undo_token': argument, **self._scope()}
+            if context.get('request_id') is not None:
+                unknown['request_id'] = context['request_id']
+            await self._record_after({'stage': 'result', **event, **context,
+                                      'error': 'undo_outcome_unknown', 'outcome': 'unknown',
+                                      'transport_state': 'attempted_write'}, unknown)
+            raise ToolExecutionError('undo_outcome_unknown',
+                                     'Undo outcome is unknown; inspect the game and action log before any further action.',
+                                     recoverable=False, details={'outcome': 'unknown'}) from exc
+        except ReceiptLost as lost:
             if isinstance(self.port, BridgeGameWritePort) or attempt == 2:
-                await self._record_after({'stage': 'result', **event, **context, 'error': 'write_receipt_lost', 'outcome': 'unknown', 'transport_state': 'attempted_write'},
-                                         {'outcome': 'unknown', **({k: context[k] for k in ('changeset_id', 'idempotency_key')} if mode != 'undo' else {})})
-            raise
+                unknown = {'outcome': 'unknown', **self._scope(),
+                           **({k: context[k] for k in ('changeset_id', 'idempotency_key')} if mode != 'undo' else {})}
+                if context.get('request_id') is not None:
+                    unknown['request_id'] = context['request_id']
+                try:
+                    await self._record_after({'stage': 'result', **event, **context, 'error': 'write_receipt_lost', 'outcome': 'unknown', 'transport_state': 'attempted_write'}, unknown)
+                except ToolExecutionError as audit_error:
+                    if audit_error.code != 'write_audit_failed':
+                        raise
+                    raise ToolExecutionError('write_receipt_lost', 'Write outcome is unknown and its audit is unconfirmed.',
+                                             recoverable=False, details={**unknown, 'audit_recording': 'unconfirmed'}) from audit_error
+            raise lost
         except ToolExecutionError as exc:
             if exc.code == 'write_audit_failed':
                 raise
@@ -326,18 +374,41 @@ class WriteService:
             await self.guard.guard_changeset(changeset)
         event = {'mode': mode, 'changeset': changeset, 'catalog_id': self.directory['catalog_id'], **self._scope(), 'origin': self.source_kind}
         await self._record({'stage': 'prepared', **event})
-        unknown = {'outcome': 'unknown', 'changeset_id': changeset['changeset_id'], 'idempotency_key': changeset['idempotency_key']}
+        unknown = {'outcome': 'unknown', 'changeset_id': changeset['changeset_id'],
+                   'idempotency_key': changeset['idempotency_key'], **self._scope()}
+        unresolved = False
         for attempt in range(1, 3 if mode == 'commit' else 2):
-            self._current()
             try:
+                self._current()
                 return await self._invoke(mode, changeset, event, attempt)
             except ReceiptLost as exc:
                 if mode != 'commit' or exc.idempotency_key != changeset['idempotency_key']:
                     raise
+                unresolved = True
                 if attempt == 2:
-                    raise ToolExecutionError('write_receipt_lost', 'Write outcome is unknown after receipt loss.', details={k: unknown[k] for k in ('changeset_id', 'idempotency_key')}) from exc
-                self._current()
-                await self._record_after({'stage': 'retry', **event}, unknown)
+                    raise ToolExecutionError('write_receipt_lost', 'Write outcome is unknown after receipt loss.',
+                                             recoverable=False, details=copy.deepcopy(unknown)) from exc
+                try:
+                    self._current()
+                    await self._record_after({'stage': 'retry', **event}, unknown)
+                    self._current()
+                except Exception as retry_error:
+                    details = copy.deepcopy(unknown)
+                    if isinstance(retry_error, ToolExecutionError) and retry_error.code == 'write_audit_failed':
+                        details['audit_recording'] = 'unconfirmed'
+                    raise ToolExecutionError('write_receipt_lost', 'Write outcome is unknown; no further dispatch was confirmed.',
+                                             recoverable=False, details=details) from retry_error
+            except Exception as exc:
+                if isinstance(exc, ToolExecutionError) and (exc.code == 'write_receipt_lost' or
+                        (exc.code == 'write_audit_failed' and exc.details.get('outcome') == 'known')):
+                    raise
+                if unresolved:
+                    details = copy.deepcopy(unknown)
+                    if isinstance(exc, ToolExecutionError) and exc.code == 'write_audit_failed':
+                        details['audit_recording'] = 'unconfirmed'
+                    raise ToolExecutionError('write_receipt_lost', 'Write outcome is unknown after receipt loss.',
+                                             recoverable=False, details=details) from exc
+                raise
 
     async def dry_run(self, args):
         return await self._changeset_call('dry_run', args)
@@ -349,6 +420,10 @@ class WriteService:
         self._current()
         if not _schema_check(args, {'type': 'object', 'additionalProperties': False, 'properties': {'token': {'type': 'string', 'minLength': 1}}, 'required': ['token']}):
             raise ToolExecutionError('invalid_arguments', 'Expected an undo token.')
+        if args['token'] in self._unknown_undo_tokens:
+            raise ToolExecutionError('undo_outcome_unknown',
+                                     'This undo outcome is unknown; inspect the game and action log before any further action.',
+                                     recoverable=False, details={'outcome': 'unknown'})
         if self.guard is not None:
             await self.guard.guard_undo(args['token'])
         event = {'mode': 'undo', 'token': args['token'], 'catalog_id': self.directory['catalog_id'], **self._scope(), 'origin': self.source_kind}

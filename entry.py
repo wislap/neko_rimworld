@@ -49,7 +49,7 @@ from .game.query_tools import CatalogTools
 from .game.state import BridgeStateStore, BridgeStatus, DiagnosticRing, json_safe_copy, utc_now
 from .knowledge import KnowledgeLibrary
 from .reports import ReportError, ReportStore
-from .tool_contracts import ToolExecutionError, ToolSetup
+from .tool_contracts import UNKNOWN_WRITE_OUTCOME_CODES, ToolExecutionError, ToolSetup
 from .workspace.runtime import FrontdeskService
 from .workspace.session_view import anchor_seq
 from .workspace.views import WorkspaceViews
@@ -1080,6 +1080,37 @@ class NekoRimworldPlugin(NekoPluginBase):
         return scheduler
 
     async def _consultation(self, question, _ctx, game):
+        scheduler = getattr(self, "_colony_scheduler", None)
+        request_id = _ctx.get("run_id") if isinstance(_ctx, Mapping) else None
+        connection = getattr(self._bridge, "connection_key", None)
+        if (game is None or not isinstance(question, str)
+                or not isinstance(request_id, str) or not request_id
+                or not isinstance(connection, str) or not connection):
+            return await self._consultation_impl(question, _ctx, game)
+        key = (id(scheduler), connection, game.colony_id, game.load_epoch, request_id, question)
+        inflight = getattr(self, "_consultation_inflight", None)
+        if inflight is None:
+            inflight = self._consultation_inflight = {}
+        task = inflight.get(key)
+        if task is None:
+            async def run_bound():
+                if (getattr(self, "_colony_scheduler", None) is not scheduler
+                        or getattr(self._bridge, "connection_key", None) != connection):
+                    return Err(SdkError("The colony connection changed; retry in the current colony.", code="world_changed"))
+                return await self._consultation_impl(question, _ctx, game)
+            task = asyncio.create_task(run_bound())
+            inflight[key] = task
+            self._consultation_tasks.add(task)
+            def clear_inflight(done):
+                self._consultation_tasks.discard(done)
+                if inflight.get(key) is done:
+                    inflight.pop(key, None)
+                if not done.cancelled():
+                    done.exception()
+            task.add_done_callback(clear_inflight)
+        return copy.deepcopy(await asyncio.shield(task))
+
+    async def _consultation_impl(self, question, _ctx, game):
         if not isinstance(question, str) or not question.strip():
             return Err(SdkError("A RimWorld question is required.", code="invalid_question"))
         normalized = question.strip()
@@ -1140,14 +1171,19 @@ class NekoRimworldPlugin(NekoPluginBase):
                 return Err(SdkError("The colony connection changed; retry in the current colony.", code="world_changed"))
             if getattr(self._bridge, "connection_key", None) != waiter_connection:
                 return Err(SdkError("The colony connection changed; retry in the current colony.", code="world_changed"))
-            future = asyncio.get_running_loop().create_future()
-            future._autoplay_binding = (scheduler, waiter_connection,
-                                        game.colony_id, game.load_epoch)
-            self._autoplay_waiters[seq] = future
-            try:
-                result = await future
-            finally:
-                self._autoplay_waiters.pop(seq, None)
+            binding = (scheduler, waiter_connection, game.colony_id, game.load_epoch)
+            future = self._autoplay_waiters.get(seq)
+            if future is not None and getattr(future, "_autoplay_binding", None) != binding:
+                return Err(SdkError("The prepared response belongs to another connection.", code="world_changed"))
+            if future is None:
+                future = asyncio.get_running_loop().create_future()
+                future._autoplay_binding = binding
+                self._autoplay_waiters[seq] = future
+                def clear_waiter(done):
+                    if self._autoplay_waiters.get(seq) is done:
+                        self._autoplay_waiters.pop(seq, None)
+                future.add_done_callback(clear_waiter)
+            result = await asyncio.shield(future)
             if result.get("report", {}).get("saved"):
                 result["report"]["export"] = await self._export_report(result["report"]["report_id"], _ctx)
             return Ok(_consultation_handoff(result, normalized))
@@ -1269,6 +1305,14 @@ class NekoRimworldPlugin(NekoPluginBase):
             return Err(SdkError(str(error), code="autoplay_unavailable"))
 
     async def _stop_autoplay(self):
+        scheduler = getattr(self, "_colony_scheduler", None)
+        inflight = getattr(self, "_consultation_inflight", {})
+        tasks = [task for key, task in list(inflight.items())
+                 if scheduler is not None and key[0] == id(scheduler) and task is not asyncio.current_task()]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         worker = getattr(self, "_autoplay_delivery", None)
         if worker is not None:
             worker.cancel()
@@ -1295,10 +1339,16 @@ class NekoRimworldPlugin(NekoPluginBase):
         scheduler = self._colony_scheduler
         if scheduler is None or scheduler.halted:
             return Err(SdkError("Autoplay must be running to undo an action.", code="undo_unavailable"))
+        current = getattr(self._bridge, "session", None)
+        if current is None:
+            return Err(SdkError("Current colony unavailable.", code="world_changed"))
+        bound_game = SimpleNamespace(colony_id=current.colony_id, load_epoch=current.load_epoch,
+                                     game_tick=current.game_tick,
+                                     connection_epoch=getattr(self._bridge, "connection_key", None))
         async with scheduler.write_lock:
-            return await self._autoplay_undo_locked(seq, scheduler)
+            return await self._autoplay_undo_locked(seq, scheduler, bound_game=bound_game)
 
-    async def _autoplay_undo_locked(self, seq, scheduler):
+    async def _autoplay_undo_locked(self, seq, scheduler, *, bound_game=None):
         failure_game = None
         try:
             from .agent.write.service import WriteService
@@ -1308,10 +1358,23 @@ class NekoRimworldPlugin(NekoPluginBase):
             work = self._workspace_service
             if game is None or work is None:
                 raise ValueError("Current colony unavailable")
-            failure_game = SimpleNamespace(colony_id=game.colony_id, load_epoch=game.load_epoch,
-                                           game_tick=game.game_tick,
-                                           connection_epoch=getattr(self._bridge, "connection_key", None))
+            failure_game = bound_game or SimpleNamespace(colony_id=game.colony_id, load_epoch=game.load_epoch,
+                                                          game_tick=game.game_tick,
+                                                          connection_epoch=getattr(self._bridge, "connection_key", None))
+            game = failure_game
+            expected = (game.connection_epoch, game.colony_id, game.load_epoch)
+            def check_binding():
+                current = getattr(self._bridge, "session", None)
+                return (all(isinstance(value, str) and value for value in expected)
+                        and self._colony_scheduler is scheduler and not scheduler.halted and current is not None
+                        and (getattr(self._bridge, "connection_key", None), current.colony_id,
+                             current.load_epoch) == expected)
+            def require_binding():
+                if not check_binding():
+                    raise ToolExecutionError("world_changed", "The colony connection changed before undo.", recoverable=False)
+            require_binding()
             event = await work.call("event", game.colony_id, seq)
+            require_binding()
             write = event["payload"].get("write") if event and event["kind"] == "planner.progress" else None
             receipt = write.get("receipt") if isinstance(write, dict) else None
             if (event is None or not isinstance(write, dict) or event["load_epoch"] != game.load_epoch or write.get("stage") != "result"
@@ -1319,14 +1382,20 @@ class NekoRimworldPlugin(NekoPluginBase):
                     or receipt.get("status") != "committed" or not receipt.get("undo_token")):
                 raise ValueError("Current-epoch undo is unavailable")
             setup = await self._load_agent_tools()
-            guard = TakeoverControl(work, setup.ledger_query, setup.write_identity, setup.write_fields_query)
+            require_binding()
+            if setup.write_identity is None or setup.write_identity() != expected:
+                raise ToolExecutionError("world_changed", "The undo tool is bound to another connection.", recoverable=False)
+            def identity():
+                return expected if check_binding() and setup.write_identity() == expected else None
+            guard = TakeoverControl(work, setup.ledger_query, identity, setup.write_fields_query)
             async def record(event_data):
                 await work.call("record", game.colony_id, game.load_epoch, game.game_tick,
                                 "plugin", "autoplay.undo", {"source_seq": seq, "write": event_data})
-            writer = WriteService(setup.write_catalog, [], setup.write_port, setup.write_identity,
+            writer = WriteService(setup.write_catalog, [], setup.write_port, identity,
                                   record=record, guard=guard)
             await work.call("record", game.colony_id, game.load_epoch, game.game_tick, "user",
                             "autoplay.undo_requested", {"source_seq": seq})
+            require_binding()
             result = await writer.undo({"token": receipt["undo_token"]})
             try:
                 message = f"User requested undo of action {seq}; game reported {result.get('status', 'unknown')}. Review the affected task and receipt."
@@ -1337,9 +1406,20 @@ class NekoRimworldPlugin(NekoPluginBase):
                 return Ok({"status": result.get("status"), "review_wake": "unconfirmed"})
             return Ok({"status": result.get("status")})
         except ToolExecutionError as error:
+            if error.code == "undo_outcome_unknown":
+                await self._autoplay_failure("scheduler", {"audit": {"error_code": "undo_outcome_unknown"}}, failure_game, origin_scheduler=scheduler)
+                return Err(SdkError("Undo outcome is unknown; check the game and action log before retrying.",
+                                    code="undo_outcome_unknown"))
             if error.code == "write_audit_failed":
-                await self._autoplay_failure("scheduler", {"audit": {"error_code": "workspace_unavailable"}}, failure_game, origin_scheduler=scheduler)
-                return Err(SdkError("Undo was dispatched but its record is unconfirmed; check the receipt before retrying.",
+                outcome = error.details.get("outcome")
+                reconciliation = outcome != "not_sent"
+                failure = {"audit": {"error_code": "workspace_unavailable"},
+                           "write_recording": {"mode": "undo", "stage": "audit", "outcome": outcome or "unknown",
+                                               "needs_reconciliation": reconciliation}}
+                await self._autoplay_failure("scheduler", failure, failure_game, origin_scheduler=scheduler)
+                message = ("Undo was not sent because its audit record was not saved." if not reconciliation else
+                           "Undo outcome or receipt is unconfirmed; check the game and action log before retrying.")
+                return Err(SdkError(message,
                                     code=error.code, details=error.details))
             return Err(SdkError(str(error), code=error.code))
         except BridgeQueryTimeout:
@@ -1424,12 +1504,25 @@ class NekoRimworldPlugin(NekoPluginBase):
     async def _autoplay_failure(self, role, result, bound_game=None, *, origin_scheduler=None):
         scheduler = self._colony_scheduler
         current = getattr(self._bridge, "session", None)
+        code = (result.get("audit") or {}).get("error_code") or "run_failed"
+        origin_connection = getattr(bound_game, "connection_epoch", None)
+        observed_connection = getattr(self._bridge, "connection_key", None)
+        recording = result.get("write_recording")
+        needs_reconciliation = isinstance(recording, Mapping) and recording.get("needs_reconciliation") is True
+        same_world_reconciliation = (
+            (code in UNKNOWN_WRITE_OUTCOME_CODES or needs_reconciliation) and scheduler is not None and origin_scheduler is scheduler
+            and bound_game is not None and current is not None
+            and (current.colony_id, current.load_epoch) == (bound_game.colony_id, bound_game.load_epoch)
+            and isinstance(origin_connection, str) and bool(origin_connection)
+            and isinstance(observed_connection, str) and bool(observed_connection)
+            and origin_connection != observed_connection
+        )
         stale = (origin_scheduler is not None and origin_scheduler is not scheduler) or (
             bound_game is not None and (current is None or
                 (current.colony_id, current.load_epoch) != (bound_game.colony_id, bound_game.load_epoch) or
                 (getattr(bound_game, "connection_epoch", None) is not None and
                  getattr(self._bridge, "connection_key", None) != bound_game.connection_epoch)))
-        if stale:
+        if stale and not same_world_reconciliation:
             source = origin_scheduler or scheduler
             audit = result.get("audit") or {}
             if bound_game is not None:
@@ -1451,12 +1544,17 @@ class NekoRimworldPlugin(NekoPluginBase):
                     if logger is not None:
                         logger.warning("Stale autoplay failure could not be recorded")
             return
-        if scheduler is None or scheduler.halted:
+        if scheduler is None or (scheduler.halted and not same_world_reconciliation):
             return
         scheduler.halted = True
         if scheduler.budget is not None:
             scheduler.budget.blocked = True
-        code = (result.get("audit") or {}).get("error_code") or "run_failed"
+        if same_world_reconciliation:
+            current_task = asyncio.current_task()
+            for name in ("_worker", "_frontdesk_worker"):
+                worker = getattr(scheduler, name, None)
+                if worker is not None and worker is not current_task and not worker.done():
+                    worker.cancel()
         endpoint = code in {"model_transport", "model_transport_timeout", "model_first_response_timeout",
                             "model_incomplete_stream", "model_http_error", "model_stream_error"}
         if code == "model_request_deadline":
@@ -1467,7 +1565,9 @@ class NekoRimworldPlugin(NekoPluginBase):
         audit = result.get("audit") or {}
         self._autoplay_fault = {"role": role, "code": code, "kind": kind, "pause": "unknown",
                                 "phase": None, "exception_type": None, "run_id": None, "wake_seq": None,
-                                "origin_connection_epoch": getattr(self._bridge, "connection_key", None)}
+                                "origin_connection_epoch": origin_connection if same_world_reconciliation else observed_connection}
+        if same_world_reconciliation:
+            self._autoplay_fault["observed_connection_epoch"] = observed_connection
         for key in ("phase", "exception_type", "run_id", "wake_seq"):
             value = audit.get(key)
             if (isinstance(value, str) and value and len(value) <= 128) or (key == "wake_seq" and type(value) is int):
@@ -1476,7 +1576,8 @@ class NekoRimworldPlugin(NekoPluginBase):
                            getattr(current, "colony_id", None), getattr(current, "load_epoch", None))
         for waiter in self._autoplay_waiters.values():
             binding = getattr(waiter, "_autoplay_binding", failure_binding)
-            if binding == failure_binding and not waiter.done():
+            origin_binding = (scheduler, origin_connection, current.colony_id, current.load_epoch) if same_world_reconciliation else None
+            if (binding == failure_binding or binding == origin_binding) and not waiter.done():
                 waiter.set_result({**result, "status": result.get("status", "failed")})
         game = getattr(self._bridge, "session", None)
         if game is None or (bound_game is not None and (game.colony_id, game.load_epoch) != (bound_game.colony_id, bound_game.load_epoch)):

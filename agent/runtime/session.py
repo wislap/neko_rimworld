@@ -36,6 +36,7 @@ class AgentRunSession:
     budget: Any = field(default=None, repr=False)
     budget_scope: tuple[str, str, int] | None = field(default=None, repr=False)
     received_model_turn: AssistantTurn | None = field(default=None, repr=False)
+    response_audit_pending: bool = False
     model_receipt_unconfirmed: bool = False
     received_model_error: dict[str, Any] | None = field(default=None, repr=False)
     takeover_service: Any = field(default=None, repr=False)
@@ -48,6 +49,7 @@ class AgentRunSession:
     observations: list[dict[str, Any]] = field(default_factory=list)
     write_outcomes: list[dict[str, Any]] = field(default_factory=list)
     write_record_issue: str | None = None
+    write_record_context: dict[str, Any] = field(default_factory=dict)
     knowledge: list[dict[str, Any]] = field(default_factory=list)
     knowledge_omitted: int = 0
     last_assistant_content: str = ""

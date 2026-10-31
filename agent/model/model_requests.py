@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from ...game.state import redact_text
 from ...message_contracts import AssistantTurn
+from ...tool_contracts import binding_is_current
 from ..runtime.audit import AgentRunState
 from .model_client import ModelClientError
 from .tokenization import tokenizer
@@ -36,15 +37,6 @@ _RETRYABLE_PROVIDER_MARKERS = (
 def _canonical_hash(value: object) -> str:
     encoded = json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
-
-
-def _binding_valid(session):
-    if session.binding_check is None:
-        return True
-    try:
-        return session.binding_check() is True
-    except Exception:
-        return False
 
 
 def _model_retry_reason(error: ModelClientError) -> str | None:
@@ -91,7 +83,7 @@ async def request_model(
     attempt = 1
     turn = None
     while True:
-        if not _binding_valid(session):
+        if not binding_is_current(session.binding_check):
             return ModelRequestResult(None, finalizing, ModelClientError(
                 "world_changed", "The active colony connection changed before model dispatch."))
         attempt_remaining = settings.run_budget_seconds - ledger.elapsed_seconds
@@ -166,6 +158,7 @@ async def request_model(
                 await asyncio.shield(budget.settle(reservation, {}, outcome="not_dispatched"))
                 raise
         session.received_model_turn = None
+        session.response_audit_pending = False
         session.received_model_error = None
         turn = None
         settlement_started = False
@@ -183,7 +176,7 @@ async def request_model(
                         settled_without_dispatch = True
                         return ModelRequestResult(None, finalizing, ModelClientError(
                             "agent_cumulative_budget", "The cumulative model budget cannot admit another request."))
-                if not _binding_valid(session):
+                if not binding_is_current(session.binding_check):
                     raise ModelClientError("world_changed", "The active colony connection changed before model dispatch.")
                 if attempt == 1 and ledger.state != AgentRunState.MODEL_REQUESTING:
                     ledger.transition(AgentRunState.MODEL_REQUESTING, "model_request_started", request_event)
@@ -194,13 +187,15 @@ async def request_model(
                 dispatched = True
                 async with asyncio.timeout(request_timeout):
                     turn = await model.complete(messages, tool_schemas, timeout=request_timeout)
-                    if budget is not None:
-                        session.received_model_turn = turn
-                        session.model_receipt_unconfirmed = True
+                    session.received_model_turn = turn
+                    session.response_audit_pending = True
+                    session.model_receipt_unconfirmed = True
             if budget is not None and not settled_without_dispatch and not admission_pending:
                 settlement_started = True
                 await budget.settle(reservation, turn.usage,
                                     response={"audit": turn.as_audit_value()})
+                session.model_receipt_unconfirmed = False
+            elif budget is None:
                 session.model_receipt_unconfirmed = False
             break
         except asyncio.CancelledError:

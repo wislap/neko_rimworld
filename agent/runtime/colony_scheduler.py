@@ -91,6 +91,9 @@ class ColonyScheduler:
                     and identity == (expected, game.colony_id, game.load_epoch))
         return True
 
+    def _business_current(self, game):
+        return not self.halted and self._binding_current(game)
+
     def _reschedule_current(self, role):
         current = self.service.game_session()
         if current is not None:
@@ -110,12 +113,12 @@ class ColonyScheduler:
         if not isinstance(text, str) or not text.strip():
             raise ValueError("Wake reason requires text")
         current = self.service.game_session()
-        if current is None or (current.colony_id, current.load_epoch) != (game.colony_id, game.load_epoch) or not self._binding_current(self._bind_game(game)):
+        if current is None or (current.colony_id, current.load_epoch) != (game.colony_id, game.load_epoch) or not self._business_current(self._bind_game(game)):
             raise ValueError("The active colony changed before wake")
         bound = self._bind_game(game)
         await self.service.call("observe_epoch", current.colony_id, current.load_epoch, current.game_tick,
-                                command_binding_check=lambda: self._binding_current(bound))
-        if not self._binding_current(bound):
+                                command_binding_check=lambda: self._business_current(bound))
+        if not self._business_current(bound):
             raise ValueError("The active colony changed before wake")
         payload = {"source": source, "text": text}
         if source == "user":
@@ -126,7 +129,7 @@ class ColonyScheduler:
             payload["utterance_seq"] = utterance_seq
         seq = await self.service.call("record", current.colony_id, current.load_epoch, current.game_tick,
                                       "plugin", "planner.wake", payload,
-                                      command_binding_check=lambda: self._binding_current(bound))
+                                      command_binding_check=lambda: self._business_current(bound))
         self._games[game.colony_id] = bound
         self._signal.set()
         return seq
@@ -152,33 +155,21 @@ class ColonyScheduler:
         if not isinstance(text, str) or not text.strip():
             raise ValueError("User utterance requires text")
         current = self.service.game_session()
-        if current is None or (current.colony_id, current.load_epoch) != (game.colony_id, game.load_epoch) or not self._binding_current(self._bind_game(game)):
+        if current is None or (current.colony_id, current.load_epoch) != (game.colony_id, game.load_epoch) or not self._business_current(self._bind_game(game)):
             raise ValueError("The active colony changed before wake")
         bound = self._bind_game(game)
         await self.service.call("observe_epoch", current.colony_id, current.load_epoch, current.game_tick,
-                                command_binding_check=lambda: self._binding_current(bound))
-        if not self._binding_current(bound):
+                                command_binding_check=lambda: self._business_current(bound))
+        if not self._business_current(bound):
             raise ValueError("The active colony changed before wake")
         if source not in {"user", "game", "agent", "frontdesk", "planner", "plugin"}:
             raise ValueError("Unknown wake source")
         if request_id is not None:
             if source != "user" or not isinstance(request_id, str) or not request_id:
                 raise ValueError("A request identity is only valid for user messages")
-            events = await self.service.call("events_by_kind", current.colony_id,
-                                             ("user.utterance", "frontdesk.wake"))
-            matches = {event["seq"] for event in events if event["kind"] == "user.utterance"
-                       and event["load_epoch"] == current.load_epoch
-                       and event["payload"].get("request_id") == request_id
-                       and event["payload"].get("text") == text}
-            prior = [event for event in events if event["kind"] == "frontdesk.wake"
-                     and anchor_seq(event) in matches]
-            if prior:
-                self._games[current.colony_id] = bound
-                self._frontdesk_signal.set()
-                return prior[-1]["seq"]
         seq = await self.service.call("record_frontdesk_wake", current.colony_id, current.load_epoch,
                                       current.game_tick, source, text,
-                                      command_binding_check=lambda: self._binding_current(bound),
+                                      command_binding_check=lambda: self._business_current(bound),
                                       **({"request_id": request_id} if request_id is not None else {}))
         self._games[current.colony_id] = bound
         self._frontdesk_signal.set()
@@ -325,8 +316,12 @@ class ColonyScheduler:
         return spec
 
     async def _sample_numeric(self, identity, tick):
+        if self.halted:
+            return
         connection, colony, epoch = identity
         for item in await self.service.call("wake_conditions", colony, epoch):
+            if self.halted:
+                return
             condition = item["condition"]
             if condition["kind"] != "numeric" or tick < item["next_tick"]:
                 continue
@@ -354,16 +349,21 @@ class ColonyScheduler:
                     failure["observation"] = observation
                 observation = failure
                 sample_tick = tick
-            if self._event_identity() != identity:
+            if self.halted or self._event_identity() != identity:
                 return
-            await self.service.call("evaluate_wake", colony, epoch, sample_tick, item["id"], observation,
-                                    expected_next_tick=item["next_tick"],
-                                    command_binding_check=lambda: self._event_identity() == identity)
+            try:
+                await self.service.call("evaluate_wake", colony, epoch, sample_tick, item["id"], observation,
+                                        expected_next_tick=item["next_tick"],
+                                        command_binding_check=lambda: not self.halted and self._event_identity() == identity)
+            except ToolExecutionError:
+                if not self.halted:
+                    raise
+                return
 
     def scheduler_tools(self, game, role):
         bound = self._bind_game(game)
         def check():
-            return self._binding_current(bound)
+            return self._business_current(bound)
         async def manage(args):
             current = self.service.game_session()
             if current is None or (current.colony_id, current.load_epoch) != (game.colony_id, game.load_epoch):
@@ -539,7 +539,7 @@ class ColonyScheduler:
                                             wake_planner=wake_planner, intent_sources=intent_sources, pending_utterances=[anchor_seq(e) for e in pending],
                                             scheduler_tools=self.scheduler_tools(run_scope or game, "frontdesk"),
                                             scheduler_setup_provider=self._event_provider,
-                                            binding_check=lambda: self._binding_current(run_scope or game),
+                                            binding_check=lambda: self._business_current(run_scope or game),
                                             **({"budget": self.budget} if self.budget is not None else {}))
         if not self._binding_current(run_scope or game):
             if self.failure_handler is not None:
@@ -611,7 +611,7 @@ class ColonyScheduler:
         def current_tick(*, require_binding=True):
             nonlocal last_tick
             now = self.service.game_session()
-            if now is None or (now.colony_id, now.load_epoch) != (colony_id, load_epoch) or (require_binding and not self._binding_current(run_scope or game)):
+            if now is None or (now.colony_id, now.load_epoch) != (colony_id, load_epoch) or (require_binding and not self._business_current(run_scope or game)):
                 if require_binding:
                     raise ToolExecutionError("world_changed", "The active colony or epoch changed.", recoverable=False)
                 return last_tick
@@ -703,7 +703,7 @@ class ColonyScheduler:
                     await validate_planner_completion(self.service, entry, colony_id, load_epoch, setup, session.observations)
                 seq = await self.service.call("submit", colony_id, load_epoch, current_tick(),
                                               "planner", entry,
-                                              command_binding_check=lambda: self._binding_current(run_scope or game))
+                                              command_binding_check=lambda: self._business_current(run_scope or game))
                 return {"event_seq": seq}
             except (ValueError, KeyError) as error:
                 raise ToolExecutionError("board_invalid", str(error)) from error
@@ -767,7 +767,7 @@ class ColonyScheduler:
             return messages
 
         session.budget = self.budget
-        session.binding_check = lambda: self._binding_current(run_scope or game)
+        session.binding_check = lambda: self._business_current(run_scope or game)
         session.budget_scope = (colony_id, load_epoch, last_tick)
         session.explicit_scheduler = True
         session.persist_progress = progress

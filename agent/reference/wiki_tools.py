@@ -339,7 +339,7 @@ def wiki_spec(handler):
         description='Lookup local definitions by keywords/key and optional fields. source:keywords finds implementation; query a returned source:<ref> with optional member=Name or lines=START:COUNT (COUNT<=120) to read it. Explicit keys never fall back. Knowledge is not current-instance evidence.',
         parameters={
             "type": "object",
-            "properties": {"query": {"type": "string", "maxLength": MAX_QUERY_CHARS}},
+            "properties": {"query": {"type": "string", "minLength": 1, "maxLength": MAX_QUERY_CHARS, "pattern": r"\S"}},
             "required": ["query"],
             "additionalProperties": False,
         },

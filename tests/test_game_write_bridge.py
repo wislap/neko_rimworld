@@ -74,7 +74,7 @@ def test_write_roundtrip_and_unsupported():
 
 
 def test_write_disconnect_and_mismatched_response():
-    from plugin.plugins.neko_rimworld.game.bridge import BridgeNotConnected, BridgeProtocolError
+    from plugin.plugins.neko_rimworld.game.bridge import BridgeWriteUnconfirmed
 
     for mismatch in (False, True):
         server = BridgeServer(TOKEN, port=0)
@@ -106,7 +106,7 @@ def test_write_disconnect_and_mismatched_response():
             thread.join(3)
             assert not thread.is_alive()
             assert len(errors) == 1
-            assert isinstance(errors[0], BridgeProtocolError if mismatch else BridgeNotConnected)
+            assert isinstance(errors[0], BridgeWriteUnconfirmed)
         finally:
             client.close()
             assert server.stop(timeout=2)
@@ -114,7 +114,7 @@ def test_write_disconnect_and_mismatched_response():
 
 @pytest.mark.parametrize("write_pending", [True, False])
 def test_response_type_cannot_complete_other_request(write_pending):
-    from plugin.plugins.neko_rimworld.game.bridge import BridgeProtocolError
+    from plugin.plugins.neko_rimworld.game.bridge import BridgeProtocolError, BridgeWriteUnconfirmed
     from plugin.plugins.neko_rimworld.game.protocol import QUERY_REQUEST, QUERY_RESULT
 
     server = BridgeServer(TOKEN, port=0)
@@ -144,7 +144,7 @@ def test_response_type_cannot_complete_other_request(write_pending):
                                          payload, session=session, request_id=request.request_id))
         thread.join(3)
         assert not thread.is_alive()
-        assert len(errors) == 1 and isinstance(errors[0], BridgeProtocolError)
+        assert len(errors) == 1 and isinstance(errors[0], BridgeWriteUnconfirmed if write_pending else BridgeProtocolError)
     finally:
         client.close()
         assert server.stop(timeout=2)
@@ -193,7 +193,7 @@ def test_late_write_receipt_does_not_retry_or_complete_next_request():
 
 
 def test_stale_session_fails_pending_write():
-    from plugin.plugins.neko_rimworld.game.bridge import BridgeNotConnected
+    from plugin.plugins.neko_rimworld.game.bridge import BridgeWriteUnconfirmed
     from plugin.plugins.neko_rimworld.game.protocol import SESSION_STALE
 
     server = BridgeServer(TOKEN, port=0)
@@ -218,7 +218,7 @@ def test_stale_session_fails_pending_write():
         write_frame(client, make_envelope(SESSION_STALE, hello.connection_epoch, 3,
                                          Payload(reason="load"), session=session))
         thread.join(3)
-        assert not thread.is_alive() and len(errors) == 1 and isinstance(errors[0], BridgeNotConnected)
+        assert not thread.is_alive() and len(errors) == 1 and isinstance(errors[0], BridgeWriteUnconfirmed)
         assert not server._pending
     finally:
         client.close()
@@ -262,7 +262,7 @@ def test_wrong_request_id_cannot_complete_write():
 @pytest.mark.parametrize("mode", ["dry_run", "commit", "undo", "set_paused"])
 @pytest.mark.parametrize("response_kind", ["ok", "committed", "undone", "paused"])
 def test_write_response_mode_correlation(mode, response_kind):
-    from plugin.plugins.neko_rimworld.game.bridge import BridgeProtocolError
+    from plugin.plugins.neko_rimworld.game.bridge import BridgeProtocolError, BridgeWriteUnconfirmed
 
     session = SessionDescriptor("2" * 32, "3" * 32, 1, 0)
     changeset = {
@@ -305,7 +305,7 @@ def test_write_response_mode_correlation(mode, response_kind):
         if matches[mode] == response_kind:
             assert len(results) == 1 and not errors
         else:
-            assert not results and len(errors) == 1 and isinstance(errors[0], BridgeProtocolError)
+            assert not results and len(errors) == 1 and isinstance(errors[0], BridgeWriteUnconfirmed if mode in {"commit", "undo"} else BridgeProtocolError)
     finally:
         client.close()
         assert server.stop(timeout=2)
@@ -314,7 +314,7 @@ def test_write_response_mode_correlation(mode, response_kind):
 @pytest.mark.parametrize("mode", ["commit", "undo"])
 @pytest.mark.parametrize("matching_epoch", [True, False])
 def test_write_success_data_epoch_matches_session(mode, matching_epoch):
-    from plugin.plugins.neko_rimworld.game.bridge import BridgeProtocolError
+    from plugin.plugins.neko_rimworld.game.bridge import BridgeProtocolError, BridgeWriteUnconfirmed
 
     session = SessionDescriptor("2" * 32, "3" * 32, 1, 0)
     changeset = {
@@ -351,7 +351,55 @@ def test_write_success_data_epoch_matches_session(mode, matching_epoch):
         if matching_epoch:
             assert len(results) == 1 and not errors
         else:
-            assert not results and len(errors) == 1 and isinstance(errors[0], BridgeProtocolError)
+            assert not results and len(errors) == 1 and isinstance(errors[0], BridgeWriteUnconfirmed)
+    finally:
+        client.close()
+        assert server.stop(timeout=2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mode', ['commit', 'undo'])
+@pytest.mark.parametrize('failure', ['disconnect', 'protocol'])
+async def test_dispatched_write_loss_is_unknown_through_real_bridge_service(mode, failure):
+    import asyncio
+    import copy
+    from ..agent.write.service import WriteService
+    from ..game.write_port import BridgeGameWritePort
+    from ..tool_contracts import ToolExecutionError
+    from .test_write_service import catalog, observation, op
+    server = BridgeServer(TOKEN, port=0)
+    _, port_number = server.start()
+    client, hello, challenge = connect_and_challenge(port_number, capabilities=('colony_write.v1',))
+    try:
+        finish_authentication(client, hello, challenge, TOKEN)
+        session = SessionDescriptor('2' * 32, '3' * 32, 1, 0)
+        write_frame(client, make_envelope(SESSION_OPEN, hello.connection_epoch, 2, session=session))
+        await asyncio.to_thread(wait_until, lambda: server._session is not None)
+        identity = (hello.connection_epoch, session.colony_id, session.load_epoch)
+        observed = observation()
+        observed['response'].update(connection_epoch=identity[0], colony_id=identity[1], load_epoch=identity[2])
+        events = []
+        async def record(event): events.append(copy.deepcopy(event))
+        port = BridgeGameWritePort(server, identity[0], session)
+        service = WriteService(catalog(), [observed], port, lambda: identity, record=record)
+        task = asyncio.create_task(service.commit({'entry_id': 'task', 'ops': [op()]}) if mode == 'commit'
+                                   else service.undo({'token': 'opaque'}))
+        request = await asyncio.to_thread(read_until, client, WRITE_REQUEST)
+        if failure == 'disconnect':
+            client.close()
+        else:
+            wrong = SessionDescriptor(session.colony_id, '4' * 32, 1, 0)
+            write_frame(client, make_envelope(WRITE_RESULT, hello.connection_epoch, 3,
+                Payload(status='unsupported', error_code='unsupported', message='No', issues=[]),
+                session=wrong, request_id=request.request_id))
+        with pytest.raises(ToolExecutionError) as error:
+            await asyncio.wait_for(task, 3)
+        assert error.value.code == ('write_receipt_lost' if mode == 'commit' else 'undo_outcome_unknown')
+        assert not error.value.recoverable and error.value.details['outcome'] == 'unknown'
+        assert error.value.details['request_id'] == request.request_id
+        assert tuple(error.value.details[k] for k in ('connection_epoch', 'colony_id', 'load_epoch')) == identity
+        assert [event['stage'] for event in events] == ['prepared', 'queued', 'result']
+        assert events[-1]['outcome'] == 'unknown'
     finally:
         client.close()
         assert server.stop(timeout=2)

@@ -415,6 +415,17 @@ class Journal:
         if source != "user" and request_id is not None:
             raise ValueError("Only original user requests have host request identifiers")
         with self._ledger.transaction():
+            if source == "user" and request_id is not None:
+                prior = self._ledger.db.execute(
+                    "SELECT w.seq FROM events w JOIN events u ON u.seq=json_extract(w.payload,'$.utterance_seq') "
+                    "WHERE w.kind='frontdesk.wake' AND w.colony_id=? AND w.load_epoch=? "
+                    "AND u.kind=? AND u.colony_id=? AND u.load_epoch=? "
+                    "AND json_extract(u.payload,'$.request_id')=? AND json_extract(u.payload,'$.text')=? "
+                    "ORDER BY w.seq DESC LIMIT 1",
+                    (colony_id, load_epoch, UTTERANCE_EVENT, colony_id, load_epoch, request_id, text),
+                ).fetchone()
+                if prior is not None:
+                    return prior["seq"]
             if source == "user":
                 anchor = self.record_utterance(colony_id, load_epoch, game_tick, text, request_id=request_id)
                 key = "utterance_seq"

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from plugin.plugins.neko_rimworld.game.bridge import BridgeNotConnected, BridgeQueryTimeout, BridgeServer
+from plugin.plugins.neko_rimworld.game.bridge import BridgeNotConnected, BridgeNotDispatched, BridgeQueryTimeout, BridgeServer
 from plugin.plugins.neko_rimworld.game.protocol import SessionDescriptor
 from plugin.plugins.neko_rimworld.game.write_port import BridgeGameWritePort
 from plugin.plugins.neko_rimworld.tool_contracts import ReceiptLost, ToolExecutionError
@@ -32,7 +32,7 @@ async def test_bound_port_rejects_session_switch_before_worker_enqueue(monkeypat
     with server._connection_lock:
         server._session = SessionDescriptor("colony", "b" * 32, 0, 0)
     release.set()
-    with pytest.raises(BridgeNotConnected):
+    with pytest.raises(BridgeNotDispatched):
         await task
     assert server._outbound.empty()
     assert not server._pending
@@ -176,7 +176,7 @@ async def test_session_change_cleans_queued_pending(monkeypatch):
     with server._connection_lock:
         server._session = SessionDescriptor("1" * 32, "4" * 32, 1, 1)
     server._fail_pending(BridgeNotConnected("session changed"))
-    with pytest.raises(BridgeNotConnected):
+    with pytest.raises(BridgeNotDispatched):
         await task
     assert not server._pending and server._outbound.empty()
 
@@ -207,7 +207,7 @@ async def test_session_change_waits_for_registration_then_cleans(monkeypatch):
     release.set()
     assert await asyncio.to_thread(changed.wait, 2)
     thread.join()
-    with pytest.raises(BridgeNotConnected):
+    with pytest.raises(BridgeNotDispatched):
         await task
     assert not server._pending and server._outbound.empty()
 
