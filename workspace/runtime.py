@@ -60,7 +60,10 @@ class FrontdeskService:
                     return {"entries": await self.call("board", game.colony_id)}
                 source_seq = args.get("source_event_seq", utterance_seq)
                 if type(source_seq) is not int or (intent_sources is not None and source_seq not in intent_sources):
-                    raise ValueError("An intent must cite user words delivered to this run")
+                    available = (sorted(intent_sources) if intent_sources is not None else
+                                 [utterance_seq] if type(utterance_seq) is int else [])
+                    raise ToolExecutionError("board_invalid", "An intent must cite user words delivered to this run",
+                                             details={"available_user_utterance_seqs": available})
                 original = await self.call("event", game.colony_id, source_seq)
                 if original is None or original["kind"] != UTTERANCE_EVENT:
                     raise ValueError("An intent requires the original user utterance")
@@ -95,7 +98,7 @@ class FrontdeskService:
 
         return (
             ToolSpec("frontdesk_board", "Read the colony board or record the user's intent. This does not modify the game.", {
-                "type": "object", "properties": {"action": {"type": "string", "enum": ["read", "write_intent"]}, **({"source_event_seq": {"type": "integer"}} if explicit else {}), "entry": {
+                "type": "object", "properties": {"action": {"type": "string", "enum": ["read", "write_intent"]}, **({"source_event_seq": {"type": "integer", "description": "Only a user.utterance actually delivered to this run. Historical words, board references, agent runs and non-user triggers do not grant a new intent source. If no user words were delivered, do not write an intent."}} if explicit else {}), "entry": {
                     "type": "object", "properties": {"entry_id": {"type": "string"}, "expected_revision": {"type": "integer", "minimum": 0}, "status": {"type": "string", "enum": ["open", "blocked", "closed"]}, "priority": {"type": "integer"}, "review_at_tick": {"type": ["integer", "null"]}, "body": {"type": "string"}},
                     "required": ["entry_id", "expected_revision", "status", "priority", "review_at_tick", "body"], "additionalProperties": False}}, "required": ["action"], "additionalProperties": False}, board),
             ToolSpec("recall", ("Read original historical user words, source-labelled wake triggers or native game events by event_seq, or evidence/tool calls by their IDs. Historical facts are not current observations." if explicit else "Read original historical evidence by evidence_id, or user text or a tool result by event_seq and tool_call_id. Historical facts are not current observations."), {

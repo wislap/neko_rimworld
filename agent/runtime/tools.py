@@ -13,6 +13,11 @@ from ..context.model_context import CONTEXT_TOOLS, MAX_SOURCE_CHARS, make_pruner
 from .audit import AgentAuditCapacityError
 
 
+def _bounded_field_names(names):
+    ordered = sorted(names)
+    return [name[:80] for name in ordered[:32]], len(ordered) > 32 or any(len(name) > 80 for name in ordered)
+
+
 class ToolRegistry:
     def __init__(self, *, context_pruner=None) -> None:
         self._tools: dict[str, ToolSpec] = {}
@@ -83,11 +88,23 @@ class ToolRegistry:
         if additional is False and isinstance(properties, dict):
             unknown = sorted(set(parsed).difference(properties))
             if unknown:
+                message = "Tool arguments contained unsupported fields."
+                entry = properties.get("entry")
+                entry_fields = entry.get("properties") if isinstance(entry, dict) else None
+                if ("entry" not in parsed and isinstance(entry_fields, dict)
+                        and any(name in entry_fields for name in unknown)):
+                    message += " Put entry fields inside the entry object, not at the top level."
+                allowed_names, allowed_truncated = _bounded_field_names(properties)
+                unknown_names, unknown_truncated = _bounded_field_names(unknown)
                 return self.error_result(
                     call,
                     "invalid_tool_arguments",
-                    "Tool arguments contained unsupported fields.",
+                    message,
                     recoverable=True,
+                    details={"path": "$", "allowed_fields": allowed_names,
+                             "allowed_fields_truncated": allowed_truncated,
+                             "unsupported_fields": unknown_names,
+                             "unsupported_fields_truncated": unknown_truncated},
                 )
         return PreparedToolCall(call=call, arguments=parsed)
 
@@ -209,6 +226,7 @@ class ToolRegistry:
         message: str,
         *,
         recoverable: bool,
+        details: dict[str, Any] | None = None,
     ) -> ToolResult:
         return ToolResult(
             call_id=call.call_id,
@@ -217,7 +235,7 @@ class ToolRegistry:
             value={
                 "ok": False,
                 "tool": call.name,
-                "error": {"code": code, "message": message},
+                "error": {"code": code, "message": message, **({"details": details} if details is not None else {})},
                 "recoverable": recoverable,
             },
         )
