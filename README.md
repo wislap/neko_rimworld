@@ -81,6 +81,15 @@ before guarded recovery. This does not grant missing game actions or permission 
 bypass user, unknown, policy or forced pauses. Isolated bench operator recovery is
 recorded separately and does not prove model autonomy.
 
+Autoplay guidance groups related reads and keeps previously unsupported actions
+pending until relevant conditions change. It still requires fresh evidence where
+needed. No semantic message deduplication or wake suppression is introduced.
+Model adapters may provide an asynchronous `request_scope`: the network deadline
+covers `complete`, while scope exit may synchronize delivery afterward. Already
+received responses and usage survive cancellation or scope rejection; a stale
+scope result cannot be executed as a tool decision. Ordinary clients keep the
+existing path without this optional scope.
+
 The existing `rimworld_consult(question)` entry and shared runtime remain the
 only consultation path. Situation preparation below is distinct from the five
 domains: their detailed state is read only when requested, without automatic

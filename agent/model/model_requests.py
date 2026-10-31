@@ -8,6 +8,7 @@ import hashlib
 import json
 import uuid
 from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 
 from ...game.state import redact_text
@@ -163,19 +164,35 @@ async def request_model(
         session.model_calls += 1
         session.received_model_turn = None
         session.received_model_error = None
+        turn = None
+        settlement_started = False
         try:
-            async with asyncio.timeout(request_timeout):
-                turn = await model.complete(messages, tool_schemas, timeout=request_timeout)
+            request_scope = getattr(model, "request_scope", None)
+            async with request_scope() if callable(request_scope) else nullcontext():
+                async with asyncio.timeout(request_timeout):
+                    turn = await model.complete(messages, tool_schemas, timeout=request_timeout)
+                    if budget is not None:
+                        session.received_model_turn = turn
+                        session.model_receipt_unconfirmed = True
             if budget is not None:
-                session.received_model_turn = turn
-                session.model_receipt_unconfirmed = True
+                settlement_started = True
                 await budget.settle(reservation, turn.usage,
                                     response={"audit": turn.as_audit_value()})
                 session.model_receipt_unconfirmed = False
             break
         except asyncio.CancelledError:
-            if budget is not None and turn is None:
-                await asyncio.shield(budget.settle(reservation, getattr(model, "last_usage", {})))
+            if budget is not None:
+                if turn is None:
+                    await asyncio.shield(budget.settle(reservation, getattr(model, "last_usage", {})))
+                elif not settlement_started:
+                    # A response can arrive before an asynchronous request scope
+                    # finishes. Retain it even if cancellation interrupts scope exit.
+                    session.received_model_turn = turn
+                    session.model_receipt_unconfirmed = True
+                    settlement_started = True
+                    await asyncio.shield(budget.settle(reservation, turn.usage,
+                                                        response={"audit": turn.as_audit_value()}))
+                    session.model_receipt_unconfirmed = False
             ledger.record(
                 "model_request_cancelled",
                 {
@@ -186,6 +203,7 @@ async def request_model(
             )
             raise
         except (ModelClientError, TimeoutError) as exception:
+            received_scope_failure = turn is not None
             if isinstance(exception, TimeoutError):
                 exception = ModelClientError(
                     "model_request_deadline",
@@ -198,16 +216,25 @@ async def request_model(
                                                 "diagnostics": copy.deepcopy(exception.diagnostics),
                                                 "usage": copy.deepcopy(exception.usage)}
                 session.model_receipt_unconfirmed = True
-                await budget.settle(reservation, exception.usage, response={"error": session.received_model_error})
+                if turn is not None:
+                    session.received_model_turn = turn
+                    await budget.settle(reservation, turn.usage,
+                                        response={"audit": turn.as_audit_value(), "error": session.received_model_error})
+                else:
+                    await budget.settle(reservation, exception.usage, response={"error": session.received_model_error})
                 session.model_receipt_unconfirmed = False
-            if reserve > 0 and not finalizing and ledger.elapsed_seconds >= research_deadline:
+            if received_scope_failure:
+                # The response is retained for audit but cannot be returned to
+                # the model loop after the request scope failed.
+                turn = None
+            if not received_scope_failure and reserve > 0 and not finalizing and ledger.elapsed_seconds >= research_deadline:
                 ledger.record(
                     "research_request_expired",
                     {"error_code": exception.code, "diagnostics": exception.diagnostics, "usage": exception.usage},
                 )
                 finalizing = True
                 break
-            retry_reason = _model_retry_reason(exception)
+            retry_reason = None if received_scope_failure else _model_retry_reason(exception)
             retry_delay = MODEL_RETRY_DELAYS_SECONDS[min(attempt - 1, len(MODEL_RETRY_DELAYS_SECONDS) - 1)]
             remaining_after_failure = settings.run_budget_seconds - ledger.elapsed_seconds
             retry_available = (
@@ -276,5 +303,12 @@ async def request_model(
                 break
             ledger.transition(AgentRunState.DEGRADED, "model_request_failed", failure)
             return ModelRequestResult(None, finalizing, error=exception)
+        except Exception:
+            if budget is not None and turn is not None and not settlement_started:
+                settlement_started = True
+                await asyncio.shield(budget.settle(reservation, turn.usage,
+                                                    response={"audit": turn.as_audit_value()}))
+                session.model_receipt_unconfirmed = False
+            raise
 
     return ModelRequestResult(turn, finalizing)

@@ -125,6 +125,14 @@ PLANNER_QUERY_GUIDE = (
     "native Danger is not overall safety, and occupancy/reservation is not complete job eligibility."
 )
 
+AUTOPLAY_EFFICIENCY = (
+    "When tool contracts allow, group related reads needed for the same decision in one batch. "
+    "If an unsupported action or unchanged failed request is already recorded, keep it unresolved instead of "
+    "repeating it without a relevant change; recheck when new evidence or changed conditions justify it. "
+    "Do not substitute a past observation for a required fresh read or omit material uncertainty. "
+)
+
+
 AUTOPLAY_FRONTDESK = (
     "You are the colony frontdesk in N.E.K.O. Interpret user requests and game or planner messages, "
     "maintain user intents on the board, and communicate with the planner. You can pause the game when "
@@ -175,7 +183,7 @@ def build_system_prompt(*, persistent_work=False, role="frontdesk", planner_loop
     """One fixed system prompt per session; finalization is signalled in the advisory instead."""
     if autoplay or planner_loop:
         return "".join((AUTOPLAY_PLANNER if role == "planner" else AUTOPLAY_FRONTDESK,
-                        EVIDENCE, SAMPLE_IDENTITY, SCOPE_SEMANTICS, PLANNER_COMPLETION,
+                        AUTOPLAY_EFFICIENCY, EVIDENCE, SAMPLE_IDENTITY, SCOPE_SEMANTICS, PLANNER_COMPLETION,
                         STYLE, "\n\n", PLANNER_QUERY_GUIDE, "\n", GUIDE))
     if role == "planner":
         return "".join((PLANNER_IDENTITY, PLANNER_TASK, EVIDENCE, PLANNER_READ_POLICY,
