@@ -15,7 +15,7 @@ from ..delivery.handoff import (
     attach_agent_handoff,
 )
 from ..model.model_client import AgentModelSettings, ModelClient, OpenAICompatibleModelClient
-from ..model.model_requests import MAX_MODEL_ATTEMPTS, _canonical_hash, request_model
+from ..model.model_requests import MAX_MODEL_ATTEMPTS, _binding_valid, _canonical_hash, request_model
 from .audit import (
     AgentAuditCapacityError,
     AgentAuditLedger,
@@ -189,6 +189,7 @@ class AgentRuntime:
                 and exception.code in {"semantic_surface_unavailable", "invalid_catalog"}
                 and ledger.summary()["model_calls"] == 0
             )
+            scope_error = isinstance(exception, ToolExecutionError) and exception.code == "world_changed"
             self._logger.error(
                 "[agent] unexpected run failure run_id={} error_type={}",
                 ledger.run_id,
@@ -207,8 +208,8 @@ class AgentRuntime:
             else:
                 result = self._finish_degraded(
                     ledger,
-                    reason=str(exception) if initialization_error else "The internal RimWorld agent failed unexpectedly.",
-                    error_code=exception.code if initialization_error else "agent_internal",
+                    reason=str(exception) if initialization_error or scope_error else "The internal RimWorld agent failed unexpectedly.",
+                    error_code=exception.code if initialization_error or scope_error else "agent_internal",
                     observations=session.observations,
                     fallback_answer=session.fallback_answer,
                     already_degraded=ledger.state == AgentRunState.DEGRADED,
@@ -524,6 +525,8 @@ class AgentRuntime:
             if session.persist_progress is not None:
                 await session.persist_progress({"stage": "assistant", "message": turn.as_message()})
 
+            if not _binding_valid(session):
+                raise ToolExecutionError("world_changed", "The active colony connection changed.", recoverable=False)
             if turn.tool_calls:
                 ledger.transition(
                     AgentRunState.TOOL_DISPATCHING,
@@ -535,6 +538,8 @@ class AgentRuntime:
                 terminal_name = None
                 isolated_batch = len(turn.tool_calls) > 1 and any(tools.is_exclusive(c.name) for c in turn.tool_calls)
                 for call in turn.tool_calls:
+                    if not _binding_valid(session):
+                        raise ToolExecutionError("world_changed", "The active colony connection changed.", recoverable=False)
                     session.tool_calls += 1
                     ledger.record(
                         "tool_call_requested",

@@ -232,7 +232,11 @@ def submission_parameters(*, answer_only=False, references=False):
             "evidence_ids": {"type": "array", "items": {"type": "string"},
                 "description": "Observation IDs explicitly cited in the reply, visible in this request."},
         })
-    return schema_contract(parameters)
+    contract = schema_contract(parameters)
+    contract["properties"]["answer"]["description"] = PLAIN_ANSWER_GUIDANCE
+    if "detail" in contract["properties"]:
+        contract["properties"]["detail"]["description"] = PLAIN_DETAIL_GUIDANCE
+    return contract
 
 
 def make_submission_tool(draft: SubmissionDraft, observations, on_update=None, *, answer_only=False, reference_session=None):

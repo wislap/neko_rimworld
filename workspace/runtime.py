@@ -32,10 +32,33 @@ class FrontdeskService:
         self.revision = 0
         self.closed = False
 
-    async def call(self, method, *args, **kwargs):
+    async def call(self, method, *args, command_binding_check=None, **kwargs):
         def invoke():
             if self.journal is None:
                 self.journal = Journal(self.path)
+            # Business mutations must still belong to the active world when the
+            # single journal worker executes them, not merely when queued.
+            guarded = {"observe_epoch", "submit", "set_wake_policy", "register_wake", "cancel_wake",
+                       "evaluate_wake", "set_context_policy", "record_autoplay_activation",
+                       "record_utterance", "record_frontdesk_wake", "record_takeover", "record_return",
+                       "ingest_game_event"}
+            event_kind = (args[4] if len(args) > 4 else kwargs.get("kind")) if method == "record" else None
+            if method in guarded or event_kind in {"planner.wake", "frontdesk.wake"}:
+                colony = args[0] if args else kwargs.get("colony_id")
+                epoch = args[1] if len(args) > 1 else kwargs.get("load_epoch")
+                current = self.game_session()
+                if current is None or (current.colony_id, current.load_epoch) != (colony, epoch):
+                    raise ToolExecutionError("world_changed", "The active colony or epoch changed before the command executed", recoverable=False)
+                if command_binding_check is not None:
+                    try:
+                        valid = command_binding_check()
+                    except Exception:
+                        valid = False
+                    if not valid:
+                        raise ToolExecutionError("world_changed", "The active colony connection changed before the command executed", recoverable=False)
+                load = self.journal.latest_event(colony, "colony.load")
+                if method not in {"observe_epoch", "ingest_game_event"} and load and load["load_epoch"] != epoch:
+                    raise ToolExecutionError("world_changed", "The recorded colony load changed before the command executed", recoverable=False)
             return getattr(self.journal, method)(*args, **kwargs)
         return await asyncio.get_running_loop().run_in_executor(self._executor, invoke)
 
@@ -53,7 +76,11 @@ class FrontdeskService:
             await self.call("record_run", colony, event["load_epoch"], event["game_tick"], FRONTDESK, event["seq"], messages, result={"status": "failed", "reason": "process_interrupted", "observations": observations})
         self._recovered.add(colony)
 
-    def capabilities(self, game, utterance_seq, intent_sources=None, *, explicit=False):
+    def capabilities(self, game, utterance_seq, intent_sources=None, *, explicit=False, binding_check=None):
+        connection = getattr(game, "connection_epoch", None)
+        if binding_check is None and connection is not None:
+            def binding_check():
+                return getattr(self.game_session(), "connection_epoch", None) == connection
         async def board(args):
             try:
                 if args["action"] == "read":
@@ -69,7 +96,8 @@ class FrontdeskService:
                     raise ValueError("An intent requires the original user utterance")
                 submission = dict(args["entry"])
                 submission.update(kind="intent", parent=None, source={"event_seq": source_seq}, evidence=[], changesets=[])
-                seq = await self.call("submit", game.colony_id, game.load_epoch, game.game_tick, FRONTDESK, submission)
+                seq = await self.call("submit", game.colony_id, game.load_epoch, game.game_tick, FRONTDESK, submission,
+                                      command_binding_check=binding_check)
                 return {"event_seq": seq, "entries": await self.call("board", game.colony_id)}
             except (ValueError, KeyError) as error:
                 raise ToolExecutionError("board_invalid", str(error)) from error
@@ -113,7 +141,8 @@ class FrontdeskService:
 
     async def consult(self, game, question, settings, *, request_id=None,
                       explicit_update_only=False, inbox=None, utterance_seq=None, pending_utterances=(), trigger_seq=None,
-                      wake_planner=None, intent_sources=None, scheduler_tools=(), scheduler_setup_provider=None, budget=None):
+                      wake_planner=None, intent_sources=None, scheduler_tools=(), scheduler_setup_provider=None, budget=None,
+                      binding_check=None):
         if self.closed:
             raise RuntimeError("Frontdesk service is closed")
         task = asyncio.current_task()
@@ -125,7 +154,8 @@ class FrontdeskService:
                     raise ValueError("The active colony changed before this work could execute")
                 await self._recover_interrupted(game.colony_id, pending_utterances=pending_utterances)
                 await self.settle_pending(game.colony_id)
-                await self.call("observe_epoch", game.colony_id, game.load_epoch, game.game_tick)
+                await self.call("observe_epoch", game.colony_id, game.load_epoch, game.game_tick,
+                                command_binding_check=binding_check)
                 board = await self.call("board", game.colony_id)
                 policy = await self.call("context_policy", game.colony_id)
                 window = policy["window_ticks"]
@@ -161,7 +191,8 @@ class FrontdeskService:
                         raise ValueError("The scheduled trigger must cite its original source")
                     seq = trigger_seq
                 elif utterance_seq is None:
-                    seq = await self.call("record_utterance", game.colony_id, game.load_epoch, game.game_tick, question, request_id=request_id)
+                    seq = await self.call("record_utterance", game.colony_id, game.load_epoch, game.game_tick, question,
+                                          request_id=request_id, command_binding_check=binding_check)
                 else:
                     original = await self.call("event", game.colony_id, utterance_seq)
                     if (original is None or original["kind"] != UTTERANCE_EVENT
@@ -178,7 +209,8 @@ class FrontdeskService:
                 turn_id = str(seq)
                 workspace_id = game.colony_id
                 ledger = AgentAuditLedger(question, workspace_id=workspace_id, turn_id=turn_id)
-                session = AgentRunSession.create(ledger=ledger, question=question, history=tuple(history), workspace_id=workspace_id, colony_id=game.colony_id, capabilities=self.capabilities(game, seq, intent_sources, explicit=explicit_update_only), autoplay=explicit_update_only)
+                session = AgentRunSession.create(ledger=ledger, question=question, history=tuple(history), workspace_id=workspace_id, colony_id=game.colony_id, capabilities=self.capabilities(game, seq, intent_sources, explicit=explicit_update_only, binding_check=binding_check), autoplay=explicit_update_only)
+                session.binding_check = binding_check
                 session.budget = budget
                 session.budget_scope = (game.colony_id, game.load_epoch, game.game_tick)
                 if trigger_seq is not None:
@@ -188,7 +220,7 @@ class FrontdeskService:
 
                     session.explicit_scheduler = True
                     session.capabilities += tuple(scheduler_tools)
-                    session.capabilities += (return_capability(self, game, intent_sources, scheduler_setup_provider),)
+                    session.capabilities += (return_capability(self, game, intent_sources, scheduler_setup_provider, binding_check=binding_check),)
                     async def update_only(args):
                         if args:
                             raise ToolExecutionError("invalid_tool_arguments", "update_only takes no arguments")
@@ -246,7 +278,7 @@ class FrontdeskService:
                     messages = copy.deepcopy(persisted_messages)
                     if not messages:
                         messages = session.run_messages()
-                    _complete_tool_pairs(messages)
+                    _complete_tool_pairs(messages, reason=(result.get("audit") or {}).get("error_code"))
                     args = (game.colony_id, game.load_epoch, game.game_tick, FRONTDESK, seq, messages)
                     kwargs = {"result": private_protocol_redacted(result), "audit": private_protocol_redacted(trace)}
                     self.pending[workspace_id] = (args, kwargs)
@@ -279,7 +311,7 @@ class FrontdeskService:
         self._executor.shutdown(wait=True)
 
 
-def _complete_tool_pairs(messages):
+def _complete_tool_pairs(messages, *, reason=None):
     """Preserve valid model protocol if cancellation interrupts a tool batch."""
     pending = {}
     for message in messages:
@@ -288,4 +320,10 @@ def _complete_tool_pairs(messages):
         elif message["role"] == "tool":
             pending.pop(message["tool_call_id"], None)
     for call_id in pending:
-        messages.append({"role": "tool", "tool_call_id": call_id, "content": '{"error":{"code":"run_interrupted","message":"Run interrupted; this response was not retained in the conversation. Original observations and audit are retained separately."},"source":"plugin_generated_recovery_placeholder"}'})
+        if reason == "world_changed":
+            content = canonical({"error": {"code": "world_changed",
+                "message": "The request binding changed before a tool result was confirmed. Original observations and audit are retained; do not infer execution success or failure or retry a write from this placeholder."},
+                "source": "plugin_generated_recovery_placeholder"})
+        else:
+            content = '{"error":{"code":"run_interrupted","message":"Run interrupted; this response was not retained in the conversation. Original observations and audit are retained separately."},"source":"plugin_generated_recovery_placeholder"}'
+        messages.append({"role": "tool", "tool_call_id": call_id, "content": content})

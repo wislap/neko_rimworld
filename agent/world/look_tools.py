@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 
 from ...schema_serialization import schema_contract
-from .colony_tools import DOMAINS, colony_kind, extend_look_spec, read_colony
+from .colony_tools import ALIASES, DOMAINS, colony_kind, extend_look_spec, read_colony
 from .native_state import (
     PHYSICAL,
     STATE_ASPECTS,
@@ -117,7 +117,13 @@ def look_spec(directory):
     }
 
     extend_look_spec(spec, directory)
+    if "limit" in props:
+        colony_kinds = list(DOMAINS)
+        spec["parameters"].setdefault("allOf", []).append({"if": {"required": ["limit"]},
+            "then": {"properties": {"object": {"properties": {"kind": {"enum": colony_kinds + list(ALIASES)}}}}}})
     descriptions = {key: props[key]["description"] for key in ("aspects", "focus")}
+    if "limit" in props:
+        descriptions["limit"] = props["limit"]["description"]
     spec["parameters"] = schema_contract(spec["parameters"])
     for key, description in descriptions.items():
         spec["parameters"]["properties"][key]["description"] = description

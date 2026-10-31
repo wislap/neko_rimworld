@@ -749,7 +749,7 @@ async def test_consult_returns_only_independent_agent_result(tmp_path) -> None:
     runtime = FakeAgentRuntime()
     plugin._agent_runtime = runtime
     plugin.data_path = lambda name: tmp_path / name
-    plugin._bridge = SimpleNamespace(session=SimpleNamespace(colony_id="colony", load_epoch="epoch", game_tick=1))
+    plugin._bridge = SimpleNamespace(session=SimpleNamespace(colony_id="colony", load_epoch="epoch", game_tick=1), connection_key="connection")
 
     result = await plugin.rimworld_consult(question="  How is the colony?  ")
 
@@ -808,7 +808,7 @@ async def test_pending_agent_model_call_does_not_block_dashboard_context(tmp_pat
     )
 
     plugin.data_path = lambda name: tmp_path / name
-    plugin._bridge = SimpleNamespace(session=SimpleNamespace(colony_id="colony", load_epoch="epoch", game_tick=1), running=True)
+    plugin._bridge = SimpleNamespace(session=SimpleNamespace(colony_id="colony", load_epoch="epoch", game_tick=1), running=True, connection_key="connection")
     task = asyncio.create_task(plugin.rimworld_consult(question="How is the colony?"))
     await asyncio.wait_for(started.wait(), 2)
     dashboard = await asyncio.wait_for(plugin.dashboard_ui_context(), timeout=0.2)

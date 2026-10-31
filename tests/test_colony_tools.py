@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from jsonschema import Draft202012Validator
+
 from plugin.plugins.neko_rimworld.agent.context.model_context import make_pruner
 from plugin.plugins.neko_rimworld.agent.runtime.audit import AgentAuditLedger, AgentAuditRegistry
 from plugin.plugins.neko_rimworld.agent.runtime.loop import AgentRuntime
@@ -101,6 +102,24 @@ def test_reference_schema_requires_exactly_one_id_or_name():
         assert validator.is_valid({"name": "采购队"})
         assert not validator.is_valid({"id": "native-id", "name": "采购队"})
         assert not validator.is_valid({})
+
+
+def test_model_look_schema_matches_storage_and_limit_dispatch():
+    source = catalog()
+    source["colony_state"]["operations"].append({"operation": "inspect_storage", "parameters": {"type": "object", "properties": {}}})
+    reader, _ = interaction(source=source)
+    registry = ToolRegistry()
+    registry.register(next(t for t in reader.tools() if t.name == "look"))
+    model = registry.schemas()[0]["function"]
+    validator = Draft202012Validator(model["parameters"])
+    storage = {"object": {"kind": "storage", "id": "Zone_0", "map": "current"}, "aspects": ["priority"]}
+    assert validator.is_valid(storage)
+    assert not validator.is_valid({**storage, "object": {"kind": "storage"}})
+    assert not validator.is_valid({**storage, "object": {"kind": "storage", "map": "Map_0", "id": "a", "ids": ["a"]}})
+    assert not validator.is_valid({"object": {"kind": "pawn", "id": "Thing_1"}, "aspects": ["identity"], "limit": 10})
+    assert validator.is_valid({"object": {"kind": "research"}, "aspects": ["progress"], "limit": 10})
+    assert "Colony-domain" in json.dumps(model, ensure_ascii=False)
+    assert "canonical map_id" in model["description"]
 
 
 def test_look_description_advertises_business_domains_only_when_supported():

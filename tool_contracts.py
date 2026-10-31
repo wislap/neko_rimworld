@@ -65,11 +65,14 @@ class ToolSpec:
     max_result_chars: int = MAX_TOOL_RESULT_CHARS
 
     def schema(self) -> dict[str, Any]:
+        description = self.description
+        if self.exclusive or self.terminal:
+            description += " Call this tool alone in a separate tool batch."
         return {
             "type": "function",
             "function": {
                 "name": self.name,
-                "description": self.description,
+                "description": description,
                 "parameters": dict(self.parameters),
             },
         }

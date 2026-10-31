@@ -270,7 +270,8 @@ async def test_runtime_rejects_invalid_task_before_native_query_or_send(tmp_path
     from .test_semantic_tools import public_source
 
     connection, colony, epoch = IDENTITY
-    journal = FrontdeskService(tmp_path / "events.sqlite", None, game_session=lambda: None)
+    current = SimpleNamespace(colony_id=colony, load_epoch=epoch, game_tick=1)
+    journal = FrontdeskService(tmp_path / "events.sqlite", None, game_session=lambda: current)
     base = {
         "expected_revision": 0,
         "priority": 1,
@@ -300,6 +301,8 @@ async def test_runtime_rejects_invalid_task_before_native_query_or_send(tmp_path
             task_id = "i"
         elif kind in ("closed", "task", "other_colony", "prior_epoch_task"):
             target_colony = "other" if kind == "other_colony" else colony
+            current.colony_id = target_colony
+            current.load_epoch = "previous" if kind == "prior_epoch_task" else epoch
             if target_colony == "other":
                 await journal.call(
                     "submit",
@@ -324,6 +327,7 @@ async def test_runtime_rejects_invalid_task_before_native_query_or_send(tmp_path
                     "source": {"entry_id": "other-s" if target_colony == "other" else "s"},
                 },
             )
+            current.colony_id, current.load_epoch = colony, epoch
             task_id = "t"
         else:
             task_id = "missing"

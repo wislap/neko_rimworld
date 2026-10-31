@@ -83,7 +83,7 @@ def extend_look_spec(spec, directory):
     aliases = [alias for alias, kind in ALIASES.items() if kind in kinds]
     props = spec["parameters"]["properties"]
     selectors = {
-        "kind": {"enum": [kind for kind in kinds + aliases if kind != "resources"]},
+        "kind": {"enum": [kind for kind in kinds + aliases if kind not in ("resources", "storage")]},
         "ids": _strings(), "names": _strings(),
         "id": {"type": "string", "minLength": 1}, "name": {"type": "string", "minLength": 1},
     }
@@ -95,6 +95,13 @@ def extend_look_spec(spec, directory):
     if {"inspect_trade", "inspect_resources", "inspect_storage"} & operations:
         selectors["map"] = {"type": "string", "default": "current"}
     props["object"]["oneOf"].append({"type": "object", "additionalProperties": False, "required": ["kind"], "properties": selectors})
+    if "inspect_storage" in operations:
+        props["object"]["oneOf"].append({"type": "object", "additionalProperties": False,
+            "required": ["kind", "map"], "properties": {"kind": {"const": "storage"},
+            "id": {"type": "string", "minLength": 1}, "ids": _strings(),
+            "map": {"type": "string", "minLength": 1}},
+            "oneOf": [{"required": ["id"]}, {"required": ["ids"]}]})
+        spec["description"] += " Storage reads require map and exactly one id/ids; use the returned canonical map_id for storage writes."
     if "inspect_resources" in operations:
         props["object"]["oneOf"].append({"type": "object", "additionalProperties": False, "required": ["kind"], "properties": {"kind": {"const": "resources"}, "map": {"type": "string", "default": "current"}}})
         spec["parameters"]["allOf"] = [{"if": {"properties": {"object": {"properties": {"kind": {"const": "resources"}}}}}, "then": {"required": ["focus"], "properties": {"focus": {"required": ["items"]}}}}]

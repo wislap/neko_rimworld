@@ -31,6 +31,7 @@ class AgentRunSession:
     capabilities: tuple[ToolSpec, ...] = ()
     persist_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = field(default=None, repr=False)
     inbox: Callable[[], Awaitable[list[dict[str, Any]]]] | None = field(default=None, repr=False)
+    binding_check: Callable[[], bool] | None = field(default=None, repr=False)
     explicit_scheduler: bool = False
     budget: Any = field(default=None, repr=False)
     budget_scope: tuple[str, str, int] | None = field(default=None, repr=False)

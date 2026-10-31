@@ -2,7 +2,7 @@
 from ..tool_contracts import ToolExecutionError, ToolSpec
 
 
-def return_capability(service, game, received_utterances, setup_provider=None):
+def return_capability(service, game, received_utterances, setup_provider=None, *, binding_check=None):
     async def release(args):
         try:
             takeover_seq = args.get("takeover_seq")
@@ -40,7 +40,9 @@ def return_capability(service, game, received_utterances, setup_provider=None):
             seq = await service.call("record_return", game.colony_id, game.load_epoch,
                                      raw["response"]["game_tick"], takeover_seq=takeover_seq,
                                      utterance_seq=utterance_seq,
-                                     accepted_baseline={"field": rows[0], "observation": raw})
+                                     accepted_baseline={"field": rows[0], "observation": raw},
+                                     command_binding_check=binding_check or (lambda: setup.write_identity() == (
+                                         raw["response"]["connection_epoch"], game.colony_id, game.load_epoch)))
             return {"event_seq": seq, "takeover_seq": takeover_seq, "utterance_seq": utterance_seq,
                     "object": key[0], "field": key[1]}
         except (ValueError, KeyError) as error:
@@ -160,7 +162,9 @@ class TakeoverControl:
             if decision == "takeover" and key not in identities:
                 await self.service.call("record_takeover", colony, epoch, tick,
                     {"object": key[0], "field": key[1], "value_read": row["current_value"],
-                     "ai_value": row["value"], "changeset_id": row["changeset_id"]})
+                     "ai_value": row["value"], "changeset_id": row["changeset_id"]},
+                    command_binding_check=lambda: self.identity() == (
+                        raw["response"]["connection_epoch"], colony, epoch))
                 identities.add(key)
         return identities, uncertain
 

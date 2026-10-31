@@ -46,7 +46,7 @@ def configure(plugin, directory, models, provider=empty_tools):
     plugin._agent_settings = settings()
     plugin._reports = ReportStore(directory / "reports")
     plugin._bridge = SimpleNamespace(
-        session=SessionDescriptor("colony-A", "load-1", 10, 1), stop=lambda: True, running=True
+        session=SessionDescriptor("colony-A", "load-1", 10, 1), stop=lambda: True, running=True, connection_key="connection"
     )
     plugin._agent_audit = AgentAuditRegistry()
 

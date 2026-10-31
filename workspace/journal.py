@@ -1,5 +1,6 @@
 """Event and board writes, plus views rebuilt from the log; the only path into the two tables."""
 
+import json
 from contextlib import nullcontext
 
 from .board import TASK_TARGET_KINDS, BoardError, check_revision, check_shape
@@ -135,7 +136,8 @@ class Journal:
 
     def observe_epoch(self, colony_id, load_epoch, game_tick):
         """Record a load once when the observed epoch changes; never rewrite history."""
-        previous = self._ledger.latest_epoch(colony_id)
+        load = self._ledger.latest_event(colony_id, LOAD_EVENT)
+        previous = load["load_epoch"] if load else self._ledger.latest_epoch(colony_id)
         if previous is not None and previous != load_epoch:
             return self.record_load(colony_id, load_epoch, game_tick)
         return None
@@ -438,7 +440,8 @@ class Journal:
                 if previous and previous["payload"]["event"] == event:
                     return False
                 raise ValueError("Native event cursor was reused")
-            latest_epoch = self._ledger.latest_epoch(colony_id)
+            latest_load = self._ledger.latest_event(colony_id, LOAD_EVENT)
+            latest_epoch = latest_load["load_epoch"] if latest_load else self._ledger.latest_epoch(colony_id)
             previous_native = self._ledger.latest_event(colony_id, "game.event")
             previous_epoch = previous_native["load_epoch"] if previous_native else latest_epoch
             epoch_changed = previous_epoch is not None and previous_epoch != load_epoch
@@ -522,13 +525,40 @@ class Journal:
 
     def finish_planner(self, colony_id, load_epoch, game_tick, start_seq, cursor, result, audit):
         """Atomically retain the outcome, optional handoff and consumed wake position."""
+        if type(start_seq) is not int or start_seq <= 0 or type(cursor) is not int or cursor < 0:
+            raise ValueError("Planner completion requires a valid start and consumed cursor")
         with self._ledger.transaction():
             terminal = result.get("terminal")
+            payload = {"start_seq": start_seq, "result": result, "audit": audit}
+            saved = [event for event in self._ledger.events_by_kind(
+                colony_id, ("planner.finished",), after_seq=start_seq)
+                if event["payload"].get("start_seq") == start_seq]
+            if saved:
+                if len(saved) != 1:
+                    raise ValueError("Planner completion is ambiguous")
+                prior = saved[0]
+                consumed = self._ledger.event(colony_id, prior["seq"] + 1)
+
+                def matches(event, kind, expected):
+                    if (event is None or event["kind"] != kind or event["source"] != "planner"
+                            or event["load_epoch"] != load_epoch or event["game_tick"] != game_tick):
+                        return False
+                    return json.dumps(event["payload"], ensure_ascii=False, allow_nan=False, sort_keys=True) == json.dumps(
+                        expected, ensure_ascii=False, allow_nan=False, sort_keys=True)
+
+                if (not matches(prior, "planner.finished", payload)
+                        or not matches(consumed, "planner.consumed", {"through_seq": cursor})):
+                    raise ValueError("Planner completion conflicts with the saved outcome")
+                if terminal and terminal.get("kind") == "yield":
+                    handoff = self._ledger.event(colony_id, prior["seq"] - 1)
+                    if not matches(handoff, "planner.yield", {"start_seq": start_seq, "handoff": terminal["handoff"]}):
+                        raise ValueError("Planner completion conflicts with its saved handoff")
+                return prior["seq"]
             if terminal and terminal.get("kind") == "yield":
                 self._ledger.append(colony_id, load_epoch, game_tick, "planner", "planner.yield",
                                     {"start_seq": start_seq, "handoff": terminal["handoff"]})
             seq = self._ledger.append(colony_id, load_epoch, game_tick, "planner", "planner.finished",
-                                      {"start_seq": start_seq, "result": result, "audit": audit})
+                                      payload)
             self._ledger.append(colony_id, load_epoch, game_tick, "planner", "planner.consumed",
                                 {"through_seq": cursor})
             return seq
@@ -570,7 +600,7 @@ class Journal:
 
     def review_marks(self, colony_id):
         load = self._ledger.latest_event(colony_id, LOAD_EVENT)
-        events = self._ledger.events_by_kind(colony_id, (TAKEOVER_EVENT,))
+        events = self._ledger.events_by_kind(colony_id, (TAKEOVER_EVENT, REVISION_EVENT))
         if load:
             events.append(load)
         return review_marks(self._ledger.revisions(colony_id), events)
@@ -641,16 +671,26 @@ def open_takeovers(events):
 def review_marks(revisions, events):
     """Entries needing review: a load after their latest revision, or a takeover touching their changesets."""
     last_load = 0
+    load_epoch = None
+    revision_epochs = {}
     takeovers = []
     for event in events:
         if event["kind"] == LOAD_EVENT:
-            last_load = max(last_load, event["seq"])
+            if event["seq"] > last_load:
+                last_load = event["seq"]
+                load_epoch = event.get("load_epoch")
+        elif event["kind"] == REVISION_EVENT:
+            revision_epochs[event["seq"]] = event.get("load_epoch")
         elif event["kind"] == TAKEOVER_EVENT:
             takeovers.append(event)
     marks = {}
     for entry in current_board(revisions):
         reasons = []
-        if last_load > entry["event_seq"]:
+        revision_epoch = revision_epochs.get(entry["event_seq"])
+        if last_load and (last_load > entry["event_seq"]
+                          or not isinstance(load_epoch, str) or not load_epoch
+                          or not isinstance(revision_epoch, str) or not revision_epoch
+                          or revision_epoch != load_epoch):
             reasons.append("load")
         if any(t["seq"] > entry["event_seq"] and t["payload"]["changeset_id"] in entry["changesets"] for t in takeovers):
             reasons.append("takeover")

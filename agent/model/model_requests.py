@@ -38,6 +38,15 @@ def _canonical_hash(value: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _binding_valid(session):
+    if session.binding_check is None:
+        return True
+    try:
+        return session.binding_check() is True
+    except Exception:
+        return False
+
+
 def _model_retry_reason(error: ModelClientError) -> str | None:
     diagnostics = error.diagnostics
     if diagnostics.get("first_useful_delta_ms") is not None:
@@ -82,6 +91,9 @@ async def request_model(
     attempt = 1
     turn = None
     while True:
+        if not _binding_valid(session):
+            return ModelRequestResult(None, finalizing, ModelClientError(
+                "world_changed", "The active colony connection changed before model dispatch."))
         attempt_remaining = settings.run_budget_seconds - ledger.elapsed_seconds
         available = attempt_remaining if finalizing or reserve == 0 else research_deadline - ledger.elapsed_seconds
         if available <= 0 and not finalizing and reserve > 0:
@@ -156,19 +168,23 @@ async def request_model(
         if budget is not None and not await budget.begin_dispatch(reservation):
             return ModelRequestResult(None, finalizing, ModelClientError(
                 "agent_cumulative_budget", "The cumulative model budget cannot admit another request."))
-        if attempt == 1 and ledger.state != AgentRunState.MODEL_REQUESTING:
-            ledger.transition(AgentRunState.MODEL_REQUESTING, "model_request_started", request_event)
-        else:
-            ledger.record("model_request_started", request_event)
-        session.input_tokens_estimated += estimate
-        session.model_calls += 1
         session.received_model_turn = None
         session.received_model_error = None
         turn = None
         settlement_started = False
+        dispatched = False
         try:
             request_scope = getattr(model, "request_scope", None)
             async with request_scope() if callable(request_scope) else nullcontext():
+                if not _binding_valid(session):
+                    raise ModelClientError("world_changed", "The active colony connection changed before model dispatch.")
+                if attempt == 1 and ledger.state != AgentRunState.MODEL_REQUESTING:
+                    ledger.transition(AgentRunState.MODEL_REQUESTING, "model_request_started", request_event)
+                else:
+                    ledger.record("model_request_started", request_event)
+                session.input_tokens_estimated += estimate
+                session.model_calls += 1
+                dispatched = True
                 async with asyncio.timeout(request_timeout):
                     turn = await model.complete(messages, tool_schemas, timeout=request_timeout)
                     if budget is not None:
@@ -183,7 +199,8 @@ async def request_model(
         except asyncio.CancelledError:
             if budget is not None:
                 if turn is None:
-                    await asyncio.shield(budget.settle(reservation, getattr(model, "last_usage", {})))
+                    await asyncio.shield(budget.settle(reservation, getattr(model, "last_usage", {}) if dispatched else {},
+                                                       outcome="attempted" if dispatched else "not_dispatched"))
                 elif not settlement_started:
                     # A response can arrive before an asynchronous request scope
                     # finishes. Retain it even if cancellation interrupts scope exit.
@@ -221,7 +238,9 @@ async def request_model(
                     await budget.settle(reservation, turn.usage,
                                         response={"audit": turn.as_audit_value(), "error": session.received_model_error})
                 else:
-                    await budget.settle(reservation, exception.usage, response={"error": session.received_model_error})
+                    await budget.settle(reservation, exception.usage if dispatched else {},
+                                        response={"error": session.received_model_error},
+                                        outcome="attempted" if dispatched else "not_dispatched")
                 session.model_receipt_unconfirmed = False
             if received_scope_failure:
                 # The response is retained for audit but cannot be returned to
@@ -304,11 +323,14 @@ async def request_model(
             ledger.transition(AgentRunState.DEGRADED, "model_request_failed", failure)
             return ModelRequestResult(None, finalizing, error=exception)
         except Exception:
-            if budget is not None and turn is not None and not settlement_started:
-                settlement_started = True
-                await asyncio.shield(budget.settle(reservation, turn.usage,
-                                                    response={"audit": turn.as_audit_value()}))
-                session.model_receipt_unconfirmed = False
+            if budget is not None and not settlement_started:
+                if turn is not None:
+                    settlement_started = True
+                    await asyncio.shield(budget.settle(reservation, turn.usage,
+                                                        response={"audit": turn.as_audit_value()}))
+                    session.model_receipt_unconfirmed = False
+                elif not dispatched:
+                    await asyncio.shield(budget.settle(reservation, {}, outcome="not_dispatched"))
             raise
 
     return ModelRequestResult(turn, finalizing)

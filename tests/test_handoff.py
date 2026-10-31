@@ -1,15 +1,31 @@
 from __future__ import annotations
 
 import pytest
+
 from plugin.plugins.neko_rimworld.agent.delivery.handoff import (
     HANDOFF_TOKEN_BUDGET,
     HandoffValidationError,
+    SubmissionDraft,
     attach_agent_handoff,
     count_handoff_tokens,
+    make_submission_tool,
     rendered_authored_text,
     validate_agent_text,
     validate_submission,
 )
+from plugin.plugins.neko_rimworld.agent.runtime.tools import ToolRegistry
+from plugin.plugins.neko_rimworld.tool_contracts import ToolSpec
+
+
+def test_model_schema_exposes_length_and_exclusive_contracts():
+    registry = ToolRegistry()
+    registry.register(make_submission_tool(SubmissionDraft(), []))
+    registry.register(ToolSpec("change", "Change state.", {"type": "object"}, lambda _: None, exclusive=True))
+    schemas = {tool["function"]["name"]: tool["function"] for tool in registry.schemas()}
+    submit = schemas["submit_response"]
+    assert "<=100 tokens" in submit["parameters"]["properties"]["answer"]["description"]
+    assert "<=12000" in submit["parameters"]["properties"]["detail"]["description"]
+    assert "alone" in submit["description"] and "alone" in schemas["change"]["description"]
 
 
 def test_tool_parameter_tail_is_rendered_without_mutating_original_text():
