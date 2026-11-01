@@ -400,6 +400,9 @@ class Journal:
 
     def _append_cadence(self, colony_id, load_epoch, game_tick):
         """Append deterministic cadence work while the caller owns the transaction."""
+        latest = self._ledger.latest_observed_tick(colony_id, load_epoch)
+        if latest is not None:
+            game_tick = max(game_tick, latest)
         policy, _ = load_policy()
         state = cadence_project(self._ledger.cadence_events(colony_id), epoch=load_epoch,
                                 now_tick=game_tick, policy=policy)
