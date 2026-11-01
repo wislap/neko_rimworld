@@ -106,6 +106,9 @@ def test_internal_contract_does_not_change_any_model_tool_schema():
 @pytest.mark.parametrize("kind", ["standalone", "prepared", "persistent"])
 async def test_shared_bootstrap_before_first_dispatch_with_raw_report_and_one_background(kind):
     observation = native(items={"conditions": [{"id": "c", "label": "Solar flare"}]})
+    observation.value["response"]["payload"]["data"]["attention_sampling_metrics"] = {
+        "parts": {"sample": {"count": 4, "total_ms": 12.345, "max_ms": 7.89}}
+    }
     async def query(_):
         return observation
     setup = replace(consultation_setup(), situation_provider=SituationProvider(query))
@@ -132,6 +135,7 @@ async def test_shared_bootstrap_before_first_dispatch_with_raw_report_and_one_ba
     background = [m for m in inputs[0] if m.get("name") == "game_situation"]
     assert len(background) == 1 and background[0]["role"] == "user"
     assert "Solar flare" in background[0]["content"]
+    assert "attention_sampling_metrics" not in json.dumps(inputs[0])
     assert inputs[0][-2] == {"role": "user", "content": "What next?"}
     assert reports[0]["observations"][0] == observation.value
     assert reports[0]["situation_context"] == result["situation_context"]
