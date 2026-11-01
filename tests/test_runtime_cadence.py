@@ -94,7 +94,11 @@ async def test_pause_watchdog_three_yields_then_blind_notification(tmp_path):
     )
     service = FrontdeskService(tmp_path / "events.sqlite", runtime, game_session=lambda: game)
     await service.call("record_autoplay_activation", game.colony_id, game.load_epoch, 0, CHOICES)
+    pause_observation = None
     for native in await world.events():
+        if native["cursor"] == 3:
+            native["data"]["pause_state"]["monotonic"] = {"counter": 123}
+            pause_observation = native["data"]["pause_state"]
         await service.call(
             "ingest_game_event", game.colony_id, game.load_epoch, native["game_tick"], "scripted", native
         )
@@ -109,7 +113,7 @@ async def test_pause_watchdog_three_yields_then_blind_notification(tmp_path):
     scheduler._watchdog_interval = 0.02
     evidence = await service.call("game_event_at_cursor", "scripted", world.load_epoch, "scripted", 3)
     scheduler.observe_pause_state(
-        world.pause_state(), ("scripted", "scripted", world.load_epoch), evidence_seq=evidence["seq"]
+        pause_observation, ("scripted", "scripted", world.load_epoch), evidence_seq=evidence["seq"]
     )
     scheduler.start()
     try:
@@ -125,6 +129,12 @@ async def test_pause_watchdog_three_yields_then_blind_notification(tmp_path):
         assert evidence["seq"] < first_finish["seq"] and evidence["game_tick"] == first_finish["game_tick"]
         assert len(notices) == 1 and world.paused
         assert sum(e["kind"] == "planner.finished" for e in events) == 4
+        starts = [e for e in events if e["kind"] == "planner.started"]
+        projected = starts[1]["payload"]["input"]
+        assert projected["pause_state"]["owner"] == "planner"
+        assert projected["pause_state_source_seq"] == evidence["seq"]
+        assert "monotonic" not in projected["pause_state"]
+        assert '"counter": 123' not in str(model.requests[1]["messages"])
         await asyncio.sleep(0.05)
         assert len(notices) == 1
     finally:
@@ -564,8 +574,101 @@ async def test_startup_model_input_contains_recorded_fresh_attention(tmp_path):
         start = next(e for e in events if e["kind"] == "planner.started")
         assert start["payload"]["input"]["initial_attention"] == evidence
         assert start["payload"]["input"]["attention_available"] is True
+        assert start["payload"]["input"]["pause_state"] == {"status": "unavailable"}
+        assert start["payload"]["input"]["pause_state_source_seq"] is None
         assert "native-alert" in str(model.requests[0]["messages"])
         assert not any(e["kind"] == "game.event" for e in events)
+    finally:
+        await scheduler.close()
+        await service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["none", "reconnect", "later_sample"])
+async def test_startup_pause_projection_uses_bound_source_across_await(tmp_path, change):
+    game = SimpleNamespace(colony_id="c", load_epoch="e", game_tick=0, connection_epoch="x")
+    identity = ["x", "c", "e"]
+    model = Script([call("planner_yield", {"handoff": "ready"})])
+    runtime = AgentRuntime(audit_registry=AgentAuditRegistry(), logger=FakeLogger(),
+                           model_factory=lambda _: model, tools_provider=semantic_tool_provider())
+    service = FrontdeskService(tmp_path / "events.sqlite", runtime, game_session=lambda: game)
+    state = {"status": "observed", "connection_epoch": "x", "colony_id": "c", "load_epoch": "e",
+             "sampled_tick": 0, "pause_revision": 1, "pause_transition_revision": 1,
+             "paused": True, "speed_paused": True, "force_paused": False, "windows_force_paused": False,
+             "owner": "planner", "monotonic": {"counter": 123}}
+    source = await service.call("record", "c", "e", 0, "planner", "autoplay.startup_pause",
+                                {"stage": "result", "pause_state": state})
+    await service.call("record_autoplay_activation", "c", "e", 0, CHOICES)
+    scheduler = ColonyScheduler(service, settings(), binding=lambda: tuple(identity))
+    scheduler.observe_pause_state(state, tuple(identity), evidence_seq=source)
+    original = service.call
+
+    async def call_with_reconnect(method, *args, **kwargs):
+        result = await original(method, *args, **kwargs)
+        if method == "event" and args == ("c", source):
+            if change == "reconnect":
+                identity[0] = "new-connection"
+            elif change == "later_sample":
+                later = {**state, "sampled_tick": 1}
+                scheduler.observe_pause_state(later, tuple(identity), evidence_seq=source + 2)
+        return result
+
+    service.call = call_with_reconnect
+    scheduler.start()
+    try:
+        scheduler.resume(game)
+        for _ in range(500):
+            events = await original("events", "c")
+            if any(e["kind"] == "planner.finished" for e in events) or scheduler.error:
+                break
+            await asyncio.sleep(0.01)
+        starts = [e for e in events if e["kind"] == "planner.started"]
+        if change == "reconnect":
+            assert not starts and not model.requests
+        else:
+            projection = starts[0]["payload"]["input"]
+            assert projection["pause_state"]["owner"] == "planner"
+            assert projection["pause_state_source_seq"] == source
+            assert "monotonic" not in projection["pause_state"]
+    finally:
+        await scheduler.close()
+        await service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["stale_scope", "unrecorded_sample"])
+async def test_planner_input_rejects_pause_without_matching_scope_and_source(tmp_path, case):
+    world = ScriptedGameWorld()
+    await world.push_policy({"source": "frontdesk", "pause_on_letter_defs": []})
+    await world.set_paused(True, role="planner")
+    game = SimpleNamespace(colony_id="scripted", load_epoch=world.load_epoch, game_tick=0,
+                           connection_epoch="scripted")
+    model = Script([call("planner_yield", {"handoff": "ready"})])
+    runtime = AgentRuntime(audit_registry=AgentAuditRegistry(), logger=FakeLogger(),
+                           model_factory=lambda _: model, tools_provider=semantic_tool_provider())
+    service = FrontdeskService(tmp_path / "events.sqlite", runtime, game_session=lambda: game)
+    await service.call("record_autoplay_activation", game.colony_id, game.load_epoch, 0, CHOICES)
+    for native in await world.events():
+        await service.call("ingest_game_event", game.colony_id, game.load_epoch, native["game_tick"], "scripted", native)
+    evidence = await service.call("game_event_at_cursor", "scripted", world.load_epoch, "scripted", 3)
+    scheduler = ColonyScheduler(service, settings(), binding=lambda: ("scripted", "scripted", world.load_epoch))
+    state = world.pause_state()
+    if case == "unrecorded_sample":
+        state["sampled_tick"] += 1
+    scheduler.observe_pause_state(state, ("scripted", "scripted", world.load_epoch), evidence_seq=evidence["seq"])
+    if case == "stale_scope":
+        scheduler.pause_state["connection_epoch"] = "old"
+    scheduler.start()
+    try:
+        scheduler.resume(game)
+        for _ in range(500):
+            events = await service.call("events", game.colony_id)
+            if any(e["kind"] == "planner.finished" for e in events):
+                break
+            await asyncio.sleep(0.01)
+        start = next(e for e in events if e["kind"] == "planner.started")
+        assert start["payload"]["input"]["pause_state"] == {"status": "unavailable"}
+        assert start["payload"]["input"]["pause_state_source_seq"] is None
     finally:
         await scheduler.close()
         await service.close()
