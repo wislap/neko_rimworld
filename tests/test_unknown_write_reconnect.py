@@ -69,6 +69,13 @@ async def test_queued_wake_policy_mutation_rechecks_halt_on_worker(tmp_path):
 
     game = SimpleNamespace(colony_id="c", load_epoch="e", game_tick=1)
     service = FrontdeskService(tmp_path / "events.sqlite", None, game_session=lambda: game)
+    await service.call("record_autoplay_activation", "c", "e", 1,
+                       {"goal": "survive", "constraints": "none", "goal_edited": False, "constraints_edited": False})
+    strategy = {"entry_id": "s", "expected_revision": 0, "kind": "strategy", "status": "open", "priority": 1,
+                "parent": None, "source": {}, "evidence": [], "review_at_tick": None, "changesets": [], "body": "plan"}
+    task_entry = {**strategy, "entry_id": "t", "kind": "task", "parent": "s", "source": {"entry_id": "s"}}
+    await service.call("submit", "c", "e", 1, "planner", strategy)
+    await service.call("submit", "c", "e", 1, "planner", task_entry)
     scheduler = ColonyScheduler(service, None, binding=lambda: ("B", "c", "e"))
     tool = scheduler.scheduler_tools(game, "planner")[0]
     started, release = threading.Event(), threading.Event()
@@ -78,14 +85,14 @@ async def test_queued_wake_policy_mutation_rechecks_halt_on_worker(tmp_path):
     blocking = asyncio.get_running_loop().run_in_executor(service._executor, block)
     try:
         await asyncio.to_thread(started.wait)
-        task = asyncio.create_task(tool.handler({"action": "register", "condition": {"kind": "deadline", "tick": 20}, "text": "due"}))
+        task = asyncio.create_task(tool.handler({"action": "declare", "level": "focus", "entry_id": "t", "reason": "review"}))
         await asyncio.sleep(0)
         scheduler.halted = True
         release.set()
         await blocking
         with pytest.raises(ToolExecutionError):
             await task
-        assert await service.call("wake_conditions", "c", "e") == []
+        assert not any(event["kind"] == "cadence.lease_declared" for event in await service.call("events", "c"))
         await service.call("record", "c", "e", 1, "planner", "planner.progress", {"start_seq": 1})
         assert any(e["kind"] == "planner.progress" for e in await service.call("events", "c"))
     finally:

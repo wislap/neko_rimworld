@@ -116,6 +116,7 @@ export function Autoplay({ services }: { services: PanelServices; key?: string }
     </Stack> : null}
     <Button disabled={busy || (!state.enabled && (!goal.trim() || !constraints.trim()))} onClick={() => action("autoplay_mode", state.enabled ? { enabled: false } : { enabled: true, goal, constraints, goal_edited: goalEdited, constraints_edited: constraintsEdited })}>{t(state.enabled ? "autoplay.stop" : "autoplay.enable")}</Button>
     {error ? <InlineError title={t("autoplay.error")} error={error} /> : null}
+    {state.enabled ? <AttentionAndPause attention={state.attention} watchdog={state.pause_watchdog} /> : null}
     {state.fault ? <Alert tone="warning">{`${t("autoplay.stopped")}: ${state.fault.kind} / ${state.fault.code}; ${t("autoplay.pause")}: ${state.fault.pause}`}</Alert> : null}
     {state.budget ? <TextBlock text={`${t("autoplay.requests")}: ${state.budget.requests}; ${t("autoplay.input")}: ${state.budget.input_tokens}; ${t("autoplay.cost")}: ${state.budget.known_cost ?? t("autoplay.unknown")}; ${t("autoplay.unknownUsage")}: ${state.budget.unknown_usage}; ${t("autoplay.unknownCost")}: ${state.budget.unknown_cost}`} /> : null}
     <Stack><TextBlock text={t("autoplay.budget")} />
@@ -130,5 +131,34 @@ export function Autoplay({ services }: { services: PanelServices; key?: string }
     {(state.takeovers || []).map((entry: any) => <TextBlock key={entry.seq} text={`${entry.payload.object} / ${entry.payload.field}`} />)}
     <TextBlock text={t("autoplay.actions")} />
     {(state.actions || []).map((entry: any) => <div key={entry.seq}><TextBlock text={`${entry.mode} · ${entry.status || "unknown"} · ${entry.changeset_id || ""} · tick ${entry.tick}`} />{entry.undo_available ? <Button disabled={busy} onClick={() => action("autoplay_undo", { seq: entry.seq })}>{t("autoplay.undo")}</Button> : null}</div>)}
+  </Stack>
+}
+
+function AttentionAndPause({ attention, watchdog }: { attention: any; watchdog: any }) {
+  const { t } = useI18n()
+  const unknown = t("autoplay.unknown")
+  const tick = (value: any) => typeof value === "number" ? `${t("autoplay.tick")} ${value}` : unknown
+  const level = (value: any) => ["steady", "focus", "urgent"].includes(value) ? t(`autoplay.level.${value}`) : unknown
+  const owner = (value: any) => ["planner", "frontdesk", "reflex", "automatic_letter", "user", "policy", "none", "unknown"].includes(value) ? t(`autoplay.owner.${value}`) : unknown
+  const notification = (value: any) => ["not_sent", "submitted", "rejected", "unknown"].includes(value) ? t(`autoplay.notification.${value}`) : unknown
+  return <Stack>
+    <TextBlock text={t("autoplay.attentionTitle")} />
+    {attention?.available === false ? <TextBlock text={t("autoplay.attentionUnavailable")} /> : attention?.available == null ? <TextBlock text={t("autoplay.attentionUnknown")} /> : null}
+    <TextBlock text={`${t("autoplay.levelTitle")}: ${level(attention?.level)} · ${t("autoplay.recordedAt")}: ${tick(attention?.sampled_tick)}`} />
+    <TextBlock text={`${t("autoplay.dailyReview")}: ${tick(attention?.next_daily_tick)} · ${t("autoplay.escalatedReview")}: ${tick(attention?.next_escalated_tick)}`} />
+    <TextBlock text={t("autoplay.levelBasis")} />
+    <TextBlock text={`${t("autoplay.nativeObservation")}: ${attention?.source_status === "observed" ? t("autoplay.nativeObserved") : attention?.source_status === "partial" ? t("autoplay.nativePartial") : attention?.source_status === "unavailable" ? t("autoplay.evidenceUnavailable") : unknown}`} />
+    <TextBlock text={t("autoplay.reasons")} />
+    {(attention?.reasons || []).length ? attention.reasons.map((item: any, index: number) => {
+      const signal = item.signal || {}
+      const name = signal.label || signal.runtime_type || signal.def || signal.reason || item.source_id || unknown
+      return <TextBlock key={`reason-${item.event_seq}-${index}`} text={`${name}${signal.priority ? ` · ${signal.priority}` : ""} · ${t("autoplay.eventRef")} ${item.event_seq ?? unknown}`} />
+    }) : <TextBlock text={attention?.level === "steady" ? t("autoplay.noReasons") : unknown} />}
+    <TextBlock text={t("autoplay.leases")} />
+    {(attention?.leases || []).length ? attention.leases.map((lease: any, index: number) => <TextBlock key={`lease-${lease.event_seq}-${index}`} text={`${owner(lease.actor)} · ${level(lease.level)} · ${t("autoplay.expires")}: ${tick(lease.end_tick)}${lease.reason ? ` · ${lease.reason}` : ""}`} />) : <TextBlock text={attention?.level != null ? t("autoplay.noLeases") : unknown} />}
+    <TextBlock text={t("autoplay.pauseTitle")} />
+    <TextBlock text={`${t("autoplay.pauseState")}: ${watchdog?.paused === true ? t("autoplay.paused") : watchdog?.paused === false ? t("autoplay.running") : unknown} · ${t("autoplay.pauseOwner")}: ${owner(watchdog?.owner)} · ${t("autoplay.recordedAt")}: ${tick(watchdog?.sampled_tick)}`} />
+    <TextBlock text={`${t("autoplay.pauseEvidence")}: ${watchdog?.source_status === "observed" ? t("autoplay.evidenceObserved") : watchdog?.source_status === "unavailable" ? t("autoplay.evidenceUnavailable") : unknown}`} />
+    <TextBlock text={`${t("autoplay.watchdogWakes")}: ${typeof watchdog?.wake_count === "number" ? watchdog.wake_count : unknown} · ${t("autoplay.notificationTitle")}: ${notification(watchdog?.notification)}`} />
   </Stack>
 }

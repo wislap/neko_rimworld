@@ -110,6 +110,7 @@ def project(events, *, epoch, now_tick, policy):
     focus_window, focus_ids, pending_focus = None, [], None
     focus_started, deferred_signals = {}, []
     level = 0
+    reasons = []
     last_tick = epoch_start
     anchor = activation["game_tick"]
     next_day = anchor + max(1, (epoch_start - anchor) // ticks["day"] + 1) * ticks["day"]
@@ -145,7 +146,7 @@ def project(events, *, epoch, now_tick, policy):
                  reason="deadline" if natural_end <= old_tick else "epoch_changed")
 
     def advance_at(tick):
-        nonlocal next_day, focus_window, focus_ids, pending_focus, level, next_review
+        nonlocal next_day, focus_window, focus_ids, pending_focus, level, next_review, reasons
         while next_day <= tick:
             day = (next_day - activation["game_tick"]) // ticks["day"]
             identity = f"daily:{activation['seq']}:{epoch}:{day}"
@@ -182,13 +183,14 @@ def project(events, *, epoch, now_tick, policy):
         for lease_id, lease in leases.items():
             candidates.append((LEVELS[lease["level"]], lease_id, "lease"))
         new_level = max((x[0] for x in candidates), default=0)
+        reasons = [{"event_seq": seq, "source_id": source} for value, seq, source in candidates if value == new_level]
         interval = ticks["urgent_review"] if new_level == 2 else ticks["focus_review"] if new_level == 1 else None
         next_review = last_finish + interval if interval is not None and last_finish is not None else None
         if new_level != level:
             identity = f"level:{activation['seq']}:{epoch}:{tick}:{new_level}"
             emit("cadence.changed", identity, tick, level=NAMES[new_level], previous=NAMES[level],
                  next_review_tick=next_review,
-                 reasons=[{"event_seq": s, "source_id": src} for val, s, src in candidates if val == new_level])
+                 reasons=reasons)
             level = new_level
         if not running and next_review is not None and next_review <= tick:
             emit("cadence.review_due", f"escalated:{last_finish}", next_review,
@@ -343,7 +345,7 @@ def project(events, *, epoch, now_tick, policy):
         last_tick = tick
     advance(now_tick)
     planner_leases = [e for e in ordered if e["seq"] > activation["seq"] and e["kind"] == "cadence.lease_declared" and e["payload"].get("actor") == "planner" and (e["game_tick"] - activation["game_tick"]) // ticks["day"] == (now_tick - activation["game_tick"]) // ticks["day"]]
-    return {"active": True, "level": NAMES[level], "facts": facts, "leases": leases,
+    return {"active": True, "level": NAMES[level], "reasons": reasons, "facts": facts, "leases": leases,
             "next_daily_tick": next_day, "pending_daily": pending_daily,
             "pending_focus": pending_focus, "deferred_signal_seqs": deferred_signals,
             "pending_signal_seqs": pending_signals,

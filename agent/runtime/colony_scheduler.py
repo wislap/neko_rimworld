@@ -908,7 +908,9 @@ class ColonyScheduler:
             if (startup is not None and startup["load_epoch"] == load_epoch and activation is not None
                     and previous_activation < startup["seq"] < activation["seq"]
                     and startup["payload"].get("stage") == "result"):
-                context["startup_pause"] = startup["payload"].get("pause_state", {"status": "unavailable"})
+                context["startup_pause"] = copy.deepcopy(startup["payload"].get("pause_state", {"status": "unavailable"}))
+                if isinstance(context["startup_pause"], dict):
+                    context["startup_pause"].pop("monotonic", None)
                 context["initial_attention"] = startup["payload"].get("initial_attention")
                 context["attention_available"] = startup["payload"].get("attention_available", False)
             else:

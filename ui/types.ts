@@ -111,8 +111,19 @@ export type AgentRuntimeState = {
   latest_run?: AgentRun | null
 }
 
+type AttentionStatus = {
+  available: boolean | null; source_status: "observed" | "partial" | "unavailable" | null; level: string | null; reasons: { event_seq: number; source_id: string; signal: Record<string, any> | null }[]
+  next_daily_tick: number | null; next_escalated_tick: number | null
+  leases: { actor: string; level: string; reference: string | number; reason?: string; end_tick: number; event_seq: number }[]
+  sampled_tick: number | null; load_epoch: string | null
+}
+type PauseWatchdogStatus = {
+  paused: boolean | null; owner: string | null; sampled_tick: number | null; source_status: string | null
+  wake_count: number | null; notification: "not_sent" | "submitted" | "rejected" | "unknown" | null
+}
+
 export type DashboardState = {
-  autoplay?: { enabled?: boolean; fault?: any; budget?: any; settings?: Record<string, number | "">; activation?: { seq: number; source: string; load_epoch: string; payload: { goal: string; constraints: string; goal_edited: boolean; constraints_edited: boolean } } | null; board?: any[]; takeovers?: any[]; actions?: any[] }
+  autoplay?: { enabled?: boolean; attention?: AttentionStatus; pause_watchdog?: PauseWatchdogStatus; fault?: any; budget?: any; settings?: Record<string, number | "">; activation?: { seq: number; source: string; load_epoch: string; payload: { goal: string; constraints: string; goal_edited: boolean; constraints_edited: boolean } } | null; board?: any[]; takeovers?: any[]; actions?: any[] }
   settings_saves?: SettingsReceipt[]
   consultations_in_progress?: number
   workspaces?: { revision?: number; active_count?: number }

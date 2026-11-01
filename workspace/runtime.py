@@ -76,8 +76,7 @@ class FrontdeskService:
                 self.journal = Journal(self.path)
             # Business mutations must still belong to the active world when the
             # single journal worker executes them, not merely when queued.
-            guarded = {"observe_epoch", "submit", "set_wake_policy", "register_wake", "cancel_wake",
-                       "evaluate_wake", "set_context_policy", "record_autoplay_activation",
+            guarded = {"observe_epoch", "submit", "set_wake_policy", "set_context_policy", "record_autoplay_activation",
                        "record_utterance", "record_frontdesk_wake", "record_takeover", "record_return",
                        "ingest_game_event", "attention_state", "attention_declare", "attention_revoke", "pause_watchdog_wake", "pause_watchdog_notify"}
             event_kind = (args[4] if len(args) > 4 else kwargs.get("kind")) if method == "record" else None

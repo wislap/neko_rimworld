@@ -356,18 +356,68 @@ class NekoRimworldPlugin(NekoPluginBase):
                                 "fault": getattr(self, "_autoplay_fault", None),
                                 "budget": await budget.status() if budget else None,
                                 "settings": getattr(self, "_autoplay_settings", {})}
-            current = getattr(self._bridge, "session", None)
+            safe["autoplay"]["attention"] = {"available": None, "level": None, "source_status": "unavailable", "reasons": [],
+                "next_daily_tick": None, "next_escalated_tick": None, "leases": [], "sampled_tick": None, "load_epoch": None}
+            safe["autoplay"]["pause_watchdog"] = {"paused": None, "owner": None, "sampled_tick": None,
+                "source_status": "unavailable", "wake_count": None, "notification": None}
+            attention_unknown = copy.deepcopy(safe["autoplay"]["attention"])
+            watchdog_unknown = copy.deepcopy(safe["autoplay"]["pause_watchdog"])
+            bridge = self._bridge
+            current = getattr(bridge, "session", None)
+            scheduler = getattr(self, "_colony_scheduler", None)
+            connection = getattr(bridge, "connection_key", None)
+            live_work = getattr(self, "_workspace_service", None)
+            scope = (connection, getattr(current, "colony_id", None), getattr(current, "load_epoch", None))
+            view_colony, view_epoch = scope[1:]
+
+            def scope_changed():
+                latest = getattr(self._bridge, "session", None)
+                latest_scope = (getattr(self._bridge, "connection_key", None), getattr(latest, "colony_id", None),
+                                getattr(latest, "load_epoch", None))
+                return (self._bridge is not bridge or latest_scope != scope
+                        or getattr(self, "_colony_scheduler", None) is not scheduler
+                        or getattr(self, "_workspace_service", None) is not live_work)
+            if (current is not None and scheduler is not None and hasattr(scheduler, "pause_state")
+                    and live_work is not None and not live_work.closed and isinstance(connection, str) and connection):
+                available = getattr(bridge, "attention_available", None)
+                display = await live_work.call("attention_display", view_colony, view_epoch, connection)
+                if isinstance(display, dict):
+                    safe["autoplay"]["attention"].update(display)
+                    safe["autoplay"]["attention"]["available"] = available if type(available) is bool else None
+                state = scheduler.pause_state
+                if (isinstance(state, dict) and state.get("status") == "observed"
+                        and (state.get("connection_epoch"), state.get("colony_id"), state.get("load_epoch"))
+                        == (connection, view_colony, view_epoch)):
+                    watchdog = safe["autoplay"]["pause_watchdog"]
+                    watchdog.update(paused=state["paused"], owner=state["owner"], sampled_tick=state["sampled_tick"],
+                                    source_status="observed")
+                    if (state["paused"] and state["speed_paused"] and not state["force_paused"]
+                            and not state["windows_force_paused"]
+                            and state["owner"] in {"planner", "frontdesk", "reflex", "automatic_letter"}):
+                        episode = [connection, view_colony, view_epoch,
+                                   state["pause_revision"], state["pause_transition_revision"]]
+                        records = await live_work.call("pause_watchdog_history", view_colony, view_epoch)
+                        records = [event for event in records if event["kind"] == "pause.watchdog"
+                                   and event["payload"].get("episode") == episode]
+                        watchdog["wake_count"] = max((event["payload"].get("count", 0) for event in records
+                                                      if event["payload"].get("action") == "wake"), default=0)
+                        watchdog["notification"] = "not_sent"
+                        attempts = [event for event in records if event["payload"].get("action") in {"notify_attempt", "notify"}]
+                        results = [event for event in records if event["payload"].get("action") == "notify_result"]
+                        if attempts:
+                            outcome = results[-1]["payload"].get("outcome") if results and results[-1]["seq"] > attempts[-1]["seq"] else "unknown"
+                            watchdog["notification"] = outcome if outcome in {"submitted", "rejected", "unknown"} else "unknown"
             if current is not None:
                 work = getattr(self, "_workspace_service", None)
                 if work is not None and not work.closed:
-                    activation = await work.call("latest_event", current.colony_id, "autoplay.activation")
+                    activation = await work.call("latest_event", view_colony, "autoplay.activation")
                 else:
                     views = WorkspaceViews(self.data_path("workspaces") / "events.sqlite")
-                    activation = await asyncio.to_thread(views.latest_activation, current.colony_id)
+                    activation = await asyncio.to_thread(views.latest_activation, view_colony)
                 safe["autoplay"]["activation"] = activation
             if work := getattr(self, "_workspace_service", None):
                 if current is not None:
-                    events = await work.call("action_events", current.colony_id)
+                    events = await work.call("action_events", view_colony)
                     actions = []
                     for event in events:
                         write = event["payload"].get("write") if event["kind"] in {"planner.progress", "autoplay.undo"} else None
@@ -376,14 +426,17 @@ class NekoRimworldPlugin(NekoPluginBase):
                             actions.append({"seq": event["seq"], "epoch": event["load_epoch"],
                                             "tick": event["game_tick"], "mode": write["mode"],
                                             "status": receipt.get("status"), "changeset_id": receipt.get("changeset_id"),
-                                            "undo_available": event["load_epoch"] == current.load_epoch and bool(receipt.get("undo_token"))})
-                    safe["autoplay"].update(board=await work.call("board", current.colony_id),
-                                            takeovers=await work.call("takeovers", current.colony_id), actions=actions[-50:])
+                                            "undo_available": event["load_epoch"] == view_epoch and bool(receipt.get("undo_token"))})
+                    safe["autoplay"].update(board=await work.call("board", view_colony),
+                                            takeovers=await work.call("takeovers", view_colony), actions=actions[-50:])
             work = self._workspace_service
             safe["workspaces"] = {
                 "revision": work.revision if work is not None else 0,
                 "active_count": len(work.active) if work is not None else 0,
             }
+            if scope_changed():
+                safe["autoplay"]["attention"] = attention_unknown
+                safe["autoplay"]["pause_watchdog"] = watchdog_unknown
             self._last_dashboard = copy.deepcopy(safe)
             return safe
         except Exception:
@@ -394,6 +447,9 @@ class NekoRimworldPlugin(NekoPluginBase):
             )
             self.logger.exception("[ui] dashboard snapshot failed incident_id={}", incident)
             fallback = copy.deepcopy(self._last_dashboard)
+            if "scope_changed" in locals() and scope_changed():
+                fallback.setdefault("autoplay", {})["attention"] = attention_unknown
+                fallback["autoplay"]["pause_watchdog"] = watchdog_unknown
             fallback.setdefault("status", BridgeStatus.ERROR)
             fallback["panel_error"] = {
                 "incident_id": incident,

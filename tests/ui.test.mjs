@@ -892,3 +892,61 @@ test("autoplay receipt cannot survive a backend restart while an old check is pe
   assert.ok(h.calls.every(c=>c.id!=="begin_settings_save"))
  }finally{await h.close()}
 })
+
+
+test("autoplay presents recorded attention and pause without new calls", async()=>{
+ for (const locale of ["zh-CN", "en"]) {
+  const h=setup(locale,{autoplay:{enabled:true,attention:{available:true,level:"urgent",sampled_tick:100,next_daily_tick:60000,next_escalated_tick:2600,
+    reasons:[{event_seq:8,source_id:"alert:1",signal:{label:"Colonist in danger",priority:"Critical"}}],
+    leases:[{event_seq:9,actor:"planner",level:"focus",reference:"task",reason:"Check recovery",end_tick:5000}]},
+   pause_watchdog:{paused:true,owner:"planner",sampled_tick:101,source_status:"observed",wake_count:2,notification:"submitted"}}});
+  try { await flush();await h.tab(locale === "en" ? "Autoplay" : "自动游玩");const text=h.root.textContent;
+   assert.match(text,locale === "en" ? /Attention level: Urgent/ : /关注档位: 紧急/);
+   assert.match(text,/Colonist in danger.*Critical/);assert.match(text,/60000/);assert.match(text,/2600/);assert.match(text,/5000/);
+   assert.match(text,locale === "en" ? /Pause owner: Planner/ : /暂停归属: 规划者/);
+   assert.match(text,locale === "en" ? /Pause evidence: Recorded for this connection/ : /暂停依据: 已记录当前连接状态/);
+   assert.match(text,locale === "en" ? /Submitted to host/ : /已提交给宿主/);
+   assert.ok(h.calls.every(c=>!["autoplay_mode","rimworld_consult","probe_game_overview"].includes(c.id)));
+  } finally {await h.close()}
+ }
+});
+
+test("autoplay distinguishes unavailable, unknown and notification outcomes", async()=>{
+ const h=setup("en",{autoplay:{enabled:true,attention:{available:false,level:null,reasons:[],leases:[],next_daily_tick:60000,next_escalated_tick:null,sampled_tick:null},
+   pause_watchdog:{paused:null,owner:null,sampled_tick:null,source_status:"unavailable",wake_count:null,notification:null}}});
+ try { await flush();await h.tab("Autoplay");assert.match(h.root.textContent,/Native attention signals unavailable/);assert.match(h.root.textContent,/Attention level: unknown/);
+  assert.match(h.root.textContent,/Pause owner: unknown/);assert.match(h.root.textContent,/Notification: unknown/);
+  h.state.autoplay.pause_watchdog={paused:true,owner:"unknown",sampled_tick:17,source_status:"observed",wake_count:3,notification:"rejected"};h.render();await flush();assert.match(h.root.textContent,/Submission rejected/);
+  h.state.autoplay.pause_watchdog.notification="unknown";h.render();await flush();assert.match(h.root.textContent,/Submission outcome unknown/);
+  h.state.autoplay.enabled=false;h.render();await flush();assert.doesNotMatch(h.root.textContent,/Attention and review|Pause and watchdog/);
+ } finally {await h.close()}
+});
+
+
+test("autoplay default state is unknown without a connected session", async()=>{
+ for (const locale of ["en", "zh-CN"]) {
+  const h=setup(locale,{autoplay:{enabled:true,attention:{available:null,level:null,reasons:[],next_daily_tick:null,next_escalated_tick:null,leases:[],sampled_tick:null,load_epoch:null},
+   pause_watchdog:{paused:null,owner:null,sampled_tick:null,source_status:"unavailable",wake_count:null,notification:null},
+   board:[{entry_id:"task",kind:"task",revision:1,status:"open",body:"Plan"}],actions:[{seq:3,mode:"commit",status:"committed",changeset_id:"id",tick:10}]}});
+  try { await flush();await h.tab(locale === "en" ? "Autoplay" : "自动游玩");const text=h.root.textContent;
+   assert.match(text,locale === "en" ? /Native attention availability is unknown/ : /原生注意力信号是否可用尚不清楚/);
+   assert.match(text,locale === "en" ? /Next daily review: unknown/ : /下次日复核: 未知/);
+   assert.doesNotMatch(text,locale === "en" ? /daily review remains scheduled/ : /日复核仍按计划进行/);
+   assert.match(text,/task task · revision 1 · open · Plan/);assert.match(text,/commit · committed · id · tick 10/);
+  } finally {await h.close()}
+ }
+});
+
+
+test("autoplay shows an active focus request when native attention is unavailable", async()=>{
+ for (const locale of ["en", "zh-CN"]) {
+  const h=setup(locale,{autoplay:{enabled:true,attention:{available:false,source_status:"unavailable",level:"focus",reasons:[{event_seq:7,source_id:"lease",signal:{reason:"Review treatment"}}],next_daily_tick:60000,next_escalated_tick:15000,leases:[{event_seq:7,actor:"planner",level:"focus",reference:"task",reason:"Review treatment",end_tick:16000}],sampled_tick:1000,load_epoch:"epoch"},pause_watchdog:{paused:null,owner:null,sampled_tick:null,source_status:"unavailable",wake_count:null,notification:null}}});
+  try {await flush();await h.tab(locale === "en" ? "Autoplay" : "自动游玩");const text=h.root.textContent;
+   assert.match(text,locale === "en" ? /Attention level: Focus/ : /关注档位: 关注/);
+   assert.match(text,locale === "en" ? /Native attention signals unavailable/ : /原生注意力信号不可用/);
+   assert.match(text,locale === "en" ? /Native observation: Unavailable/ : /原生观察质量: 不可用/);
+   assert.match(text,locale === "en" ? /Calculated from recorded facts and active requests/ : /根据已记录事实与有效声明计算/);
+   assert.match(text,/Review treatment/);assert.match(text,/16000/);
+  } finally {await h.close()}
+ }
+});

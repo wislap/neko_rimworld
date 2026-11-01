@@ -1,7 +1,7 @@
 """Event and board writes, plus views rebuilt from the log; the only path into the two tables."""
 
+import copy
 import json
-from contextlib import nullcontext
 
 from .attention_policy import load_policy, normalize_attention_event
 from .board import TASK_TARGET_KINDS, BoardError, check_revision, check_shape
@@ -20,7 +20,6 @@ from .ledger import (
     UTTERANCE_EVENT,
     EventLedger,
 )
-from .wake_conditions import COMPARISONS, numeric, path_value, validate_condition
 
 TAKEOVER_FIELDS = frozenset({"object", "field", "value_read", "ai_value", "changeset_id"})
 RUN_ROLES = frozenset({"assistant", "tool"})
@@ -32,20 +31,6 @@ WAKE_POLICY_DEFAULTS = {
     "frontdesk_choice_letters": True,
     "frontdesk_paused_windows": True,
 }
-
-
-def _event_filter(value, expected):
-    if isinstance(expected, dict) and set(expected) == {"op", "value"}:
-        op, threshold = expected["op"], expected["value"]
-        return (op in COMPARISONS and numeric(value) and numeric(threshold)
-                and COMPARISONS[op](value, threshold))
-    if type(value) is bool or type(expected) is bool:
-        return type(value) is type(expected) and value == expected
-    if isinstance(value, dict) and isinstance(expected, dict):
-        return value.keys() == expected.keys() and all(_event_filter(value[k], expected[k]) for k in value)
-    if isinstance(value, list) and isinstance(expected, list):
-        return len(value) == len(expected) and all(_event_filter(a, b) for a, b in zip(value, expected))
-    return value == expected
 
 
 class Journal:
@@ -154,122 +139,25 @@ class Journal:
         policy = {key: value.copy() if isinstance(value, list) else value
                   for key, value in WAKE_POLICY_DEFAULTS.items()}
         for event in self._ledger.events_by_kind(colony_id, ("scheduler.policy",)):
-            policy.update({k: v for k, v in event["payload"].items() if k in WAKE_POLICY_DEFAULTS})
+            if "pause_on_letter_defs" in event["payload"]:
+                policy["pause_on_letter_defs"] = event["payload"]["pause_on_letter_defs"]
         return policy
 
     def wake_policy_authors(self, colony_id):
         authors = {key: {"source": PLUGIN, "event_seq": None} for key in WAKE_POLICY_DEFAULTS}
         for event in self._ledger.events_by_kind(colony_id, ("scheduler.policy",)):
-            for key in event["payload"]:
-                if key not in authors:
-                    continue
-                authors[key] = {"source": event["source"], "event_seq": event["seq"]}
+            if "pause_on_letter_defs" in event["payload"]:
+                authors["pause_on_letter_defs"] = {"source": event["source"], "event_seq": event["seq"]}
         return authors
 
     def set_wake_policy(self, colony_id, load_epoch, game_tick, actor, changes):
-        if actor not in {"frontdesk", "planner"} or not isinstance(changes, dict) or not changes:
-            raise ValueError("Invalid policy author or changes")
-        allowed = {"pause_on_letter_defs"} if actor == "frontdesk" else set()
-        if not changes.keys() <= allowed:
+        if actor != "frontdesk" or not isinstance(changes, dict) or set(changes) != {"pause_on_letter_defs"}:
             raise ValueError("Policy field is not writable by this role")
-        for key, value in changes.items():
-            if key.endswith("_defs"):
-                if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
-                    raise ValueError("Letter definitions must be nonempty strings")
-            elif key in {"frontdesk_choice_letters", "frontdesk_paused_windows"}:
-                if type(value) is not bool:
-                    raise ValueError("Choice letter policy must be boolean")
-            elif type(value) is not int or not 1 <= value < 2**63:
-                raise ValueError("Review interval must be a positive integer")
+        definitions = changes["pause_on_letter_defs"]
+        if not isinstance(definitions, list) or any(not isinstance(item, str) or not item for item in definitions):
+            raise ValueError("Letter definitions must be nonempty strings")
         with self._ledger.transaction():
-            seq = self._ledger.append(colony_id, load_epoch, game_tick, actor, "scheduler.policy", changes)
-            return seq
-
-    def wake_conditions(self, colony_id, load_epoch):
-        active = {}
-        for event in self._ledger.events_by_kind(colony_id, ("wake.registered", "wake.cancelled", "wake.evaluated")):
-            if event["load_epoch"] != load_epoch:
-                continue
-            payload = event["payload"]
-            if event["kind"] == "wake.registered":
-                active[event["seq"]] = {**payload, "id": event["seq"], "next_tick": payload["next_tick"]}
-            elif event["kind"] == "wake.cancelled":
-                active.pop(payload["id"], None)
-            elif payload["id"] in active:
-                if payload.get("consume"):
-                    active.pop(payload["id"])
-                else:
-                    active[payload["id"]]["next_tick"] = payload["next_tick"]
-        return list(active.values())
-
-    def register_wake(self, colony_id, load_epoch, game_tick, actor, condition, text):
-        if actor not in {"frontdesk", "planner"} or not isinstance(text, str) or not text.strip():
-            raise ValueError("Wake requires a valid role and reason")
-        condition = validate_condition(condition)
-        kind = condition["kind"]
-        next_tick = (condition["tick"] if kind == "deadline" else
-                     game_tick + condition.get("interval_ticks", 0))
-        if next_tick >= 2**63:
-            raise ValueError("Wake tick exceeds the supported range")
-        payload = {"role": actor, "condition": condition, "text": text, "next_tick": next_tick}
-        seq = self._ledger.append(colony_id, load_epoch, game_tick, actor, "wake.registered", payload)
-        return {"id": seq, **payload}
-
-    def cancel_wake(self, colony_id, load_epoch, game_tick, actor, wake_id):
-        active = {item["id"]: item for item in self.wake_conditions(colony_id, load_epoch)}
-        if wake_id not in active or active[wake_id]["role"] != actor:
-            raise ValueError("Wake is absent or owned by another role")
-        return self._ledger.append(colony_id, load_epoch, game_tick, actor, "wake.cancelled", {"id": wake_id})
-
-    def evaluate_wake(self, colony_id, load_epoch, game_tick, wake_id, observation, *, expected_next_tick):
-        """Atomically record the sample, its advancement and any resulting inbox wake."""
-        with nullcontext() if self._ledger.db.in_transaction else self._ledger.transaction():
-            active = {item["id"]: item for item in self.wake_conditions(colony_id, load_epoch)}
-            item = active.get(wake_id)
-            if item is None or item["next_tick"] != expected_next_tick:
-                return False
-            condition = item["condition"]
-            kind = condition["kind"]
-            if kind != "event" and game_tick < item["next_tick"]:
-                return False
-            value, matched, error = None, False, None
-            if kind in {"deadline", "periodic"}:
-                matched = True
-            elif kind == "event":
-                data = observation.get("data", {})
-                matched = (observation.get("kind") == condition["event_kind"] and
-                           isinstance(data, dict) and all(k in data and _event_filter(data[k], v)
-                               for k, v in condition["filters"].items()))
-            else:
-                try:
-                    if "error" in observation or observation.get("response", {}).get("payload", {}).get("status") != "ok":
-                        raise ValueError("Read did not return a successful observation")
-                    value = path_value(observation, condition["path"])
-                    if not numeric(value):
-                        raise ValueError("Observation is not a finite number")
-                    matched = COMPARISONS[condition["op"]](value, condition["value"])
-                except (ValueError, TypeError) as exc:
-                    error = str(exc)
-            consume = matched and kind in {"deadline", "event", "numeric"}
-            busy = kind == "numeric" and observation.get("error", {}).get("code") == "bridge_busy"
-            next_tick = (game_tick + condition["interval_ticks"] if kind in {"periodic", "numeric"} and not busy
-                         else item["next_tick"])
-            payload = {"id": wake_id, "condition": condition, "observation": observation,
-                       "value": value, "matched": matched, "error": error, "sample_tick": game_tick,
-                       "consume": consume, "next_tick": next_tick}
-            evaluation = self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "wake.evaluated", payload)
-            if matched:
-                from ..serialization import canonical
-                text = canonical({"reason": item["text"], "evaluation_seq": evaluation, **payload})
-                if item["role"] == "planner":
-                    self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "planner.wake",
-                                        {"source": "plugin", "text": text, "evaluation_seq": evaluation})
-                else:
-                    anchor = self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "frontdesk.trigger",
-                                                 {"source": "plugin", "text": text, "evaluation_seq": evaluation})
-                    self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "frontdesk.wake",
-                                        {"source": "plugin", "trigger_seq": anchor})
-            return matched
+            return self._ledger.append(colony_id, load_epoch, game_tick, actor, "scheduler.policy", changes)
 
     def set_context_policy(self, colony_id, load_epoch, game_tick, changes):
         if not isinstance(changes, dict) or not changes or any(
@@ -493,7 +381,14 @@ class Journal:
                     ((not autoplay and data.get("def") in policy["frontdesk_letter_defs"])
                      or (policy["frontdesk_choice_letters"] and data.get("is_choice_letter") is True))):
                 from ..serialization import canonical
-                text = canonical({"event_seq": seq, "event": event})
+                presented_event = copy.deepcopy(event)
+                presented_data = presented_event.get("data")
+                if isinstance(presented_data, dict):
+                    presented_data.pop("monotonic", None)
+                    pause_state = presented_data.get("pause_state")
+                    if isinstance(pause_state, dict):
+                        pause_state.pop("monotonic", None)
+                text = canonical({"event_seq": seq, "event": presented_event})
                 anchor = self._ledger.append(colony_id, load_epoch, game_tick, "mod", "frontdesk.trigger",
                                              {"source": "game", "text": text, "event_seq": seq})
                 self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "frontdesk.wake",
@@ -519,6 +414,49 @@ class Journal:
                                      "signals": [self._ledger.event(colony_id, seq) for seq in payload.get("signal_seqs", [])],
                                      "review_type": payload["review_type"]})
         return state
+
+    def attention_display(self, colony_id, load_epoch, connection):
+        """Read-only cadence projection at the latest recorded tick; never append work."""
+        events = self._ledger.cadence_events(colony_id)
+        current = [event for event in events if event["load_epoch"] == load_epoch]
+        if not current:
+            return None
+        sampled_tick = max(event["game_tick"] for event in current)
+        policy, _ = load_policy()
+        state = cadence_project(events, epoch=load_epoch, now_tick=sampled_tick, policy=policy)
+        if not state.get("active"):
+            return None
+        by_seq = {event["seq"]: event for event in current}
+        reasons = [{**reason, "signal": by_seq.get(reason["event_seq"], {}).get("payload")}
+                   for reason in state["reasons"]]
+        leases = [{"event_seq": seq, **lease} for seq, lease in state["leases"].items()]
+        snapshots = [event for event in current if event["kind"] == "attention.signal"
+                     and event["payload"].get("edge") == "snapshot"]
+        latest_snapshot = snapshots[-1] if snapshots else None
+        source = self._ledger.event(colony_id, latest_snapshot["payload"].get("native_event_seq")) if latest_snapshot else None
+        same_scope = bool(source and source["kind"] == "game.event"
+                          and source["load_epoch"] == load_epoch and source["payload"].get("connection") == connection)
+        partitions = {name: dict(part) for name, part in latest_snapshot["payload"].get("partitions", {}).items()} if same_scope else {}
+        if same_scope:
+            map_id = latest_snapshot["payload"].get("map_id")
+            changes = self._ledger.events_by_kind(colony_id, ("game.event",), after_seq=source["seq"], load_epoch=load_epoch)
+            for event in changes:
+                native = event["payload"].get("event", {})
+                data = native.get("data", {})
+                if (event["payload"].get("connection") == connection and native.get("kind") == "attention_changed"
+                        and data.get("edge") == "status_changed" and data.get("map_id") == map_id
+                        and data.get("category") in partitions):
+                    part = data.get("current")
+                    partitions[data["category"]] = dict(part) if isinstance(part, dict) else {}
+                    sampled_tick = max(sampled_tick, event["game_tick"])
+        baseline_complete = bool(same_scope and len(partitions) == 3 and all(
+            part.get("status") == "ok" and not part.get("truncated") for part in partitions.values()))
+        any_observed = same_scope and any(part.get("status") in {"ok", "partial"} for part in partitions.values())
+        source_status = "observed" if baseline_complete else "partial" if any_observed else "unavailable"
+        return {"level": state["level"], "source_status": source_status,
+                "reasons": reasons, "next_daily_tick": state["next_daily_tick"],
+                "next_escalated_tick": state["next_escalated_tick"], "leases": leases,
+                "sampled_tick": sampled_tick, "load_epoch": load_epoch}
 
     def attention_state(self, colony_id, load_epoch, game_tick):
         with self._ledger.transaction():

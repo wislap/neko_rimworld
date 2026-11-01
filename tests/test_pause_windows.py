@@ -8,7 +8,11 @@ from ..agent.world.query_surface import Surface, SurfaceError
 from ..agent.world.semantic_surface import plan_look
 from ..workspace.journal import Journal
 from .test_semantic_tools import catalog
-from .test_wake_policy import native
+
+
+def native(cursor, tick, kind, data):
+    return {"connection_epoch": "conn", "colony_id": "colony", "load_epoch": "epoch", "game_tick": tick,
+            "snapshot_sequence": cursor, "cursor": cursor, "kind": kind, "data": data}
 
 
 FIELDS = {

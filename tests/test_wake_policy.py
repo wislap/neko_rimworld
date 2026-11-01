@@ -19,51 +19,55 @@ def test_pause_policy_is_rebuilt_and_role_bound(tmp_path):
     journal.close()
 
 
-def native(cursor, tick, kind="heartbeat", data=None, epoch="epoch", connection="conn"):
-    return {"connection_epoch": connection, "colony_id": "colony", "load_epoch": epoch,
-            "game_tick": tick, "snapshot_sequence": cursor, "cursor": cursor,
-            "kind": kind, "data": data or {}}
-
-
-
-
-def test_numeric_records_miss_then_hit_and_busy_defers(tmp_path):
+def test_retired_scheduler_events_cannot_be_forged(tmp_path):
     journal = Journal(tmp_path / "events.sqlite")
-    item = journal.register_wake("colony", "epoch", 10, "planner", {"kind": "numeric", "tool": "query", "arguments": {}, "path": ["response", "payload", "data", "food"], "op": "lt", "value": 10, "interval_ticks": 1}, "food")
-    assert item["condition"]["interval_ticks"] == 250
-    def evaluate(tick, next_tick, obs):
-        return journal.evaluate_wake("colony", "epoch", tick, item["id"], obs, expected_next_tick=next_tick)
-    assert not evaluate(260, 260, {"error": {"code": "bridge_busy"}})
-    assert not evaluate(510, 260, {"response": {"payload": {"status": "ok", "data": {"food": 12}}}})
-    assert evaluate(760, 760, {"response": {"payload": {"status": "ok", "data": {"food": 5}}}})
-    assert not evaluate(760, 760, {"response": {"payload": {"status": "ok", "data": {"food": 5}}}})
-    entries = [e["payload"] for e in journal.events("colony") if e["kind"] == "wake.evaluated"]
-    assert [e["value"] for e in entries] == [None, 12, 5]
-    assert entries[0]["observation"]["error"]["code"] == "bridge_busy"
-    assert [e["matched"] for e in entries] == [False, False, True]
+    for kind in ("scheduler.policy", "scheduler.default_review", "wake.registered", "wake.cancelled", "wake.evaluated"):
+        with pytest.raises(ValueError):
+            journal.record("colony", "epoch", 1, "planner", kind, {})
     journal.close()
 
 
-def test_role_cannot_cancel_other_role_or_forge_scheduler_events(tmp_path):
+def test_retired_wake_events_remain_readable_without_reactivation(tmp_path):
     journal = Journal(tmp_path / "events.sqlite")
-    item = journal.register_wake("colony", "epoch", 0, "planner", {"kind": "deadline", "tick": 10}, "later")
-    with pytest.raises(ValueError):
-        journal.cancel_wake("colony", "epoch", 1, "frontdesk", item["id"])
-    with pytest.raises(ValueError):
-        journal.record("colony", "epoch", 1, "planner", "scheduler.policy", {})
-    journal.cancel_wake("colony", "epoch", 1, "planner", item["id"])
-    assert not journal.wake_conditions("colony", "epoch")
+    payload = {"role": "planner", "condition": {"kind": "periodic", "interval_ticks": 15000}, "text": "old"}
+    seq = journal._ledger.append("colony", "epoch", 1, "planner", "wake.registered", payload)
+    row = journal.event("colony", seq)
+    assert row["kind"] == "wake.registered" and row["payload"] == payload
+    assert journal.events_by_kind("colony", ("wake.registered",))[0]["payload"] == payload
+    assert not any(event["kind"] == "planner.wake" for event in journal.events("colony"))
     journal.close()
 
 
+def test_historical_retired_policy_does_not_change_current_delivery(tmp_path):
+    from .test_attention_journal import CHOICES, native
 
-
-
-
-
-
-
-
+    journal = Journal(tmp_path / "events.sqlite")
+    old_policy = {
+        "pause_on_letter_defs": ["ThreatBig"],
+        "frontdesk_letter_defs": ["Custom"],
+        "frontdesk_choice_letters": False,
+        "frontdesk_paused_windows": False,
+        "planner_review_ticks": 3000,
+    }
+    seq = journal._ledger.append("c", "e", 0, "frontdesk", "scheduler.policy", old_policy)
+    journal.record_autoplay_activation("c", "e", 0, CHOICES)
+    policy, authors = journal.wake_policy("c"), journal.wake_policy_authors("c")
+    assert policy["pause_on_letter_defs"] == ["ThreatBig"]
+    assert policy["frontdesk_choice_letters"] is True and policy["frontdesk_paused_windows"] is True
+    assert policy["frontdesk_letter_defs"] != ["Custom"] and "planner_review_ticks" not in policy
+    assert authors["pause_on_letter_defs"]["event_seq"] == seq
+    assert authors["frontdesk_choice_letters"]["source"] == "plugin"
+    journal.ingest_game_event("c", "e", 1, "conn", native(1, 1, "letter", {"def": "Custom", "is_choice_letter": False}))
+    assert not any(event["kind"] == "frontdesk.wake" for event in journal.events("c"))
+    journal.ingest_game_event(
+        "c", "e", 2, "conn", native(2, 2, "letter", {"def": "NeutralEvent", "is_choice_letter": True})
+    )
+    journal.ingest_game_event(
+        "c", "e", 3, "conn", native(3, 3, "pause_changed", {"source": "window", "windows_force_paused": True})
+    )
+    assert sum(event["kind"] == "frontdesk.wake" for event in journal.events("c")) == 2
+    assert journal.event("c", seq)["payload"] == old_policy
+    journal.close()
 
 
 @pytest.mark.asyncio
@@ -76,61 +80,30 @@ async def test_idle_query_passes_binding_and_busy_without_changing_ordinary_read
 
     class Bridge:
         session = SessionDescriptor("colony", "epoch", 3, 1)
+
         def __init__(self):
             self.calls = []
+
         def request(self, operation, arguments, timeout, **kwargs):
             self.calls.append(kwargs)
             if kwargs:
                 raise BridgeBusyError("busy")
             return fixture_response()
+
     plugin = object.__new__(NekoRimworldPlugin)
     plugin._bridge = Bridge()
     await plugin._agent_query_tool({"operation": "query", "arguments": {}})
     with pytest.raises(ToolExecutionError) as caught:
-        await plugin._agent_query_tool({"operation": "query", "arguments": {}, "idle_only": True,
-                                        "binding": ("conn", "colony", "epoch")})
+        await plugin._agent_query_tool(
+            {"operation": "query", "arguments": {}, "idle_only": True, "binding": ("conn", "colony", "epoch")}
+        )
     assert caught.value.code == "bridge_busy"
-    assert plugin._bridge.calls == [{}, {"idle_only": True, "expected_connection": "conn", "expected_session": plugin._bridge.session}]
+    assert plugin._bridge.calls == [
+        {},
+        {"idle_only": True, "expected_connection": "conn", "expected_session": plugin._bridge.session},
+    ]
     with pytest.raises(ToolExecutionError):
-        await plugin._agent_query_tool({"operation": "query", "arguments": {}, "idle_only": True,
-                                        "binding": ("conn", "colony", "old")})
+        await plugin._agent_query_tool(
+            {"operation": "query", "arguments": {}, "idle_only": True, "binding": ("conn", "colony", "old")}
+        )
     assert len(plugin._bridge.calls) == 2
-
-
-
-
-@pytest.mark.parametrize("incomplete", [{"status": "partial"}, {"issues": ["lost"]}, {"truncated": True}, {"coverage": {"complete": False}}, {"status": "unknown"}])
-def test_numeric_rejects_incomplete_ancestors(tmp_path, incomplete):
-    journal = Journal(tmp_path / "events.sqlite")
-    item = journal.register_wake("colony", "epoch", 0, "planner", {"kind": "numeric", "tool": "query", "arguments": {}, "path": ["response", "payload", "data", "value"], "op": "lt", "value": 2, "interval_ticks": 250}, "check")
-    observation = {"response": {"payload": {"status": "ok", "data": {**incomplete, "value": 1}}}}
-    assert not journal.evaluate_wake("colony", "epoch", 250, item["id"], observation, expected_next_tick=250)
-    entry = next(e["payload"] for e in journal.events("colony") if e["kind"] == "wake.evaluated")
-    assert entry["error"] and not entry["matched"] and entry["observation"] == observation
-    journal.close()
-
-
-
-
-
-
-def test_native_work_priority_with_unrelated_coverage_fields(tmp_path):
-    import copy
-    import json
-    from pathlib import Path
-
-    raw = json.loads((Path(__file__).parent / "fixtures" / "wake-native-work.json").read_text(encoding="utf-8"))
-    path = ["response", "payload", "data", "objects", 0, "facets", "work", "work_types", 2, "priority"]
-    work_type = raw["response"]["payload"]["data"]["objects"][0]["facets"]["work"]["work_types"][2]
-    assert work_type["definition"] == "Doctor" and work_type["priority"] == 3
-    journal = Journal(tmp_path / "events.sqlite")
-    condition = {"kind": "numeric", "tool": "inspect_state", "arguments": {}, "path": path,
-                 "op": "eq", "value": 3, "interval_ticks": 250}
-    item = journal.register_wake("colony", "epoch", 0, "planner", condition, "Doctor")
-    assert journal.evaluate_wake("colony", "epoch", 250, item["id"], raw, expected_next_tick=250)
-    assert next(e["payload"] for e in journal.events("colony") if e["kind"] == "wake.evaluated")["observation"] == raw
-    incomplete = copy.deepcopy(raw)
-    incomplete["response"]["payload"]["data"]["objects"][0]["coverage"]["complete"] = False
-    item = journal.register_wake("colony", "epoch", 250, "planner", condition, "Doctor")
-    assert not journal.evaluate_wake("colony", "epoch", 500, item["id"], incomplete, expected_next_tick=500)
-    journal.close()
