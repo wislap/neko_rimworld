@@ -294,7 +294,8 @@ class ColonyScheduler:
                                                           connection, dict(event),
                                                           attention_available={"colony_events.v1", "colony_attention.v1"} <= set(self._event_port.capabilities),
                                                           observed_tick=observed.game_tick,
-                                                          command_binding_check=lambda: self._event_identity() == poll_identity)
+                                                          command_binding_check=lambda: self._event_identity() == poll_identity,
+                                                          diagnostic_binding_identity=lambda: self._event_identity())
                         self._event_cursor = event["cursor"]
                         if changed:
                             if event.get("kind") in {"session_snapshot", "pause_changed"}:

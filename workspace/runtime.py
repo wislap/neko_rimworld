@@ -3,6 +3,8 @@
 import asyncio
 import copy
 import hashlib
+import logging
+import os
 import sqlite3
 import threading
 import time
@@ -35,21 +37,76 @@ class FrontdeskService:
         self.closed = False
         self._journal_timing_lock = threading.Lock()
         self._journal_timing = {}
+        self._ingest_failures = None
 
     def journal_timing_snapshot(self):
         """Cumulative worker timings; sampled independently of bridge scope."""
         with self._journal_timing_lock:
             return {"sampled_monotonic": time.monotonic(),
                     "meaning": "Service lifetime totals; worker includes guard, Journal, SQLite and serialization. Durations overlap across roles and are not wall time.",
-                    "methods": copy.deepcopy(self._journal_timing)}
+                    "methods": copy.deepcopy(self._journal_timing),
+                    "ingest_failures": copy.deepcopy(self._ingest_failures)}
 
-    async def call(self, method, *args, command_binding_check=None, **kwargs):
+    def _record_ingest_failure(self, error, stage, args, kwargs, binding_identity, failure_index):
+        def argument(index, name):
+            return args[index] if len(args) > index else kwargs.get(name)
+
+        event = argument(4, "event")
+        event = event if isinstance(event, dict) else {}
+        current = self.game_session()
+        try:
+            identity = binding_identity() if binding_identity is not None else None
+        except Exception:
+            identity = None
+        frames = []
+        tb = error.__traceback__
+        while tb is not None:
+            code = tb.tb_frame.f_code
+            frames.append({"file": os.path.basename(code.co_filename), "function": code.co_name, "line": tb.tb_lineno})
+            tb = tb.tb_next
+        record = {
+            "failure_index": failure_index, "monotonic": time.monotonic(), "stage": stage,
+            "exception_type": type(error).__name__,
+            "error_code": error.code if isinstance(error, ToolExecutionError) and error.code in {"world_changed", "event_gap"} else None,
+            "target": {"colony_id": argument(0, "colony_id"), "load_epoch": argument(1, "load_epoch"),
+                       "connection_epoch": argument(3, "connection")},
+            "current": {"colony_id": getattr(current, "colony_id", None),
+                        "load_epoch": getattr(current, "load_epoch", None),
+                        "connection_epoch": identity[0] if identity is not None else getattr(current, "connection_epoch", None),
+                        "game_tick": getattr(current, "game_tick", None)},
+            "current_binding": ({"connection_epoch": identity[0], "colony_id": identity[1], "load_epoch": identity[2]}
+                                if identity is not None else None),
+            "cursor": event.get("cursor") if type(event.get("cursor")) is int else None,
+            "native_sample_tick": argument(2, "game_tick"),
+            "observed_tick": kwargs.get("observed_tick"), "frames": frames[-8:],
+        }
+        with self._journal_timing_lock:
+            if self._ingest_failures is None:
+                self._ingest_failures = {"first": record, "last": record, "count": 1, "last_repeat_count": 1,
+                                         "intermediate_omitted": 0,
+                                         "retention": "Service memory; first and last only, exported on timing snapshot."}
+            else:
+                previous = self._ingest_failures["last"]
+                def signature(item):
+                    return (item["stage"], item["exception_type"], item["error_code"], item["target"],
+                            item["current_binding"], item["current"]["colony_id"], item["current"]["load_epoch"],
+                            item["cursor"], item["native_sample_tick"], item["frames"])
+                repeated = signature(previous) == signature(record)
+                self._ingest_failures.update(last=record, count=self._ingest_failures["count"] + 1,
+                                             intermediate_omitted=max(0, self._ingest_failures["count"] - 1),
+                                             last_repeat_count=self._ingest_failures["last_repeat_count"] + 1 if repeated else 1)
+        compact = {key: value for key, value in record.items() if key != "frames"}
+        logging.getLogger(__name__).warning("ingest_game_event_failure %s", canonical(compact))
+
+    async def call(self, method, *args, command_binding_check=None, diagnostic_binding_identity=None, **kwargs):
         submitted = time.monotonic()
         with self._journal_timing_lock:
             timing = self._journal_timing.setdefault(method, {"submitted": 0, "started": 0, "completed": 0,
                 "failed": 0, "await_cancelled": 0, "queue_seconds": 0.0, "worker_seconds": 0.0,
                 "queue_max_seconds": 0.0, "worker_max_seconds": 0.0})
             timing["submitted"] += 1
+
+        stage = "journal_initialization"
 
         def invoke():
             begun = time.monotonic()
@@ -63,6 +120,14 @@ class FrontdeskService:
                 result = invoke_journal()
                 failed = False
                 return result
+            except Exception as error:
+                if method == "ingest_game_event":
+                    try:
+                        self._record_ingest_failure(error, stage, args, kwargs, diagnostic_binding_identity,
+                                                    timing["failed"] + 1)
+                    except Exception:  # Diagnostics must never replace the worker failure.
+                        pass
+                raise
             finally:
                 with self._journal_timing_lock:
                     timing["completed"] += 1
@@ -72,6 +137,7 @@ class FrontdeskService:
                     timing["worker_max_seconds"] = max(timing["worker_max_seconds"], duration)
 
         def invoke_journal():
+            nonlocal stage
             if self.journal is None:
                 self.journal = Journal(self.path)
             # Business mutations must still belong to the active world when the
@@ -84,14 +150,18 @@ class FrontdeskService:
                     or (event_kind == "planner.started" and command_binding_check is not None)):
                 colony = args[0] if args else kwargs.get("colony_id")
                 epoch = args[1] if len(args) > 1 else kwargs.get("load_epoch")
+                stage = "active_scope"
                 current = self.game_session()
                 if current is None or (current.colony_id, current.load_epoch) != (colony, epoch):
                     raise ToolExecutionError("world_changed", "The active colony or epoch changed before the command executed", recoverable=False)
+                stage = "connection_binding"
                 if not binding_is_current(command_binding_check):
                     raise ToolExecutionError("world_changed", "The active colony connection changed before the command executed", recoverable=False)
+                stage = "load_lookup"
                 load = self.journal.latest_event(colony, "colony.load")
                 if method not in {"observe_epoch", "ingest_game_event", "attention_state", "attention_declare", "attention_revoke", "pause_watchdog_wake", "pause_watchdog_notify"} and load and load["load_epoch"] != epoch:
                     raise ToolExecutionError("world_changed", "The recorded colony load changed before the command executed", recoverable=False)
+            stage = "journal_ingest" if method == "ingest_game_event" else "journal_call"
             return getattr(self.journal, method)(*args, **kwargs)
         try:
             return await asyncio.get_running_loop().run_in_executor(self._executor, invoke)
