@@ -1058,8 +1058,14 @@ class NekoRimworldPlugin(NekoPluginBase):
             await self._autoplay_budget.reenable()
         async def scoped_failure(role, result, bound_game=None):
             await self._autoplay_failure(role, result, bound_game, origin_scheduler=scheduler)
+        async def watchdog_notify(bound_game):
+            if self._colony_scheduler is not scheduler or not scheduler._business_current(bound_game):
+                raise ValueError("The active colony changed before the pause notification")
+            return self.ctx.push_message(source="neko_rimworld", visibility=["chat"], ai_behavior="blind",
+                                         parts=[{"type": "text", "text": "RimWorld is still paused. Please review the pause and resume when appropriate."}])
         scheduler = ColonyScheduler(service, self._agent_settings, event_provider=self._load_agent_tools, binding=event_binding,
-                                    budget=self._autoplay_budget, failure_handler=scoped_failure)
+                                    budget=self._autoplay_budget, failure_handler=scoped_failure,
+                                    watchdog_notify=watchdog_notify)
         identity = setup.write_identity()
         current = getattr(self._bridge, "session", None)
         if (identity is None or tuple(identity[1:]) != (game.colony_id, game.load_epoch) or current is None
@@ -1070,7 +1076,77 @@ class NekoRimworldPlugin(NekoPluginBase):
                            command_binding_check=lambda: event_binding() == tuple(identity))
         if event_binding() != tuple(identity):
             raise ValueError("The active colony changed while enabling autoplay")
-        await service.call("record_autoplay_activation", game.colony_id, game.load_epoch, game.game_tick, choices,
+        async def read_pause_state():
+            if getattr(setup, "idle_query", None) is None:
+                return None, None, "native_read_unavailable"
+            try:
+                observation = await setup.idle_query("read_situation", {})
+                value = observation.to_dict() if hasattr(observation, "to_dict") else dict(observation)
+                response = value.get("response", {})
+                if (response.get("connection_epoch"), response.get("colony_id"), response.get("load_epoch")) != tuple(identity):
+                    return None, None, "native_scope_changed"
+                data = response.get("payload", {}).get("data", {})
+                state = data.get("clock", {}).get("pause_state")
+                scheduler.observe_pause_state(state, tuple(identity))
+                attention = {"scope": {key: response.get(key) for key in ("connection_epoch", "colony_id", "load_epoch")},
+                             "response_tick": response.get("game_tick"),
+                             "snapshot_sequence": response.get("snapshot_sequence"), "sample": data.get("sample"),
+                             "attention_snapshot": data.get("attention_snapshot")}
+                return (scheduler.pause_state, attention, None) if scheduler.pause_state is not None else (None, None, "native_pause_state_unavailable")
+            except Exception as error:
+                return None, None, "native_read_" + type(error).__name__
+
+        def startup_tick(state=None):
+            current = getattr(self._bridge, "session", None)
+            current_tick = getattr(current, "game_tick", game.game_tick)
+            sampled_tick = state.get("sampled_tick", game.game_tick) if isinstance(state, dict) else game.game_tick
+            return max(game.game_tick, current_tick, sampled_tick)
+
+        before, before_attention, problem = await read_pause_state()
+        if problem or event_binding() != tuple(identity):
+            reason = problem or "native_scope_changed"
+            await service.call("record", game.colony_id, game.load_epoch, startup_tick(before), "planner",
+                               "autoplay.startup_pause", {"stage": "failed", "outcome": "not_sent", "reason": reason},
+                               command_binding_check=lambda: event_binding() == tuple(identity))
+            raise ValueError("Startup pause state unavailable: " + reason)
+        receipt = None
+        if not before["paused"]:
+            await service.call("record", game.colony_id, game.load_epoch, startup_tick(before), "planner",
+                               "autoplay.startup_pause", {"stage": "requested", "role": "planner"},
+                               command_binding_check=lambda: event_binding() == tuple(identity))
+            try:
+                receipt = await setup.write_port.set_paused(True, role="planner")
+            except BaseException as error:
+                try:
+                    await asyncio.shield(service.call("record", game.colony_id, game.load_epoch, startup_tick(before), "planner",
+                                                      "autoplay.startup_pause", {"stage": "failed", "outcome": "unknown",
+                                                                                 "error_type": type(error).__name__}))
+                except Exception:
+                    pass
+                raise
+            after, after_attention, problem = await read_pause_state()
+            if problem or event_binding() != tuple(identity) or not after["paused"]:
+                reason = problem or ("native_scope_changed" if event_binding() != tuple(identity) else "native_pause_not_confirmed")
+                await service.call("record", game.colony_id, game.load_epoch, startup_tick(before), "planner",
+                                   "autoplay.startup_pause", {"stage": "failed", "outcome": "known",
+                                                              "reason": reason, "receipt": dict(receipt)},
+                                   command_binding_check=lambda: event_binding() == tuple(identity))
+                raise ValueError("Startup pause state unavailable: " + reason)
+            pause_state = after
+            initial_attention = after_attention
+        else:
+            pause_state = before
+            initial_attention = before_attention
+        if event_binding() != tuple(identity):
+            raise ValueError("The active colony changed while recording startup pause")
+        pause_evidence_seq = await service.call("record", game.colony_id, game.load_epoch, startup_tick(pause_state), "planner",
+                           "autoplay.startup_pause", {"stage": "result", "receipt": dict(receipt) if receipt else None,
+                                                       "preserved_existing": before["paused"], "pause_state": pause_state,
+                                                       "initial_attention": initial_attention,
+                                                       "attention_available": {"colony_events.v1", "colony_attention.v1"} <= set(setup.write_port.capabilities)},
+                           command_binding_check=lambda: event_binding() == tuple(identity))
+        scheduler.observe_pause_state(pause_state, tuple(identity), evidence_seq=pause_evidence_seq)
+        await service.call("record_autoplay_activation", game.colony_id, game.load_epoch, startup_tick(pause_state), choices,
                            command_binding_check=lambda: event_binding() == tuple(identity))
         scheduler.start()
         scheduler.resume(game)

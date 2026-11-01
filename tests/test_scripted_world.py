@@ -368,7 +368,7 @@ async def test_set_paused_is_not_a_changeset_and_leaves_no_ledger_entry():
     assert events[-1]["kind"] == "pause_changed"
     assert events[-1]["data"] == {"cursor": 3, "kind": "pause_changed", "paused": True,
                                   "speed_paused": True, "force_paused": False,
-                                  "windows_force_paused": False, "source": "planner"}
+                                  "windows_force_paused": False, "source": "planner", "pause_state": world.pause_state()}
 
 
 @pytest.mark.asyncio
@@ -419,7 +419,8 @@ async def test_event_subscription_scope_and_reload():
     assert not world.paused
     first = await world.events()
     assert [event["kind"] for event in first] == ["session_snapshot", "policy_changed"]
-    assert first[0]["data"] == {"cursor": 1, "kind": "session_snapshot", "origin": "new_game", "start_tick": 0}
+    assert first[0]["data"] == {"cursor": 1, "kind": "session_snapshot", "origin": "new_game", "start_tick": 0,
+                                 "pause_state": world.pause_state()}
     assert first[0]["game_tick"] == 20
     old_epoch = first[0]["load_epoch"]
     saved = world.save()
@@ -432,5 +433,6 @@ async def test_event_subscription_scope_and_reload():
     second = await world.events()
     assert [event["cursor"] for event in second] == [1, 2]
     assert all(event["load_epoch"] == world.load_epoch != old_epoch for event in second)
-    assert second[0]["data"] == {"cursor": 1, "kind": "session_snapshot", "origin": "loaded_game", "start_tick": 20}
+    assert second[0]["data"] == {"cursor": 1, "kind": "session_snapshot", "origin": "loaded_game", "start_tick": 20,
+                                  "pause_state": world.pause_state()}
     assert second[0]["game_tick"] == 25

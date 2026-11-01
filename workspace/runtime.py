@@ -79,9 +79,9 @@ class FrontdeskService:
             guarded = {"observe_epoch", "submit", "set_wake_policy", "register_wake", "cancel_wake",
                        "evaluate_wake", "set_context_policy", "record_autoplay_activation",
                        "record_utterance", "record_frontdesk_wake", "record_takeover", "record_return",
-                       "ingest_game_event", "attention_state", "attention_declare", "attention_revoke"}
+                       "ingest_game_event", "attention_state", "attention_declare", "attention_revoke", "pause_watchdog_wake", "pause_watchdog_notify"}
             event_kind = (args[4] if len(args) > 4 else kwargs.get("kind")) if method == "record" else None
-            if (method in guarded or event_kind in {"planner.wake", "frontdesk.wake", "planner.received"}
+            if (method in guarded or event_kind in {"planner.wake", "frontdesk.wake", "planner.received", "autoplay.startup_pause"}
                     or (event_kind == "planner.started" and command_binding_check is not None)):
                 colony = args[0] if args else kwargs.get("colony_id")
                 epoch = args[1] if len(args) > 1 else kwargs.get("load_epoch")
@@ -91,7 +91,7 @@ class FrontdeskService:
                 if not binding_is_current(command_binding_check):
                     raise ToolExecutionError("world_changed", "The active colony connection changed before the command executed", recoverable=False)
                 load = self.journal.latest_event(colony, "colony.load")
-                if method not in {"observe_epoch", "ingest_game_event", "attention_state", "attention_declare", "attention_revoke"} and load and load["load_epoch"] != epoch:
+                if method not in {"observe_epoch", "ingest_game_event", "attention_state", "attention_declare", "attention_revoke", "pause_watchdog_wake", "pause_watchdog_notify"} and load and load["load_epoch"] != epoch:
                     raise ToolExecutionError("world_changed", "The recorded colony load changed before the command executed", recoverable=False)
             return getattr(self.journal, method)(*args, **kwargs)
         try:
@@ -271,8 +271,8 @@ class FrontdeskService:
                             if set(args) != {"text"} or not isinstance(text, str) or not text.strip():
                                 raise ToolExecutionError("invalid_tool_arguments", "A nonempty message is required.")
                             return {"wake_seq": await wake_planner(text)}
-                        session.capabilities += (ToolSpec("message_planner", "Send a message and wake the planner. Use for material new information, urgent risks, "
-                            "user intents or decisions requiring coordination; routine confirmations without such new information need no wake.",
+                        session.capabilities += (ToolSpec("message_planner", "Send the planner the user's intent, constraint or decision, or an urgent risk. "
+                            "Routine status or general information does not require a wake.",
                             {"type": "object", "properties": {"text": {"type": "string", "minLength": 1}},
                              "required": ["text"], "additionalProperties": False}, message_planner),)
                     session.capabilities += (ToolSpec("update_only", "End without a user reply after any needed board updates; "

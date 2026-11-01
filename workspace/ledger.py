@@ -225,13 +225,14 @@ class EventLedger:
         kinds = ("autoplay.activation", "autoplay.disabled", LOAD_EVENT, "attention.signal",
                  "cadence.lease_declared", "cadence.lease_expired", "cadence.changed",
                  "cadence.review_due", "task.closed", "attention.revoked", "planner.started",
-                 "planner.finished", "planner.received")
+                 "planner.finished", "planner.received", "pause.watchdog")
         marks = ",".join("?" for _ in kinds)
         rows = self.db.execute(
             "SELECT seq,colony_id,load_epoch,game_tick,wall_time,source,kind, "
-            "CASE WHEN kind='planner.finished' THEN json_object('completed', "
+            "CASE WHEN kind='planner.finished' THEN json_object('start_seq', json_extract(payload,'$.start_seq'), 'completed', "
             "json(CASE WHEN json_extract(payload,'$.result.terminal.kind')='yield' THEN 'true' ELSE 'false' END)) "
             "WHEN kind='planner.started' THEN json_object("
+            "'wake_seqs',json(COALESCE(json_extract(payload,'$.wake_seqs'),'[]')), "
             "'work_ids',json(COALESCE(json_extract(payload,'$.work_ids'),'[]')), "
             "'signal_seqs',json(COALESCE(json_extract(payload,'$.signal_seqs'),'[]'))) "
             "ELSE payload END AS payload FROM events WHERE colony_id=? AND kind IN (" + marks + ") ORDER BY seq",

@@ -315,11 +315,28 @@ async def test_panel_enable_records_activation_and_starts_one_scheduler(monkeypa
             return 1
     work = plugin._workspace_service = Journal()
     required = {"colony_write.transactions.v1", "colony_write.ledger_snapshot.v1", "colony_events.v1", "colony_pause.v1", "colony_pause.policy.v1"}
+    class Port:
+        capabilities = required
+        paused = False
+        async def set_paused(self, paused, *, role):
+            self.paused = paused
+            return {"paused": paused, "role": role}
+    port = Port()
+    async def idle_query(operation, arguments):
+        state = {"status": "observed", "connection_epoch": "connection", "colony_id": "colony", "load_epoch": "epoch",
+                 "sampled_tick": 10, "owner": "planner" if port.paused else "unknown", "pause_revision": int(port.paused),
+                 "pause_transition_revision": int(port.paused), "paused": port.paused, "speed_paused": port.paused,
+                 "force_paused": False, "windows_force_paused": False}
+        return {"response": {"connection_epoch": "connection", "colony_id": "colony", "load_epoch": "epoch",
+                             "payload": {"data": {"clock": {"pause_state": state}}}}}
     async def setup():
-        return SimpleNamespace(write_port=SimpleNamespace(capabilities=required), write_identity=lambda: ("connection", "colony", "epoch"), write_catalog={}, ledger_query=object(), write_fields_query=object())
+        return SimpleNamespace(write_port=port, write_identity=lambda: ("connection", "colony", "epoch"), write_catalog={}, ledger_query=object(), write_fields_query=object(), idle_query=idle_query)
     plugin._load_agent_tools = setup
     class Scheduler:
-        def __init__(self, *args, **kwargs): self.resumed = None
+        def __init__(self, *args, **kwargs):
+            self.resumed = None
+            self.pause_state = None
+        def observe_pause_state(self, state, binding, *, evidence_seq=None): self.pause_state = state
         def start(self): pass
         def resume(self, value): self.resumed = value
         async def close(self): pass
@@ -329,10 +346,10 @@ async def test_panel_enable_records_activation_and_starts_one_scheduler(monkeypa
         goal="Keep the colony peaceful", constraints="No cannibalism or live organ harvesting.",
         goal_edited=True, constraints_edited=False)
     assert result.is_ok()
-    assert work.calls == [("observe_epoch", "colony", "epoch", 10),
-                          ("record_autoplay_activation", "colony", "epoch", 10,
+    assert [call[0] for call in work.calls] == ["observe_epoch", "record", "record", "record_autoplay_activation"]
+    assert work.calls[-1] == ("record_autoplay_activation", "colony", "epoch", 10,
         {"goal": "Keep the colony peaceful", "constraints": "No cannibalism or live organ harvesting.",
-         "goal_edited": True, "constraints_edited": False})]
+         "goal_edited": True, "constraints_edited": False})
     assert plugin._colony_scheduler.resumed is game
     await plugin._stop_autoplay()
 

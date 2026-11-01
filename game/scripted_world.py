@@ -54,7 +54,9 @@ class ScriptedGameWorld:
         self._tick = 0
         self._serial = 0
         self._paused = False
-        self._pause_owner = "none"
+        self._pause_owner = "unknown"
+        self._pause_revision = 1
+        self._pause_transition_revision = 0
         self._values: dict[Address, Any] = {}
         self._origin: dict[Address, tuple[str, int]] = {}
         self._ledger: dict[Address, dict[str, Any]] = {}
@@ -117,6 +119,8 @@ class ScriptedGameWorld:
         self._origin = state["origin"]
         self._ledger = state["ledger"]
         self._epoch += 1
+        self._pause_owner = "unknown"
+        self._pause_revision += 1
         self._receipts.clear()
         self._event_active = False
         self._events.clear()
@@ -227,7 +231,8 @@ class ScriptedGameWorld:
                       SessionDescriptor("1" * 32, "2" * 32, 0, 0), "3" * 32)
         if not self._event_active:
             self._event_active = True
-            self._emit("session_snapshot", {"origin": self._session_origin, "start_tick": self._session_start_tick})
+            self._emit("session_snapshot", {"origin": self._session_origin, "start_tick": self._session_start_tick,
+                                            "pause_state": self.pause_state()})
         self._emit("policy_changed", dict(policy))
         return copy.deepcopy(dict(policy))
 
@@ -239,13 +244,48 @@ class ScriptedGameWorld:
                 raise ToolExecutionError("invalid_argument", "Invalid expected pause owner.")
             if not self._paused or self._pause_owner != expected_owner:
                 raise ToolExecutionError("pause_owner_changed", "The expected agent pause is no longer current.")
+        if not paused and self._paused and self._pause_owner in {"user", "unknown"}:
+            raise ToolExecutionError("pause_owned", "A user or unknown pause cannot be released by an agent.")
+        self._change_pause(paused, role)
+        return {"paused": paused, "role": role, **({"expected_owner": expected_owner} if expected_owner is not None else {})}
+
+    def pause_state(self):
+        return {"status": "observed", "connection_epoch": "scripted", "colony_id": "scripted",
+                "load_epoch": self.load_epoch, "sampled_tick": self._tick, "owner": self._pause_owner,
+                "pause_revision": self._pause_revision, "pause_transition_revision": self._pause_transition_revision,
+                "paused": self._paused, "speed_paused": self._paused, "force_paused": False,
+                "windows_force_paused": False}
+
+    async def idle_query(self, operation, arguments):
+        if operation != "read_situation" or arguments:
+            raise ValueError("Only the native situation snapshot is supported")
+        sample = {"colony_id": "scripted", "load_epoch": self.load_epoch, "map_id": "scripted-map",
+                  "started_tick": self._tick, "finished_tick": self._tick, "snapshot_sequence": 0, "atomic": False}
+        sections = {name: {"status": "ok", "source": "scripted", "rows": [],
+                           "sample_tick": self._tick, "finished_tick": self._tick}
+                    for name in ("alerts", "conditions", "threats")}
+        attention = {"kind": "attention_snapshot", "sample_tick": self._tick, "map_id": "scripted-map",
+                     "sample": sample, **sections}
+        return {"response": {"connection_epoch": "scripted", "colony_id": "scripted", "load_epoch": self.load_epoch,
+                             "game_tick": self._tick, "snapshot_sequence": 0,
+                             "payload": {"data": {"clock": {"pause_state": self.pause_state()},
+                                                  "sample": sample, "attention_snapshot": attention}}}}
+
+    def player_set_paused(self, paused):
+        if type(paused) is not bool:
+            raise ValueError("Pause state must be boolean")
+        self._change_pause(paused, "user")
+
+    def _change_pause(self, paused, source):
         changed = self._paused != paused
         self._paused = paused
         if changed:
-            self._pause_owner = role if paused else "none"
-            self._emit("pause_changed", {"paused": paused, "speed_paused": paused,
-                                         "force_paused": False, "windows_force_paused": False, "source": role})
-        return {"paused": paused, "role": role, **({"expected_owner": expected_owner} if expected_owner is not None else {})}
+            self._pause_owner = source if paused else "none"
+            self._pause_revision += 1
+            self._pause_transition_revision += 1
+            self._emit("pause_changed", {"paused": paused, "speed_paused": paused, "force_paused": False,
+                                         "windows_force_paused": False, "source": source,
+                                         "pause_state": self.pause_state()})
 
     def _run_hooks(self, point: str) -> None:
         actions, self._hooks[point] = self._hooks[point], []

@@ -309,7 +309,7 @@ def project(events, *, epoch, now_tick, policy):
         elif kind == "planner.started":
             running = True
             active_work_ids = list(data.get("work_ids", []))
-            active_signal_seqs = list(data.get("signal_seqs", []))
+            active_signal_seqs = [seq for seq in data.get("signal_seqs", []) if seq in pending_signals]
             consumed.update(data.get("work_ids", []))
             pending_daily[:] = [item for item in pending_daily if item not in consumed]
             if pending_focus in consumed:
@@ -321,7 +321,7 @@ def project(events, *, epoch, now_tick, policy):
             deferred_signals[:] = [signal for signal in deferred_signals if signal not in received]
         elif kind == "planner.received":
             active_work_ids.extend(data.get("work_ids", []))
-            active_signal_seqs.extend(data.get("signal_seqs", []))
+            active_signal_seqs.extend(seq for seq in data.get("signal_seqs", []) if seq in pending_signals)
             received = set(data.get("signal_seqs", []))
             pending_signals[:] = [signal for signal in pending_signals if signal not in received]
             deferred_signals[:] = [signal for signal in deferred_signals if signal not in received]

@@ -437,7 +437,7 @@ async def test_agents_send_each_other_source_bound_messages(tmp_path):
             names = {t["function"]["name"] for t in tools}
             if "planner_yield" in names:
                 self.planner += 1
-                return call("message_frontdesk", {"text": "planner asks"}) if self.planner == 1 else call("planner_yield", {"handoff": "done"})
+                return call("message_frontdesk", {"text": "planner asks", "purpose": "user_decision"}) if self.planner == 1 else call("planner_yield", {"handoff": "done"})
             self.frontdesk += 1
             return call("message_planner", {"text": "frontdesk reports"}) if self.frontdesk == 1 else call("update_only", {})
     model = Model()

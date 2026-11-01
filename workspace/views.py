@@ -1,5 +1,6 @@
 """Read-only, paginated projections of the append-only colony event log."""
 
+import copy
 import hashlib
 import json
 import sqlite3
@@ -155,6 +156,56 @@ class WorkspaceViews:
                           "created_at": datetime.fromtimestamp(row["wall_time"], timezone.utc).isoformat(),
                           "wall_time": row["wall_time"], "game_tick": row["game_tick"], "load_epoch": row["load_epoch"]})
         return {"workspace": _workspace(colony), "workspace_id": colony, "turns": items, **_page(total, offset, limit)}
+
+
+def planner_run_input(*, run_type, board, activation, attention, signals, wake_reasons, history,
+                      intent_utterances, intent_source_history, takeovers, handoff, commit_records, daily_history):
+    """Build the planner's run-specific data and report exactly which signals it contains.
+
+    The caller binds events to the current colony, epoch and completed-run boundary.
+    commit_records are verified native commit records, not board revision timestamps.
+    """
+    if run_type not in {"startup", "daily", "signal", "escalated"}:
+        raise ValueError("Unknown planner run type")
+
+    signals = list(signals)
+    open_intents = [entry for entry in board if entry["kind"] == "intent" and entry["status"] != "closed"]
+    strategies = [entry for entry in board if entry["kind"] == "strategy" and entry["status"] != "closed"]
+    open_tasks = [entry for entry in board if entry["kind"] == "task" and entry["status"] != "closed"]
+    commits = {}
+    for record in commit_records:
+        commits[(record["entry_id"], record["changeset_id"])] = record["game_tick"]
+    pending_verification = []
+    for entry in board:
+        if entry["kind"] != "task" or entry["status"] != "committed":
+            continue
+        changesets = [{"changeset_id": change, "commit_tick": commits.get((entry["entry_id"], change))}
+                      for change in entry["changesets"]]
+        pending_verification.append({"entry_id": entry["entry_id"], "changesets": changesets})
+
+    # Only facts that can affect a later decision are summarized; the caller
+    # chooses the journal sequence range and retains the source events.
+    summary_kinds = {"attention.signal", "cadence.changed", "colony.load", "user.takeover",
+                     "user.return", "board.revision"}
+    changes = [{"seq": event["seq"], "kind": event["kind"], "game_tick": event["game_tick"],
+                "payload": event["payload"]} for event in history if event["kind"] in summary_kinds]
+    context = {"run_type": run_type, "activation_choices": activation, "strategy": strategies, "tasks": open_tasks,
+               "intents": open_intents, "intent_utterances": intent_utterances,
+               "intent_source_history": intent_source_history, "takeovers": takeovers,
+               "handoff": handoff, "wake_reasons": wake_reasons,
+               "attention": attention, "attention_signals": signals,
+               "pending_verification": pending_verification, "changes_since_last_run": changes}
+    if run_type in {"startup", "daily"}:
+        context["board"] = board
+    if run_type == "daily":
+        context["cadence_history"] = [event for event in daily_history if event["kind"] == "cadence.changed"]
+        context["daily_signals"] = [event for event in daily_history if event["kind"] == "attention.signal"]
+    # Only explicit attention event collections carry consumption identities.
+    included = [*signals, *(event for event in changes if event["kind"] == "attention.signal")]
+    if run_type == "daily":
+        included.extend(context["daily_signals"])
+    signal_seqs = list(dict.fromkeys(event["seq"] for event in included))
+    return copy.deepcopy(context), signal_seqs
 
 
 def _run_fields(db, colony, seq):

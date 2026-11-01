@@ -405,9 +405,11 @@ class Journal:
             raise ValueError("A user utterance requires text")
         return self._ledger.append(colony_id, load_epoch, game_tick, USER, UTTERANCE_EVENT, {"text": text, "request_id": request_id})
 
-    def record_frontdesk_wake(self, colony_id, load_epoch, game_tick, source, text, *, request_id=None):
+    def record_frontdesk_wake(self, colony_id, load_epoch, game_tick, source, text, *, request_id=None, purpose=None):
         if source not in {"user", "game", "agent", "frontdesk", "planner", "plugin"}:
             raise ValueError("Unknown wake source")
+        if purpose is not None and (source != "planner" or purpose not in {"user_decision", "urgent_risk"}):
+            raise ValueError("Invalid frontdesk message purpose")
         if not isinstance(text, str) or not text.strip():
             raise ValueError("Wake reason requires text")
         if source != "user" and request_id is not None:
@@ -430,7 +432,8 @@ class Journal:
             else:
                 anchor = self._ledger.append(colony_id, load_epoch, game_tick,
                                              "mod" if source == "game" else "plugin" if source == "agent" else source,
-                                             "frontdesk.trigger", {"source": source, "text": text})
+                                             "frontdesk.trigger", {"source": source, "text": text,
+                                                                   **({"purpose": purpose} if purpose else {})})
                 key = "trigger_seq"
             return self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "frontdesk.wake",
                                        {"source": source, key: anchor})
@@ -483,9 +486,11 @@ class Journal:
             kind = event.get("kind")
             data = event.get("data", {})
             policy = self.wake_policy(colony_id)
-            if epoch_changed or (kind == "pause_changed" and policy["frontdesk_paused_windows"]
+            lifecycle = self._ledger.events_by_kind(colony_id, ("autoplay.activation", "autoplay.disabled"))
+            autoplay = bool(lifecycle and lifecycle[-1]["kind"] == "autoplay.activation")
+            if (epoch_changed and not autoplay) or (kind == "pause_changed" and policy["frontdesk_paused_windows"]
                                  and data.get("source") == "window" and data.get("windows_force_paused") is True) or (kind == "letter" and
-                    (data.get("def") in policy["frontdesk_letter_defs"]
+                    ((not autoplay and data.get("def") in policy["frontdesk_letter_defs"])
                      or (policy["frontdesk_choice_letters"] and data.get("is_choice_letter") is True))):
                 from ..serialization import canonical
                 text = canonical({"event_seq": seq, "event": event})
@@ -533,6 +538,60 @@ class Journal:
             self._append_cadence(colony_id, load_epoch, game_tick)
             return seq
 
+    def _pause_watchdog_matches(self, colony_id, load_epoch, episode):
+        records = self._ledger.events_by_kind(colony_id, ("game.event", "autoplay.startup_pause"), load_epoch=load_epoch)
+        for event in reversed(records):
+            payload = event["payload"]
+            if event["kind"] == "game.event":
+                native = payload.get("event", {})
+                if native.get("kind") not in {"session_snapshot", "pause_changed"}:
+                    continue
+                state = native.get("data", {}).get("pause_state")
+                connection = native.get("connection_epoch")
+            else:
+                if payload.get("stage") != "result":
+                    continue
+                state = payload.get("pause_state")
+                connection = state.get("connection_epoch") if isinstance(state, dict) else None
+            if connection != episode[0]:
+                return False
+            if not isinstance(state, dict) or state.get("status") != "observed":
+                return False
+            return ((state.get("connection_epoch"), state.get("colony_id"), state.get("load_epoch"),
+                     state.get("pause_revision"), state.get("pause_transition_revision")) == tuple(episode)
+                    and state.get("paused") is True and state.get("speed_paused") is True
+                    and state.get("force_paused") is False and state.get("windows_force_paused") is False
+                    and state.get("owner") in {"planner", "frontdesk", "reflex", "automatic_letter"})
+        return False
+
+    def pause_watchdog_history(self, colony_id, load_epoch):
+        return [event for event in self._ledger.cadence_events(colony_id)
+                if event["load_epoch"] == load_epoch and event["kind"] in
+                {"pause.watchdog", "planner.started", "planner.finished"}]
+
+    def pause_watchdog_wake(self, colony_id, load_epoch, game_tick, episode, count):
+        with self._ledger.transaction():
+            if not self._pause_watchdog_matches(colony_id, load_epoch, episode):
+                return None
+            wake = self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "planner.wake",
+                                       {"source": "plugin", "text": "Pause remains; review whether it should continue.",
+                                        "pause_watchdog": True})
+            self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "pause.watchdog",
+                                {"episode": list(episode), "action": "wake", "count": count, "wake_seq": wake})
+            return wake
+
+    def pause_watchdog_notify(self, colony_id, load_epoch, game_tick, episode):
+        with self._ledger.transaction():
+            if not self._pause_watchdog_matches(colony_id, load_epoch, episode):
+                return False
+            previous = self._ledger.events_by_kind(colony_id, ("pause.watchdog",), load_epoch=load_epoch)
+            if any(event["payload"].get("episode") == list(episode) and event["payload"].get("action") in {"notify_attempt", "notify"}
+                   for event in previous):
+                return False
+            self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "pause.watchdog",
+                                {"episode": list(episode), "action": "notify_attempt"})
+            return True
+
     def attention_revoke(self, colony_id, load_epoch, game_tick, reference, user_sources):
         with self._ledger.transaction():
             if reference not in user_sources:
@@ -549,6 +608,9 @@ class Journal:
                     revoked.append(lease["reference"])
             self._append_cadence(colony_id, load_epoch, game_tick)
             return revoked
+
+    def game_event_at_cursor(self, colony_id, load_epoch, connection, cursor):
+        return self._ledger.game_event_at_cursor(colony_id, load_epoch, connection, cursor)
 
     def game_event_gap(self, colony_id, load_epoch, connection):
         return any(e["load_epoch"] == load_epoch and e["payload"].get("connection") == connection

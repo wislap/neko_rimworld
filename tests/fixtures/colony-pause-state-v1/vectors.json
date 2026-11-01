@@ -1,0 +1,9 @@
+{
+  "observed": {
+    "status": "observed",
+    "connection_epoch": "connection", "colony_id": "colony", "load_epoch": "epoch",
+    "sampled_tick": 100, "owner": "planner", "pause_revision": 2, "pause_transition_revision": 1,
+    "paused": true, "speed_paused": true, "force_paused": false, "windows_force_paused": false
+  },
+  "unavailable": {"status": "unavailable"}
+}
