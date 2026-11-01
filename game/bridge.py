@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from .protocol import (
+    ATTENTION_CAPABILITY,
+    ATTENTION_KINDS,
     AUTHENTICATE,
     GAME_EVENT,
     HEARTBEAT,
@@ -48,6 +50,7 @@ from .protocol import (
     make_query_request,
     make_welcome,
     read_frame,
+    validate_attention_event,
     validate_auth_phase,
     validate_pairing_token,
     verify_proof,
@@ -240,6 +243,12 @@ class BridgeServer:
         """Capabilities advertised by the current authenticated connection."""
         with self._connection_lock:
             return self._capabilities if self._ready_epoch is not None else frozenset()
+
+    @property
+    def attention_available(self) -> bool:
+        """Whether the active connection advertises native attention facts."""
+        capabilities = self.capabilities
+        return ATTENTION_CAPABILITY in capabilities and "colony_events.v1" in capabilities
 
     @property
     def state_store(self) -> BridgeStateStore:
@@ -841,6 +850,8 @@ class BridgeServer:
                 raise BridgeProtocolError("Game event did not match the active session.")
             data = envelope.payload.data
             assert data is not None
+            if ATTENTION_CAPABILITY in self._capabilities and data["kind"] in ATTENTION_KINDS:
+                validate_attention_event(data)
             cursor = data["cursor"]
             if cursor <= self._event_cursor:
                 raise BridgeProtocolError("Game event cursor repeated or regressed.")

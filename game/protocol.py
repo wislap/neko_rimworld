@@ -885,6 +885,61 @@ def _coerce_direction(direction: Direction | str) -> Direction:
         raise ValueError("direction must be mod_to_plugin or plugin_to_mod") from exc
 
 
+
+ATTENTION_CAPABILITY: Final = "colony_attention.v1"
+ATTENTION_KINDS: Final = frozenset({"attention_snapshot", "attention_changed"})
+_ATTENTION_CATEGORIES: Final = frozenset({"alerts", "conditions", "threats"})
+_ATTENTION_EDGES: Final = frozenset({"appeared", "disappeared", "priority_changed", "targets_changed", "status_changed"})
+
+
+def validate_attention_event(data: Mapping[str, Any]) -> None:
+    """Validate negotiated native attention facts without interpreting their policy."""
+    def invalid() -> None:
+        raise ValidationError(INVALID_PAYLOAD, "Invalid colony attention event.")
+
+    def partition(value: Any) -> None:
+        if (not isinstance(value, dict) or value.get("status") not in ("ok", "partial", "unavailable")
+                or not isinstance(value.get("source"), str) or not isinstance(value.get("rows"), list)):
+            invalid()
+        if any(not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"]
+               for row in value["rows"]):
+            invalid()
+
+    kind = data.get("kind")
+    if (kind not in ATTENTION_KINDS or type(data.get("sample_tick")) is not int or data["sample_tick"] < 0
+            or (data.get("map_id") is not None and not isinstance(data["map_id"], str))):
+        invalid()
+    if kind == "attention_snapshot":
+        for category in _ATTENTION_CATEGORIES:
+            partition(data.get(category))
+        return
+    category, edge = data.get("category"), data.get("edge")
+    if (not isinstance(category, str) or category not in _ATTENTION_CATEGORIES
+            or not isinstance(edge, str) or edge not in _ATTENTION_EDGES
+            or not isinstance(data.get("source_id"), str) or not data["source_id"]
+            or "previous" not in data or "current" not in data):
+        invalid()
+    previous, current = data["previous"], data["current"]
+    if edge == "status_changed":
+        partition(previous)
+        partition(current)
+    else:
+        if ((previous is not None and not isinstance(previous, dict))
+                or (current is not None and not isinstance(current, dict))
+                or (edge == "appeared" and (previous is not None or current is None))
+                or (edge == "disappeared" and (previous is None or current is not None))
+                or (edge in {"priority_changed", "targets_changed"} and
+                    (category != "alerts" or previous is None or current is None))):
+            invalid()
+        for row in (previous, current):
+            if row is not None and row.get("id") != data["source_id"]:
+                invalid()
+    if edge == "targets_changed" and any(
+        not isinstance(data.get(key), list) or any(not isinstance(target, dict) for target in data[key])
+        for key in ("added", "removed")
+    ):
+        invalid()
+
 def _require_object(value: Any, scope: str) -> Mapping[str, Any]:
     if not isinstance(value, dict):
         code = INVALID_ENVELOPE if scope == "Envelope root" else INVALID_PAYLOAD
