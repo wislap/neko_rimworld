@@ -1,0 +1,391 @@
+{
+  "valid": [
+    {
+      "v": 2,
+      "type": "game_event",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "",
+      "game_tick": 250,
+      "snapshot_sequence": 1,
+      "payload": {
+        "data": {
+          "cursor": 1,
+          "kind": "attention_snapshot",
+          "sample_tick": 250,
+          "map_id": "Map_1",
+          "alerts": {
+            "status": "ok",
+            "source": "native",
+            "rows": [
+              {
+                "id": "alert-observation:1",
+                "runtime_type": "RimWorld.Alert_ColonistNeedsRescuing",
+                "label": "Needs rescue",
+                "priority": "Critical",
+                "native_computed_tick": 240,
+                "targets_complete": true,
+                "targets": [
+                  {
+                    "id": "Thing_1",
+                    "kind": "thing",
+                    "map_id": "Map_1",
+                    "x": null,
+                    "z": null,
+                    "tile": null
+                  }
+                ]
+              }
+            ]
+          },
+          "conditions": {
+            "status": "ok",
+            "source": "native",
+            "rows": [
+              {
+                "id": "GameCondition_1",
+                "def": "ColdSnap",
+                "scope": "map",
+                "map_id": "Map_1",
+                "duration_ticks": 60000
+              }
+            ]
+          },
+          "threats": {
+            "status": "ok",
+            "source": "native",
+            "rows": [
+              {
+                "id": "Lord_1",
+                "kind": "hostile_group",
+                "faction_id": "Faction_1",
+                "visible_hostile_count": 3
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "v": 2,
+      "type": "game_event",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "",
+      "game_tick": 250,
+      "snapshot_sequence": 1,
+      "payload": {
+        "data": {
+          "cursor": 2,
+          "kind": "attention_changed",
+          "sample_tick": 500,
+          "map_id": "Map_1",
+          "category": "alerts",
+          "source_id": "alert-observation:1",
+          "edge": "appeared",
+          "previous": null,
+          "current": {
+            "id": "alert-observation:1",
+            "runtime_type": "RimWorld.Alert_ColonistNeedsRescuing",
+            "label": "Needs rescue",
+            "priority": "Critical",
+            "native_computed_tick": 240,
+            "targets_complete": true,
+            "targets": [
+              {
+                "id": "Thing_1",
+                "kind": "thing",
+                "map_id": "Map_1",
+                "x": null,
+                "z": null,
+                "tile": null
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "v": 2,
+      "type": "game_event",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "",
+      "game_tick": 250,
+      "snapshot_sequence": 1,
+      "payload": {
+        "data": {
+          "cursor": 3,
+          "kind": "attention_changed",
+          "sample_tick": 500,
+          "map_id": "Map_1",
+          "category": "alerts",
+          "source_id": "alert-observation:1",
+          "edge": "disappeared",
+          "previous": {
+            "id": "alert-observation:1",
+            "runtime_type": "RimWorld.Alert_ColonistNeedsRescuing",
+            "label": "Needs rescue",
+            "priority": "Critical",
+            "native_computed_tick": 240,
+            "targets_complete": true,
+            "targets": [
+              {
+                "id": "Thing_1",
+                "kind": "thing",
+                "map_id": "Map_1",
+                "x": null,
+                "z": null,
+                "tile": null
+              }
+            ]
+          },
+          "current": null
+        }
+      }
+    },
+    {
+      "v": 2,
+      "type": "game_event",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "",
+      "game_tick": 250,
+      "snapshot_sequence": 1,
+      "payload": {
+        "data": {
+          "cursor": 4,
+          "kind": "attention_changed",
+          "sample_tick": 500,
+          "map_id": "Map_1",
+          "category": "conditions",
+          "source_id": "GameCondition_1",
+          "edge": "appeared",
+          "previous": null,
+          "current": {
+            "id": "GameCondition_1",
+            "def": "ColdSnap",
+            "scope": "map",
+            "map_id": "Map_1",
+            "duration_ticks": 60000
+          }
+        }
+      }
+    },
+    {
+      "v": 2,
+      "type": "game_event",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "",
+      "game_tick": 250,
+      "snapshot_sequence": 1,
+      "payload": {
+        "data": {
+          "cursor": 5,
+          "kind": "attention_changed",
+          "sample_tick": 500,
+          "map_id": "Map_1",
+          "category": "conditions",
+          "source_id": "GameCondition_1",
+          "edge": "disappeared",
+          "previous": {
+            "id": "GameCondition_1",
+            "def": "ColdSnap",
+            "scope": "map",
+            "map_id": "Map_1",
+            "duration_ticks": 60000
+          },
+          "current": null
+        }
+      }
+    },
+    {
+      "v": 2,
+      "type": "game_event",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "",
+      "game_tick": 250,
+      "snapshot_sequence": 1,
+      "payload": {
+        "data": {
+          "cursor": 6,
+          "kind": "attention_changed",
+          "sample_tick": 500,
+          "map_id": "Map_1",
+          "category": "threats",
+          "source_id": "Lord_1",
+          "edge": "appeared",
+          "previous": null,
+          "current": {
+            "id": "Lord_1",
+            "kind": "hostile_group",
+            "faction_id": "Faction_1",
+            "visible_hostile_count": 3
+          }
+        }
+      }
+    },
+    {
+      "v": 2,
+      "type": "game_event",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "",
+      "game_tick": 250,
+      "snapshot_sequence": 1,
+      "payload": {
+        "data": {
+          "cursor": 7,
+          "kind": "attention_changed",
+          "sample_tick": 500,
+          "map_id": "Map_1",
+          "category": "threats",
+          "source_id": "Lord_1",
+          "edge": "disappeared",
+          "previous": {
+            "id": "Lord_1",
+            "kind": "hostile_group",
+            "faction_id": "Faction_1",
+            "visible_hostile_count": 3
+          },
+          "current": null
+        }
+      }
+    },
+    {
+      "v": 2,
+      "type": "game_event",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "",
+      "game_tick": 250,
+      "snapshot_sequence": 1,
+      "payload": {
+        "data": {
+          "cursor": 8,
+          "kind": "attention_changed",
+          "sample_tick": 500,
+          "map_id": "Map_1",
+          "category": "alerts",
+          "source_id": "alert-observation:1",
+          "edge": "priority_changed",
+          "previous": {
+            "id": "alert-observation:1",
+            "runtime_type": "RimWorld.Alert_ColonistNeedsRescuing",
+            "label": "Needs rescue",
+            "priority": "High",
+            "native_computed_tick": 240,
+            "targets_complete": true,
+            "targets": [
+              {
+                "id": "Thing_1",
+                "kind": "thing",
+                "map_id": "Map_1",
+                "x": null,
+                "z": null,
+                "tile": null
+              }
+            ]
+          },
+          "current": {
+            "id": "alert-observation:1",
+            "runtime_type": "RimWorld.Alert_ColonistNeedsRescuing",
+            "label": "Needs rescue",
+            "priority": "Critical",
+            "native_computed_tick": 240,
+            "targets_complete": true,
+            "targets": [
+              {
+                "id": "Thing_1",
+                "kind": "thing",
+                "map_id": "Map_1",
+                "x": null,
+                "z": null,
+                "tile": null
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "v": 2,
+      "type": "game_event",
+      "connection_epoch": "33333333333333333333333333333333",
+      "colony_id": "11111111111111111111111111111111",
+      "load_epoch": "22222222222222222222222222222222",
+      "seq": 1,
+      "request_id": "",
+      "game_tick": 250,
+      "snapshot_sequence": 1,
+      "payload": {
+        "data": {
+          "cursor": 9,
+          "kind": "attention_changed",
+          "sample_tick": 500,
+          "map_id": "Map_1",
+          "category": "alerts",
+          "source_id": "alert-observation:1",
+          "edge": "targets_changed",
+          "previous": {
+            "id": "alert-observation:1",
+            "runtime_type": "RimWorld.Alert_ColonistNeedsRescuing",
+            "label": "Needs rescue",
+            "priority": "Critical",
+            "native_computed_tick": 240,
+            "targets_complete": true,
+            "targets": []
+          },
+          "current": {
+            "id": "alert-observation:1",
+            "runtime_type": "RimWorld.Alert_ColonistNeedsRescuing",
+            "label": "Needs rescue",
+            "priority": "Critical",
+            "native_computed_tick": 240,
+            "targets_complete": true,
+            "targets": [
+              {
+                "id": "Thing_1",
+                "kind": "thing",
+                "map_id": "Map_1",
+                "x": null,
+                "z": null,
+                "tile": null
+              }
+            ]
+          },
+          "added": [
+            {
+              "id": "Thing_1",
+              "kind": "thing",
+              "map_id": "Map_1",
+              "x": null,
+              "z": null,
+              "tile": null
+            }
+          ],
+          "removed": []
+        }
+      }
+    }
+  ],
+  "invalid": []
+}

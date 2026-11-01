@@ -1,0 +1,43 @@
+{
+  "version": "attention_policy.v1",
+  "native_source": "RimWorld 1.6.4871 Assembly-CSharp.dll 5cf1b5be399d5b1c9c56ca72c9d35b4ecf307feacf5859d04ac5a1aa5926356a",
+  "acute_high_alerts": {
+    "RimWorld.Alert_ColonistNeedsTend": "GetReport; defaultPriority High",
+    "RimWorld.Alert_StarvationColonists": "GetReport checks food.Starving; defaultPriority High",
+    "RimWorld.Alert_Heatstroke": "GetReport checks visible heatstroke; defaultPriority High",
+    "RimWorld.Alert_ToxicBuildup": "GetReport: free colonist ToxicBuildup severity >= 0.6; High; Biotech",
+    "RimWorld.Alert_Exhaustion": "GetReport: free colonist RestCategory.Exhausted; High"
+  },
+  "interrupt_letters": {
+    "ThreatBig": "Core/Defs/Misc/LetterDefs/StandardLetters.xml",
+    "ThreatSmall": "Core/Defs/Misc/LetterDefs/StandardLetters.xml",
+    "Death": "Core/Defs/Misc/LetterDefs/CustomNotificationLetters.xml"
+  },
+  "focus_letters": {
+    "NegativeEvent": "Core/Defs/Misc/LetterDefs/StandardLetters.xml"
+  },
+  "negative_conditions": {
+    "SolarFlare": "Core/Defs/GameConditionDefs/GameConditions_Misc.xml",
+    "Eclipse": "Core/Defs/GameConditionDefs/GameConditions_Misc.xml",
+    "PsychicDrone": "Core/Defs/GameConditionDefs/GameConditions_Misc.xml",
+    "ToxicFallout": "Core/Defs/GameConditionDefs/GameConditions_Misc.xml",
+    "VolcanicWinter": "Core/Defs/GameConditionDefs/GameConditions_Misc.xml",
+    "HeatWave": "Core/Defs/GameConditionDefs/GameConditions_Misc.xml",
+    "ColdSnap": "Core/Defs/GameConditionDefs/GameConditions_Misc.xml",
+    "Flashstorm": "Core/Defs/GameConditionDefs/GameConditions_Misc.xml",
+    "Planetkiller": "Core/Defs/GameConditionDefs/GameConditions_Misc.xml"
+  },
+  "ticks": {
+    "day": 60000,
+    "focus_review": 15000,
+    "urgent_review": 2500,
+    "cooldown": 2500,
+    "focus_lifetime": 60000,
+    "urgent_lifetime": 15000,
+    "focus_declaration": 15000,
+    "urgent_declaration": 5000,
+    "user_declaration": 60000,
+    "focus_daily_limit": 4,
+    "planner_daily_limit": 2
+  }
+}
