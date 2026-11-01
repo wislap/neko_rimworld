@@ -54,7 +54,7 @@ async def test_scheduler_fresh_runs_and_mid_run_message(tmp_path):
                        if e["kind"] == "planner.progress" and e["payload"].get("stage") == "model_request")
     assert first_input["messages"] == model.requests[0]["messages"]
     assert first_input["tools"] == model.requests[0]["tools"]
-    assert "manage_wakes" in {tool["function"]["name"] for tool in first_input["tools"]}
+    assert "attention" in {tool["function"]["name"] for tool in first_input["tools"]}
     assert "Continue with food." in str(model.requests[2]["messages"])
     assert not any(m.get("role") == "tool" for m in model.requests[2]["messages"])
     await scheduler.close()
@@ -286,7 +286,7 @@ async def test_non_user_trigger_survives_history_and_inbox(tmp_path):
     await scheduler.wake_frontdesk(game, "notice", source="plugin")
     proceed.set()
     await asyncio.wait_for(scheduler.next_frontdesk_result(), 5)
-    assert {"manage_wakes", "return_takeover"} <= {tool["function"]["name"] for tool in model.requests[0]["tools"]}
+    assert {"attention_request", "return_takeover"} <= {tool["function"]["name"] for tool in model.requests[0]["tools"]}
     events = await service.call("events", "colony")
     assert not any(e["kind"] == "user.utterance" for e in events)
     assert any(m.get("name") == "frontdesk_trigger" and "danger" in m["content"] for m in model.requests[0]["messages"])
@@ -309,13 +309,13 @@ def test_native_events_are_atomic_deduplicated_and_source_preserved(tmp_path):
     assert journal.ingest_game_event("c", "e", 42, "conn", letter)
     assert not journal.ingest_game_event("c", "e", 42, "conn", letter)
     events = journal.events("c")
-    assert [e["kind"] for e in events] == ["game.event", "wake.registered", "scheduler.default_review", "frontdesk.trigger", "frontdesk.wake"]
+    assert [e["kind"] for e in events] == ["game.event", "attention.signal", "frontdesk.trigger", "frontdesk.wake"]
     assert recall(events, events[0]["seq"])["event"] == letter
     assert journal.game_event_cursor("c", "e", "conn") == 1
     assert not any(e["kind"] == "user.utterance" for e in events)
     heartbeat = {**letter, "game_tick": 43, "cursor": 2, "kind": "heartbeat", "data": {"cursor": 2, "kind": "heartbeat"}}
     journal.ingest_game_event("c", "e", 43, "conn", heartbeat)
-    assert len(journal.events("c")) == 6
+    assert len(journal.events("c")) == 5
     journal.close()
 
 @pytest.mark.asyncio
@@ -379,7 +379,8 @@ async def test_native_event_pump_persists_sample_and_installs_and_clears_policy(
     await asyncio.wait_for(scheduler.next_frontdesk_result(), 5)
     events = await service.call("events", "colony")
     raw = next(e for e in events if e["kind"] == "game.event")
-    assert raw["game_tick"] == 12 and raw["payload"]["event"] == native
+    assert raw["game_tick"] == 80 and raw["payload"]["event"] == native
+    assert raw["payload"]["event"]["game_tick"] == 12
     assert not any(e["kind"] == "user.utterance" for e in events)
     await service.call("set_wake_policy", "colony", "epoch", 80, "frontdesk", {"pause_on_letter_defs": ["Custom"]})
     for _ in range(150):
@@ -563,9 +564,9 @@ def test_epoch_change_is_distinguished_from_reconnect_snapshot(tmp_path):
                 "data": {"cursor": cursor, "kind": "session_snapshot", "origin": "loaded_game", "start_tick": 8}}
     journal.ingest_game_event("c", "e1", 10, "a", snapshot("a", "e1", 1))
     journal.ingest_game_event("c", "e1", 10, "b", snapshot("b", "e1", 1))
-    assert [e["kind"] for e in journal.events("c")] == ["game.event", "wake.registered", "scheduler.default_review", "game.event"]
+    assert [e["kind"] for e in journal.events("c")] == ["game.event", "game.event"]
     journal.ingest_game_event("c", "e2", 10, "b", snapshot("b", "e2", 2))
-    assert [e["kind"] for e in journal.events("c")][-7:] == ["colony.load", "game.event", "wake.registered", "scheduler.default_review", "frontdesk.trigger", "frontdesk.wake", "planner.wake"]
+    assert [e["kind"] for e in journal.events("c")][-5:] == ["colony.load", "game.event", "frontdesk.trigger", "frontdesk.wake", "planner.wake"]
     journal.close()
 
 

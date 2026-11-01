@@ -3,7 +3,10 @@
 import json
 from contextlib import nullcontext
 
+from .attention_policy import load_policy, normalize_attention_event
 from .board import TASK_TARGET_KINDS, BoardError, check_revision, check_shape
+from .cadence import project as cadence_project
+from .cadence import validate_declaration
 from .ledger import (
     FRONTDESK,
     LOAD_EVENT,
@@ -28,7 +31,6 @@ WAKE_POLICY_DEFAULTS = {
     "frontdesk_letter_defs": ["ThreatBig", "ThreatSmall", "NegativeEvent"],
     "frontdesk_choice_letters": True,
     "frontdesk_paused_windows": True,
-    "planner_review_ticks": 15_000,
 }
 
 
@@ -152,21 +154,22 @@ class Journal:
         policy = {key: value.copy() if isinstance(value, list) else value
                   for key, value in WAKE_POLICY_DEFAULTS.items()}
         for event in self._ledger.events_by_kind(colony_id, ("scheduler.policy",)):
-            policy.update(event["payload"])
+            policy.update({k: v for k, v in event["payload"].items() if k in WAKE_POLICY_DEFAULTS})
         return policy
 
     def wake_policy_authors(self, colony_id):
         authors = {key: {"source": PLUGIN, "event_seq": None} for key in WAKE_POLICY_DEFAULTS}
         for event in self._ledger.events_by_kind(colony_id, ("scheduler.policy",)):
             for key in event["payload"]:
+                if key not in authors:
+                    continue
                 authors[key] = {"source": event["source"], "event_seq": event["seq"]}
         return authors
 
     def set_wake_policy(self, colony_id, load_epoch, game_tick, actor, changes):
         if actor not in {"frontdesk", "planner"} or not isinstance(changes, dict) or not changes:
             raise ValueError("Invalid policy author or changes")
-        allowed = ({"pause_on_letter_defs", "frontdesk_letter_defs", "frontdesk_choice_letters", "frontdesk_paused_windows"}
-                   if actor == "frontdesk" else {"planner_review_ticks"})
+        allowed = {"pause_on_letter_defs"} if actor == "frontdesk" else set()
         if not changes.keys() <= allowed:
             raise ValueError("Policy field is not writable by this role")
         for key, value in changes.items():
@@ -180,19 +183,6 @@ class Journal:
                 raise ValueError("Review interval must be a positive integer")
         with self._ledger.transaction():
             seq = self._ledger.append(colony_id, load_epoch, game_tick, actor, "scheduler.policy", changes)
-            if "planner_review_ticks" in changes:
-                defaults = [e for e in self._ledger.events_by_kind(colony_id, ("scheduler.default_review",))
-                            if e["load_epoch"] == load_epoch]
-                if defaults:
-                    old_id = defaults[-1]["payload"]["id"]
-                    active = {item["id"]: item for item in self.wake_conditions(colony_id, load_epoch)}
-                    if old_id in active:
-                        self.cancel_wake(colony_id, load_epoch, game_tick, "planner", old_id)
-                        new = self.register_wake(colony_id, load_epoch, game_tick, "planner",
-                                                 {"kind": "periodic", "interval_ticks": changes["planner_review_ticks"]},
-                                                 "Periodic colony review")
-                        self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN,
-                                            "scheduler.default_review", {"id": new["id"]})
             return seq
 
     def wake_conditions(self, colony_id, load_epoch):
@@ -381,6 +371,11 @@ class Journal:
         """Append an event kind that no typed writer owns; board, load, takeover and return have their own."""
         if kind in RESERVED_EVENTS:
             raise ValueError(f"{kind} events are written by their own operation")
+        if kind in {"autoplay.disabled", "planner.started", "planner.received"}:
+            with self._ledger.transaction():
+                seq = self._ledger.append(colony_id, load_epoch, game_tick, source, kind, payload)
+                self._append_cadence(colony_id, load_epoch, game_tick)
+                return seq
         return self._ledger.append(colony_id, load_epoch, game_tick, source, kind, payload)
 
     def record_autoplay_activation(self, colony_id, load_epoch, game_tick, choices):
@@ -396,7 +391,10 @@ class Journal:
         from ..serialization import canonical
 
         with self._ledger.transaction():
+            policy, policy_hash = load_policy()
             activation = self._ledger.append(colony_id, load_epoch, game_tick, USER, "autoplay.activation", dict(choices))
+            self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "attention.policy",
+                                {"activation_seq": activation, "version": policy["version"], "sha256": policy_hash})
             wake = self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "planner.wake", {
                 "source": "plugin", "text": "Explicit autoplay activation choices: " + canonical(choices),
                 "activation_seq": activation, "choices": dict(choices)})
@@ -437,13 +435,16 @@ class Journal:
             return self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "frontdesk.wake",
                                        {"source": source, key: anchor})
 
-    def ingest_game_event(self, colony_id, load_epoch, game_tick, connection, event):
+    def ingest_game_event(self, colony_id, load_epoch, game_tick, connection, event, *, attention_available=False,
+                          observed_tick=None):
         """Persist a native event and its default wakes atomically; the raw row is the cursor."""
         cursor = event.get("cursor")
         if (type(cursor) is not int or cursor < 1 or not isinstance(connection, str) or not connection
                 or (event.get("connection_epoch"), event.get("colony_id"), event.get("load_epoch"),
                     event.get("game_tick")) != (connection, colony_id, load_epoch, game_tick)):
             raise ValueError("Invalid native event cursor or sampled identity")
+        if observed_tick is not None and (type(observed_tick) is not int or observed_tick < 0):
+            raise ValueError("Invalid observed game tick")
         with self._ledger.transaction():
             last = self._ledger.game_event_cursor(colony_id, load_epoch, connection)
             if cursor <= last:
@@ -451,6 +452,10 @@ class Journal:
                 if previous and previous["payload"]["event"] == event:
                     return False
                 raise ValueError("Native event cursor was reused")
+            sampled_tick = game_tick
+            previous_tick = self._ledger.latest_observed_tick(colony_id, load_epoch)
+            game_tick = max(sampled_tick, observed_tick if observed_tick is not None else sampled_tick,
+                            previous_tick if previous_tick is not None else sampled_tick)
             latest_load = self._ledger.latest_event(colony_id, LOAD_EVENT)
             latest_epoch = latest_load["load_epoch"] if latest_load else self._ledger.latest_epoch(colony_id)
             previous_native = self._ledger.latest_event(colony_id, "game.event")
@@ -462,18 +467,19 @@ class Journal:
                              and type(start_tick) is int and 0 <= start_tick <= game_tick else game_tick)
                 self.record_load(colony_id, load_epoch, loaded_at)
             seq = self._ledger.append(colony_id, load_epoch, game_tick, "mod", "game.event",
-                                      {"connection": connection, "event": event})
-            defaults = [e for e in self._ledger.events_by_kind(colony_id, ("scheduler.default_review",))
-                        if e["load_epoch"] == load_epoch]
-            if not defaults:
-                default = self.register_wake(colony_id, load_epoch, game_tick, "planner",
-                                             {"kind": "periodic", "interval_ticks": self.wake_policy(colony_id)["planner_review_ticks"]},
-                                             "Periodic colony review")
-                self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "scheduler.default_review", {"id": default["id"]})
-            for item in self.wake_conditions(colony_id, load_epoch):
-                if item["condition"]["kind"] in {"event", "deadline", "periodic"}:
-                    self.evaluate_wake(colony_id, load_epoch, game_tick, item["id"], event,
-                                       expected_next_tick=item["next_tick"])
+                                      {"connection": connection, "event": event, "native_game_tick": sampled_tick,
+                                       "observed_game_tick": game_tick})
+            kind = event.get("kind")
+            data = event.get("data", {})
+            if kind in {"attention_snapshot", "attention_changed"} and attention_available:
+                for ordinal, signal in enumerate(normalize_attention_event({"kind": kind, **data})):
+                    self._ledger.append(colony_id, load_epoch, game_tick, "mod", "attention.signal",
+                                        {**signal, "native_event_seq": seq, "native_game_tick": sampled_tick, "ordinal": ordinal})
+            elif kind == "letter":
+                self._ledger.append(colony_id, load_epoch, game_tick, "mod", "attention.signal",
+                                    {"category": "letter", "edge": "appeared", "source_id": f"letter:{seq}",
+                                     "def": data.get("def"), "native_event_seq": seq, "native_game_tick": sampled_tick, "ordinal": 0})
+            self._append_cadence(colony_id, load_epoch, game_tick)
             kind = event.get("kind")
             data = event.get("data", {})
             policy = self.wake_policy(colony_id)
@@ -491,6 +497,58 @@ class Journal:
                 self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "planner.wake",
                                     {"source": "game", "text": "World loaded", "event_seq": seq})
             return True
+
+    def _append_cadence(self, colony_id, load_epoch, game_tick):
+        """Append deterministic cadence work while the caller owns the transaction."""
+        policy, _ = load_policy()
+        state = cadence_project(self._ledger.cadence_events(colony_id), epoch=load_epoch,
+                                now_tick=game_tick, policy=policy)
+        for item in state["items"]:
+            self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, item["kind"], item["payload"])
+            if item["kind"] == "cadence.review_due":
+                payload = item["payload"]
+                self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "planner.wake",
+                                    {"source": "game", "text": "Cadence review due", "work_id": payload["id"],
+                                     "urgency": payload.get("urgency", "scheduled"),
+                                     "signal_seqs": payload.get("signal_seqs", []),
+                                     "signals": [self._ledger.event(colony_id, seq) for seq in payload.get("signal_seqs", [])],
+                                     "review_type": payload["review_type"]})
+        return state
+
+    def attention_state(self, colony_id, load_epoch, game_tick):
+        with self._ledger.transaction():
+            return self._append_cadence(colony_id, load_epoch, game_tick)
+
+    def attention_declare(self, colony_id, load_epoch, game_tick, actor, level, reference, reason, user_sources=()):
+        with self._ledger.transaction():
+            tasks = {row["entry_id"] for row in self.board(colony_id)
+                     if row["kind"] == "task" and row["author"] == "planner" and row["status"] != "closed"}
+            sources = {seq for seq in user_sources if (e := self._ledger.event(colony_id, seq))
+                       and e["kind"] == UTTERANCE_EVENT and e["load_epoch"] == load_epoch}
+            policy, _ = load_policy()
+            payload = validate_declaration(self._ledger.cadence_events(colony_id), epoch=load_epoch, tick=game_tick,
+                                           actor=actor, level=level, reference=reference, reason=reason,
+                                           policy=policy, open_tasks=tasks, user_utterances=sources)
+            seq = self._ledger.append(colony_id, load_epoch, game_tick, actor, "cadence.lease_declared", payload)
+            self._append_cadence(colony_id, load_epoch, game_tick)
+            return seq
+
+    def attention_revoke(self, colony_id, load_epoch, game_tick, reference, user_sources):
+        with self._ledger.transaction():
+            if reference not in user_sources:
+                raise ValueError("Revoke requires an utterance received in this run")
+            original = self._ledger.event(colony_id, reference)
+            if not original or original["kind"] != UTTERANCE_EVENT or original["load_epoch"] != load_epoch:
+                raise ValueError("Revoke requires the original user utterance")
+            state = self._append_cadence(colony_id, load_epoch, game_tick)
+            revoked = []
+            for lease in state.get("leases", {}).values():
+                if lease["actor"] == "user":
+                    self._ledger.append(colony_id, load_epoch, game_tick, USER, "attention.revoked",
+                                        {"reference": lease["reference"], "utterance_seq": reference})
+                    revoked.append(lease["reference"])
+            self._append_cadence(colony_id, load_epoch, game_tick)
+            return revoked
 
     def game_event_gap(self, colony_id, load_epoch, connection):
         return any(e["load_epoch"] == load_epoch and e["payload"].get("connection") == connection
@@ -590,6 +648,7 @@ class Journal:
                                       payload)
             self._ledger.append(colony_id, load_epoch, game_tick, "planner", "planner.consumed",
                                 {"through_seq": cursor})
+            self._append_cadence(colony_id, load_epoch, game_tick)
             return seq
 
     def submit(self, colony_id, load_epoch, game_tick, actor, submission):
@@ -610,6 +669,9 @@ class Journal:
                 {"entry_id": row["entry_id"], "revision": row["revision"]},
             )
             self._ledger.add_revision(colony_id, seq, row)
+            if row["kind"] == "task" and row["status"] == "closed":
+                self._ledger.append(colony_id, load_epoch, game_tick, actor, "task.closed", {"reference": row["entry_id"]})
+                self._append_cadence(colony_id, load_epoch, game_tick)
             return seq
 
     def _check_references(self, colony_id, row):

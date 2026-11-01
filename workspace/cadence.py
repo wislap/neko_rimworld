@@ -115,6 +115,7 @@ def project(events, *, epoch, now_tick, policy):
     next_day = anchor + max(1, (epoch_start - anchor) // ticks["day"] + 1) * ticks["day"]
     next_review = None
     pending_daily = []
+    active_work_ids, active_signal_seqs = [], []
 
     def emit(kind, identity, tick, **payload):
         if identity not in existing:
@@ -307,6 +308,8 @@ def project(events, *, epoch, now_tick, policy):
                     del leases[lease_id]
         elif kind == "planner.started":
             running = True
+            active_work_ids = list(data.get("work_ids", []))
+            active_signal_seqs = list(data.get("signal_seqs", []))
             consumed.update(data.get("work_ids", []))
             pending_daily[:] = [item for item in pending_daily if item not in consumed]
             if pending_focus in consumed:
@@ -317,11 +320,23 @@ def project(events, *, epoch, now_tick, policy):
             pending_signals[:] = [signal for signal in pending_signals if signal not in received]
             deferred_signals[:] = [signal for signal in deferred_signals if signal not in received]
         elif kind == "planner.received":
+            active_work_ids.extend(data.get("work_ids", []))
+            active_signal_seqs.extend(data.get("signal_seqs", []))
             received = set(data.get("signal_seqs", []))
             pending_signals[:] = [signal for signal in pending_signals if signal not in received]
             deferred_signals[:] = [signal for signal in deferred_signals if signal not in received]
         elif kind == "planner.finished":
             running, last_finish = False, tick
+            if not data.get("completed", True):
+                for work_id in active_work_ids:
+                    if work_id.startswith("daily:") and work_id not in pending_daily:
+                        pending_daily.append(work_id)
+                    elif work_id.startswith("focus:") and pending_focus is None:
+                        pending_focus = work_id
+                for signal_seq in active_signal_seqs:
+                    if signal_seq not in pending_signals:
+                        pending_signals.append(signal_seq)
+            active_work_ids, active_signal_seqs = [], []
         elif kind == "autoplay.disabled":
             return {"active": False, "items": items}
         advance(tick)

@@ -79,9 +79,10 @@ class FrontdeskService:
             guarded = {"observe_epoch", "submit", "set_wake_policy", "register_wake", "cancel_wake",
                        "evaluate_wake", "set_context_policy", "record_autoplay_activation",
                        "record_utterance", "record_frontdesk_wake", "record_takeover", "record_return",
-                       "ingest_game_event"}
+                       "ingest_game_event", "attention_state", "attention_declare", "attention_revoke"}
             event_kind = (args[4] if len(args) > 4 else kwargs.get("kind")) if method == "record" else None
-            if method in guarded or event_kind in {"planner.wake", "frontdesk.wake"}:
+            if (method in guarded or event_kind in {"planner.wake", "frontdesk.wake", "planner.received"}
+                    or (event_kind == "planner.started" and command_binding_check is not None)):
                 colony = args[0] if args else kwargs.get("colony_id")
                 epoch = args[1] if len(args) > 1 else kwargs.get("load_epoch")
                 current = self.game_session()
@@ -90,7 +91,7 @@ class FrontdeskService:
                 if not binding_is_current(command_binding_check):
                     raise ToolExecutionError("world_changed", "The active colony connection changed before the command executed", recoverable=False)
                 load = self.journal.latest_event(colony, "colony.load")
-                if method not in {"observe_epoch", "ingest_game_event"} and load and load["load_epoch"] != epoch:
+                if method not in {"observe_epoch", "ingest_game_event", "attention_state", "attention_declare", "attention_revoke"} and load and load["load_epoch"] != epoch:
                     raise ToolExecutionError("world_changed", "The recorded colony load changed before the command executed", recoverable=False)
             return getattr(self.journal, method)(*args, **kwargs)
         try:

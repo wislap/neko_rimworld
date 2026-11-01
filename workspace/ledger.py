@@ -220,6 +220,30 @@ class EventLedger:
         rows = self.db.execute("SELECT * FROM events WHERE colony_id=? ORDER BY seq", (colony_id,))
         return [_event(row) for row in rows]
 
+    def cadence_events(self, colony_id):
+        """Read only cadence inputs, without decoding model messages or audits."""
+        kinds = ("autoplay.activation", "autoplay.disabled", LOAD_EVENT, "attention.signal",
+                 "cadence.lease_declared", "cadence.lease_expired", "cadence.changed",
+                 "cadence.review_due", "task.closed", "attention.revoked", "planner.started",
+                 "planner.finished", "planner.received")
+        marks = ",".join("?" for _ in kinds)
+        rows = self.db.execute(
+            "SELECT seq,colony_id,load_epoch,game_tick,wall_time,source,kind, "
+            "CASE WHEN kind='planner.finished' THEN json_object('completed', "
+            "json(CASE WHEN json_extract(payload,'$.result.terminal.kind')='yield' THEN 'true' ELSE 'false' END)) "
+            "WHEN kind='planner.started' THEN json_object("
+            "'work_ids',json(COALESCE(json_extract(payload,'$.work_ids'),'[]')), "
+            "'signal_seqs',json(COALESCE(json_extract(payload,'$.signal_seqs'),'[]'))) "
+            "ELSE payload END AS payload FROM events WHERE colony_id=? AND kind IN (" + marks + ") ORDER BY seq",
+            (colony_id, *kinds),
+        )
+        return [_event(row) for row in rows]
+
+    def latest_observed_tick(self, colony_id, load_epoch):
+        row = self.db.execute("SELECT MAX(game_tick) FROM events WHERE colony_id=? AND load_epoch=?",
+                              (colony_id, load_epoch)).fetchone()
+        return row[0]
+
     def game_event_cursor(self, colony_id, load_epoch, connection):
         row = self.db.execute(
             "SELECT json_extract(payload,'$.event.cursor') FROM events "
