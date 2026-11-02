@@ -299,12 +299,13 @@ class ColonyScheduler:
                         self._event_cursor = event["cursor"]
                         if changed:
                             if event.get("kind") in {"session_snapshot", "pause_changed"}:
-                                native_row = await self.service.call("game_event_at_cursor", colony, epoch, connection, event["cursor"])
                                 self.observe_pause_state(event.get("data", {}).get("pause_state"), (connection, colony, epoch),
-                                                         evidence_seq=native_row["seq"] if native_row else None)
+                                                         evidence_seq=changed.event_seq)
                             self._games[colony] = self._bind_game(game)
-                            self._frontdesk_signal.set()
-                            self._signal.set()
+                            if changed.frontdesk_wake:
+                                self._frontdesk_signal.set()
+                            if changed.planner_wake:
+                                self._signal.set()
             except asyncio.CancelledError:
                 raise
             except (OSError, sqlite3.Error) as error:
@@ -785,15 +786,18 @@ class ColonyScheduler:
         pause = copy.deepcopy(self.pause_state)
         pause_seq = self._pause_evidence_seq
         highwater = await self.service.call("event_highwater", colony_id)
-        receipts = await self.service.call("events_by_kind", colony_id, ("planner.started", "planner.received", "planner.finished"))
-        completed = {event["payload"].get("start_seq") for event in receipts
-                     if event["kind"] == "planner.finished" and (event["payload"].get("result", {}).get("terminal") or {}).get("kind") == "yield"}
+        wakes = await self.service.call("events_by_kind", colony_id, ("planner.wake",))
+        wakes = [event for event in wakes if event["seq"] <= highwater]
+        if not wakes:
+            return
+        finished_events = await self.service.call("planner_finished_metadata", colony_id, through_seq=highwater)
+        receipts = await self.service.call("events_by_kind", colony_id, ("planner.started", "planner.received"))
+        completed = {event["start_seq"] for event in finished_events if event["terminal_kind"] == "yield"}
         consumed = {seq for event in receipts if event["load_epoch"] == load_epoch and event["seq"] <= highwater
                     and (event["seq"] in completed if event["kind"] == "planner.started" else
                          event["payload"].get("start_seq") in completed if event["kind"] == "planner.received" else False)
                     for seq in event["payload"].get("wake_seqs", [])}
-        wakes = await self.service.call("events_by_kind", colony_id, ("planner.wake",))
-        wakes = [event for event in wakes if event["seq"] <= highwater and event["seq"] not in consumed]
+        wakes = [event for event in wakes if event["seq"] not in consumed]
         if not wakes:
             return
         stale_events = await self.service.call("events_by_kind", colony_id, ("planner.stale_wake",))
@@ -835,8 +839,6 @@ class ColonyScheduler:
         projection = [e for e in projection if e["seq"] <= highwater]
         handoffs = [e for e in projection if e["kind"] == "planner.yield"]
         starts = [e for e in projection if e["kind"] == "planner.started"]
-        finished_events = await self.service.call("planner_finished_metadata", colony_id)
-        finished_events = [e for e in finished_events if e["seq"] <= highwater]
         ends = {e["start_seq"] for e in finished_events if e["terminal_kind"] == "yield"}
         interrupted = []
         for entry in starts:

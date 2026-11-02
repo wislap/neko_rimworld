@@ -457,12 +457,13 @@ class EventLedger:
             (colony_id, encode(list(seqs))))
         return {row["seq"]: row["game_tick"] for row in rows}
 
-    def planner_finished_metadata(self, colony_id):
+    def planner_finished_metadata(self, colony_id, *, through_seq=None):
         """Only fields needed to reconstruct unfinished planner ranges; never load audits."""
         rows = self.db.execute(
             "SELECT seq, json_extract(payload,'$.start_seq') AS start_seq, "
             "json_extract(payload,'$.result.terminal.kind') AS terminal_kind "
-            "FROM events WHERE colony_id=? AND kind='planner.finished' ORDER BY seq", (colony_id,))
+            "FROM events WHERE colony_id=? AND kind='planner.finished' AND seq<=? ORDER BY seq",
+            (colony_id, INTEGER_LIMIT - 1 if through_seq is None else through_seq))
         return [{"seq": row["seq"], "start_seq": row["start_seq"], "terminal_kind": row["terminal_kind"]}
                 for row in rows]
 

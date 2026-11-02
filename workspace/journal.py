@@ -2,6 +2,7 @@
 
 import copy
 import json
+from dataclasses import dataclass
 
 from .attention_policy import load_policy, normalize_attention_event
 from .board import TASK_TARGET_KINDS, BoardError, check_revision, check_shape
@@ -31,6 +32,19 @@ WAKE_POLICY_DEFAULTS = {
     "frontdesk_choice_letters": True,
     "frontdesk_paused_windows": True,
 }
+
+
+@dataclass(frozen=True)
+class NativeEventIngestion:
+    """Committed native cursor and role work produced by that same transaction."""
+
+    changed: bool = False
+    event_seq: int | None = None
+    planner_wake: bool = False
+    frontdesk_wake: bool = False
+
+    def __bool__(self):
+        return self.changed
 
 
 class Journal:
@@ -246,8 +260,8 @@ class Journal:
     def event_ticks(self, colony_id, seqs):
         return self._ledger.event_ticks(colony_id, seqs)
 
-    def planner_finished_metadata(self, colony_id):
-        return self._ledger.planner_finished_metadata(colony_id)
+    def planner_finished_metadata(self, colony_id, *, through_seq=None):
+        return self._ledger.planner_finished_metadata(colony_id, through_seq=through_seq)
 
     def successful_run(self, colony_id, anchor, *, through_seq=None):
         return self._ledger.successful_run(colony_id, anchor, through_seq=through_seq)
@@ -341,7 +355,7 @@ class Journal:
             if cursor <= last:
                 previous = self._ledger.game_event_at_cursor(colony_id, load_epoch, connection, cursor)
                 if previous and previous["payload"]["event"] == event:
-                    return False
+                    return NativeEventIngestion()
                 raise ValueError("Native event cursor was reused")
             sampled_tick = game_tick
             previous_tick = self._ledger.latest_observed_tick(colony_id, load_epoch)
@@ -370,7 +384,9 @@ class Journal:
                 self._ledger.append(colony_id, load_epoch, game_tick, "mod", "attention.signal",
                                     {"category": "letter", "edge": "appeared", "source_id": f"letter:{seq}",
                                      "def": data.get("def"), "native_event_seq": seq, "native_game_tick": sampled_tick, "ordinal": 0})
-            self._append_cadence(colony_id, load_epoch, game_tick)
+            cadence = self._append_cadence(colony_id, load_epoch, game_tick)
+            planner_wake = any(item["kind"] == "cadence.review_due" for item in cadence["items"])
+            frontdesk_wake = False
             kind = event.get("kind")
             data = event.get("data", {})
             policy = self.wake_policy(colony_id)
@@ -393,10 +409,12 @@ class Journal:
                                              {"source": "game", "text": text, "event_seq": seq})
                 self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "frontdesk.wake",
                                     {"source": "game", "trigger_seq": anchor})
+                frontdesk_wake = True
             if epoch_changed:
                 self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "planner.wake",
                                     {"source": "game", "text": "World loaded", "event_seq": seq})
-            return True
+                planner_wake = True
+            return NativeEventIngestion(True, seq, planner_wake, frontdesk_wake)
 
     def _append_cadence(self, colony_id, load_epoch, game_tick):
         """Append deterministic cadence work while the caller owns the transaction."""
