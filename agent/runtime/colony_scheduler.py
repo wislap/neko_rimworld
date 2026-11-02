@@ -1,7 +1,6 @@
-"""Explicit, process-local planner scheduling over the existing colony journal.
+"""Role dispatch, bound native event intake and pause watchdog over the journal.
 
-No timer or game event subscription is installed here. Callers explicitly wake
-and stop this service; E2 is responsible for deciding when wakes are warranted.
+Journal derives cadence and persists wakes; this service executes their roles.
 """
 
 import asyncio
@@ -16,7 +15,7 @@ from types import SimpleNamespace
 from ...serialization import canonical
 from ...tool_contracts import ToolExecutionError, ToolSpec
 from ...workspace.board import entry_schema
-from ...workspace.ledger import PLANNER
+from ...workspace.ledger import PLANNER, consumed_planner_wakes
 from ...workspace.planner_completion import validate_planner_completion
 from ...workspace.session_view import anchor_seq, trigger_message
 from ..runtime.audit import AgentAuditLedger, private_protocol_redacted
@@ -792,11 +791,7 @@ class ColonyScheduler:
             return
         finished_events = await self.service.call("planner_finished_metadata", colony_id, through_seq=highwater)
         receipts = await self.service.call("events_by_kind", colony_id, ("planner.started", "planner.received"))
-        completed = {event["start_seq"] for event in finished_events if event["terminal_kind"] == "yield"}
-        consumed = {seq for event in receipts if event["load_epoch"] == load_epoch and event["seq"] <= highwater
-                    and (event["seq"] in completed if event["kind"] == "planner.started" else
-                         event["payload"].get("start_seq") in completed if event["kind"] == "planner.received" else False)
-                    for seq in event["payload"].get("wake_seqs", [])}
+        consumed = consumed_planner_wakes(receipts, finished_events, load_epoch, highwater)
         wakes = [event for event in wakes if event["seq"] not in consumed]
         if not wakes:
             return

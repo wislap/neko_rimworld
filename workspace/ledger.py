@@ -522,6 +522,24 @@ class EventLedger:
         )
 
 
+def consumed_planner_wakes(receipts, completions, load_epoch, through_seq):
+    """Explicitly delivered wake IDs of successful runs within one log prefix."""
+    completed = {event["start_seq"] for event in completions
+                 if event["seq"] <= through_seq and event["terminal_kind"] == "yield"}
+    consumed = set()
+    for event in receipts:
+        if event["load_epoch"] != load_epoch or event["seq"] > through_seq:
+            continue
+        start = event["seq"] if event["kind"] == "planner.started" else event["payload"].get("start_seq")
+        if event["kind"] not in {"planner.started", "planner.received"} or start not in completed:
+            continue
+        wakes = event["payload"].get("wake_seqs", [])
+        if not isinstance(wakes, list) or any(type(seq) is not int for seq in wakes):
+            raise RuntimeError("Invalid planner wake identities")
+        consumed.update(wakes)
+    return consumed
+
+
 def _event(row):
     return {**dict(row), "payload": json.loads(row["payload"])}
 
