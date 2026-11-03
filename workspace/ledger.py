@@ -222,15 +222,13 @@ class EventLedger:
 
     def cadence_events(self, colony_id):
         """Read only cadence inputs, without decoding model messages or audits."""
-        kinds = ("autoplay.activation", "autoplay.disabled", LOAD_EVENT, "attention.signal",
-                 "cadence.lease_declared", "cadence.lease_expired", "cadence.changed",
-                 "cadence.review_due", "task.closed", "attention.revoked", "planner.started",
-                 "planner.finished", "planner.received", "pause.watchdog")
+        from .cadence_events import INPUT_KINDS, event_view
+        kinds = INPUT_KINDS
         marks = ",".join("?" for _ in kinds)
         rows = self.db.execute(
             "SELECT seq,colony_id,load_epoch,game_tick,wall_time,source,kind, "
-            "CASE WHEN kind='planner.finished' THEN json_object('start_seq', json_extract(payload,'$.start_seq'), 'completed', "
-            "json(CASE WHEN json_extract(payload,'$.result.terminal.kind')='yield' THEN 'true' ELSE 'false' END)) "
+            "CASE WHEN kind='planner.finished' THEN json_object('start_seq', json_extract(payload,'$.start_seq'), 'result', "
+            "json_object('terminal',json_object('kind',json_extract(payload,'$.result.terminal.kind')))) "
             "WHEN kind='planner.started' THEN json_object("
             "'wake_seqs',json(COALESCE(json_extract(payload,'$.wake_seqs'),'[]')), "
             "'work_ids',json(COALESCE(json_extract(payload,'$.work_ids'),'[]')), "
@@ -238,12 +236,19 @@ class EventLedger:
             "ELSE payload END AS payload FROM events WHERE colony_id=? AND kind IN (" + marks + ") ORDER BY seq",
             (colony_id, *kinds),
         )
-        return [_event(row) for row in rows]
+        return event_view(_event(row) for row in rows)
 
     def latest_observed_tick(self, colony_id, load_epoch):
         row = self.db.execute("SELECT MAX(game_tick) FROM events WHERE colony_id=? AND load_epoch=?",
                               (colony_id, load_epoch)).fetchone()
         return row[0]
+
+    def recording_tick(self, colony_id, load_epoch, context_tick):
+        """Choose a business append tick while its caller owns the transaction."""
+        if not is_integer(context_tick):
+            raise ValueError("A game tick is a 64-bit integer")
+        latest = self.latest_observed_tick(colony_id, load_epoch)
+        return context_tick if latest is None else max(context_tick, latest)
 
     def game_event_cursor(self, colony_id, load_epoch, connection):
         row = self.db.execute(

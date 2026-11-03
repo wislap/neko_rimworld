@@ -82,7 +82,9 @@ async def test_finish_failure_is_retained_and_retried(tmp_path):
             break
         await asyncio.sleep(.01)
     assert scheduler.unsaved_result and isinstance(scheduler.error, OSError)
-    await scheduler.close()
+    with pytest.raises(OSError):
+        await scheduler.close()
+    assert scheduler.unsaved_result and ColonyScheduler._owner is None
     service.call = original
     scheduler.start()
     scheduler.resume(game)

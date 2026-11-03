@@ -51,8 +51,10 @@ def test_cadence_still_rejects_recorded_out_of_order_inputs(tmp_path):
     try:
         journal.record_autoplay_activation('c', 'e', 0, CHOICES)
         journal.record('c', 'e', 100, 'planner', 'planner.started', {'wake_seqs': [], 'work_ids': [], 'signal_seqs': []})
+        # Bypass the typed business writer to represent an already-corrupt input.
+        seq = journal._ledger.append('c', 'e', 90, 'planner', 'planner.received', {'work_ids': [], 'signal_seqs': []})
         with pytest.raises(ValueError, match='Event ticks must be ordered'):
-            journal.record('c', 'e', 90, 'planner', 'planner.received', {'work_ids': [], 'signal_seqs': []})
-        assert not any(e['kind'] == 'planner.received' for e in journal.events('c'))
+            journal.attention_state('c', 'e', 100)
+        assert journal.event('c', seq)['game_tick'] == 90
     finally:
         journal.close()

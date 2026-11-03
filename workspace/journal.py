@@ -8,6 +8,7 @@ from .attention_policy import load_policy, normalize_attention_event
 from .board import TASK_TARGET_KINDS, BoardError, check_revision, check_shape
 from .cadence import project as cadence_project
 from .cadence import validate_declaration
+from .cadence_events import BUSINESS_KINDS
 from .ledger import (
     FRONTDESK,
     LOAD_EVENT,
@@ -273,10 +274,12 @@ class Journal:
         """Append an event kind that no typed writer owns; board, load, takeover and return have their own."""
         if kind in RESERVED_EVENTS:
             raise ValueError(f"{kind} events are written by their own operation")
-        if kind in {"autoplay.disabled", "planner.started", "planner.received"}:
+        if kind in BUSINESS_KINDS:
             with self._ledger.transaction():
+                game_tick = self._ledger.recording_tick(colony_id, load_epoch, game_tick)
                 seq = self._ledger.append(colony_id, load_epoch, game_tick, source, kind, payload)
-                self._append_cadence(colony_id, load_epoch, game_tick)
+                if kind in {"autoplay.disabled", "planner.started", "planner.received"}:
+                    self._append_cadence(colony_id, load_epoch, game_tick)
                 return seq
         return self._ledger.append(colony_id, load_epoch, game_tick, source, kind, payload)
 
@@ -293,6 +296,7 @@ class Journal:
         from ..serialization import canonical
 
         with self._ledger.transaction():
+            game_tick = self._ledger.recording_tick(colony_id, load_epoch, game_tick)
             policy, policy_hash = load_policy()
             activation = self._ledger.append(colony_id, load_epoch, game_tick, USER, "autoplay.activation", dict(choices))
             self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "attention.policy",
@@ -418,12 +422,14 @@ class Journal:
 
     def _append_cadence(self, colony_id, load_epoch, game_tick):
         """Append deterministic cadence work while the caller owns the transaction."""
-        latest = self._ledger.latest_observed_tick(colony_id, load_epoch)
-        if latest is not None:
-            game_tick = max(game_tick, latest)
+        game_tick = self._ledger.recording_tick(colony_id, load_epoch, game_tick)
+        events = self._ledger.cadence_events(colony_id)
+        identity = next((event for event in reversed(events)
+                         if event["kind"] in {LOAD_EVENT, "autoplay.activation"}), None)
+        if identity is not None and identity["load_epoch"] != load_epoch:
+            return {"active":False, "items":[]}
         policy, _ = load_policy()
-        state = cadence_project(self._ledger.cadence_events(colony_id), epoch=load_epoch,
-                                now_tick=game_tick, policy=policy)
+        state = cadence_project(events, epoch=load_epoch, now_tick=game_tick, policy=policy)
         for item in state["items"]:
             self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, item["kind"], item["payload"])
             if item["kind"] == "cadence.review_due":
@@ -485,6 +491,7 @@ class Journal:
 
     def attention_declare(self, colony_id, load_epoch, game_tick, actor, level, reference, reason, user_sources=()):
         with self._ledger.transaction():
+            game_tick = self._ledger.recording_tick(colony_id, load_epoch, game_tick)
             tasks = {row["entry_id"] for row in self.board(colony_id)
                      if row["kind"] == "task" and row["author"] == "planner" and row["status"] != "closed"}
             sources = {seq for seq in user_sources if (e := self._ledger.event(colony_id, seq))
@@ -530,6 +537,7 @@ class Journal:
 
     def pause_watchdog_wake(self, colony_id, load_epoch, game_tick, episode, count):
         with self._ledger.transaction():
+            game_tick = self._ledger.recording_tick(colony_id, load_epoch, game_tick)
             if not self._pause_watchdog_matches(colony_id, load_epoch, episode):
                 return None
             wake = self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "planner.wake",
@@ -541,6 +549,7 @@ class Journal:
 
     def pause_watchdog_notify(self, colony_id, load_epoch, game_tick, episode):
         with self._ledger.transaction():
+            game_tick = self._ledger.recording_tick(colony_id, load_epoch, game_tick)
             if not self._pause_watchdog_matches(colony_id, load_epoch, episode):
                 return False
             previous = self._ledger.events_by_kind(colony_id, ("pause.watchdog",), load_epoch=load_epoch)
@@ -553,6 +562,7 @@ class Journal:
 
     def attention_revoke(self, colony_id, load_epoch, game_tick, reference, user_sources):
         with self._ledger.transaction():
+            game_tick = self._ledger.recording_tick(colony_id, load_epoch, game_tick)
             if reference not in user_sources:
                 raise ValueError("Revoke requires an utterance received in this run")
             original = self._ledger.event(colony_id, reference)
@@ -632,12 +642,17 @@ class Journal:
             return self._ledger.append(colony_id, load_epoch, game_tick, FRONTDESK, RUN_EVENT, payload)
 
     def finish_planner(self, colony_id, load_epoch, game_tick, start_seq, cursor, result, audit):
-        """Atomically retain the outcome, optional handoff and consumed wake position."""
+        """Save one immutable completion, separating its context from append time."""
         if type(start_seq) is not int or start_seq <= 0 or type(cursor) is not int or cursor < 0:
             raise ValueError("Planner completion requires a valid start and consumed cursor")
         with self._ledger.transaction():
+            start = self._ledger.event(colony_id, start_seq)
+            if start is None or start["kind"] != "planner.started" or start["load_epoch"] != load_epoch:
+                raise ValueError("Planner completion scope conflicts with its start")
+            # Keep the caller's original context stable across lost ACKs/retries.
+            recorded_tick = self._ledger.recording_tick(colony_id, load_epoch, game_tick)
             terminal = result.get("terminal")
-            payload = {"start_seq": start_seq, "result": result, "audit": audit}
+            payload = {"start_seq": start_seq, "context_tick": game_tick, "result": result, "audit": audit}
             saved = [event for event in self._ledger.events_by_kind(
                 colony_id, ("planner.finished",), after_seq=start_seq)
                 if event["payload"].get("start_seq") == start_seq]
@@ -646,36 +661,39 @@ class Journal:
                     raise ValueError("Planner completion is ambiguous")
                 prior = saved[0]
                 consumed = self._ledger.event(colony_id, prior["seq"] + 1)
+                # Existing completions used their envelope tick as context.
+                expected = payload if "context_tick" in prior["payload"] else {key:value for key,value in payload.items() if key != "context_tick"}
+                if prior["payload"].get("context_tick", prior["game_tick"]) != game_tick:
+                    raise ValueError("Planner completion conflicts with its original context")
 
-                def matches(event, kind, expected):
+                def matches(event, kind, content):
                     if (event is None or event["kind"] != kind or event["source"] != "planner"
-                            or event["load_epoch"] != load_epoch or event["game_tick"] != game_tick):
+                            or event["load_epoch"] != load_epoch or event["game_tick"] != prior["game_tick"]):
                         return False
                     return json.dumps(event["payload"], ensure_ascii=False, allow_nan=False, sort_keys=True) == json.dumps(
-                        expected, ensure_ascii=False, allow_nan=False, sort_keys=True)
+                        content, ensure_ascii=False, allow_nan=False, sort_keys=True)
 
-                if (not matches(prior, "planner.finished", payload)
+                if (not matches(prior, "planner.finished", expected)
                         or not matches(consumed, "planner.consumed", {"through_seq": cursor})):
                     raise ValueError("Planner completion conflicts with the saved outcome")
                 if terminal and terminal.get("kind") == "yield":
-                    handoff = self._ledger.event(colony_id, prior["seq"] - 1)
-                    if not matches(handoff, "planner.yield", {"start_seq": start_seq, "handoff": terminal["handoff"]}):
+                    if not matches(self._ledger.event(colony_id, prior["seq"] - 1), "planner.yield",
+                                   {"start_seq": start_seq, "handoff": terminal["handoff"]}):
                         raise ValueError("Planner completion conflicts with its saved handoff")
                 return prior["seq"]
             if terminal and terminal.get("kind") == "yield":
-                self._ledger.append(colony_id, load_epoch, game_tick, "planner", "planner.yield",
+                self._ledger.append(colony_id, load_epoch, recorded_tick, "planner", "planner.yield",
                                     {"start_seq": start_seq, "handoff": terminal["handoff"]})
-            seq = self._ledger.append(colony_id, load_epoch, game_tick, "planner", "planner.finished",
-                                      payload)
-            self._ledger.append(colony_id, load_epoch, game_tick, "planner", "planner.consumed",
-                                {"through_seq": cursor})
-            self._append_cadence(colony_id, load_epoch, game_tick)
+            seq = self._ledger.append(colony_id, load_epoch, recorded_tick, "planner", "planner.finished", payload)
+            self._ledger.append(colony_id, load_epoch, recorded_tick, "planner", "planner.consumed", {"through_seq": cursor})
+            self._append_cadence(colony_id, load_epoch, recorded_tick)
             return seq
 
     def submit(self, colony_id, load_epoch, game_tick, actor, submission):
         """Write one board revision and its event atomically, or raise and write nothing."""
         check_shape(submission)
         with self._ledger.transaction():
+            game_tick = self._ledger.recording_tick(colony_id, load_epoch, game_tick)
             current = self._ledger.revision(submission["entry_id"])
             if current is not None and current["colony_id"] != colony_id:
                 raise BoardError("Entry ids are unique across colonies; this id belongs to another colony")

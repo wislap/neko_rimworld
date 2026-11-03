@@ -34,6 +34,7 @@ async def test_cancel_after_terminal_commit_then_retry_keeps_one_outcome(tmp_pat
     service = FrontdeskService(tmp_path / "events.sqlite", None, game_session=lambda: None)
     try:
         start = await service.call("record", "c", "old", 1, "planner", "planner.started", {})
+        await service.call("record", "c", "old", 100, "plugin", "clock.observation", {})
         args = completion(start, start)
         task = asyncio.create_task(service.call("finish_planner", *args))
         assert await asyncio.to_thread(committed.wait, 3)
@@ -41,11 +42,13 @@ async def test_cancel_after_terminal_commit_then_retry_keeps_one_outcome(tmp_pat
         with pytest.raises(asyncio.CancelledError):
             await task
         acknowledge.set()
+        await service.call("record", "c", "old", 200, "plugin", "clock.observation", {})
         retried = await service.call("finish_planner", *args)
         events = await service.call("events", "c")
         terminals = [event for event in events if event["kind"] == "planner.finished"]
         assert len(terminals) == 1
         assert retried == terminals[0]["seq"]
+        assert terminals[0]["game_tick"] == 100 and terminals[0]["payload"]["context_tick"] == 10
         assert len([event for event in events if event["kind"] == "planner.yield"]) == 1
         assert len([event for event in events if event["kind"] == "planner.consumed"]) == 1
     finally:

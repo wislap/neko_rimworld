@@ -1649,12 +1649,14 @@ class NekoRimworldPlugin(NekoPluginBase):
             and isinstance(observed_connection, str) and bool(observed_connection)
             and origin_connection != observed_connection
         )
+        shared_persistence_failure = (code in {"workspace_unavailable", "planner_result_persistence_failed"}
+                                      and scheduler is not None and origin_scheduler is scheduler)
         stale = (origin_scheduler is not None and origin_scheduler is not scheduler) or (
             bound_game is not None and (current is None or
                 (current.colony_id, current.load_epoch) != (bound_game.colony_id, bound_game.load_epoch) or
                 (getattr(bound_game, "connection_epoch", None) is not None and
                  getattr(self._bridge, "connection_key", None) != bound_game.connection_epoch)))
-        if stale and not same_world_reconciliation:
+        if stale and not same_world_reconciliation and not shared_persistence_failure:
             source = origin_scheduler or scheduler
             audit = result.get("audit") or {}
             if bound_game is not None:
@@ -1699,18 +1701,21 @@ class NekoRimworldPlugin(NekoPluginBase):
         self._autoplay_fault = {"role": role, "code": code, "kind": kind, "pause": "unknown",
                                 "phase": None, "exception_type": None, "run_id": None, "wake_seq": None,
                                 "diagnostic_seq": None, "diagnostic_status": None,
-                                "origin_connection_epoch": origin_connection if same_world_reconciliation else observed_connection}
+                                "origin_connection_epoch": origin_connection or observed_connection,
+                                "origin_colony_id": getattr(bound_game, "colony_id", None),
+                                "origin_load_epoch": getattr(bound_game, "load_epoch", None)}
         if same_world_reconciliation:
             self._autoplay_fault["observed_connection_epoch"] = observed_connection
-        for key in ("phase", "exception_type", "run_id", "wake_seq", "diagnostic_seq", "diagnostic_status"):
+        for key in ("phase", "exception_type", "run_id", "wake_seq", "diagnostic_seq", "diagnostic_status", "start_seq", "context_tick"):
             value = audit.get(key)
-            if (isinstance(value, str) and value and len(value) <= 128) or (key in {"wake_seq", "diagnostic_seq"} and type(value) is int):
+            if (isinstance(value, str) and value and len(value) <= 128) or (key in {"wake_seq", "diagnostic_seq", "start_seq", "context_tick"} and type(value) is int):
                 self._autoplay_fault[key] = value
         failure_binding = (scheduler, getattr(self._bridge, "connection_key", None),
                            getattr(current, "colony_id", None), getattr(current, "load_epoch", None))
         for waiter in self._autoplay_waiters.values():
             binding = getattr(waiter, "_autoplay_binding", failure_binding)
-            origin_binding = (scheduler, origin_connection, current.colony_id, current.load_epoch) if same_world_reconciliation else None
+            origin_binding = ((scheduler, origin_connection, bound_game.colony_id, bound_game.load_epoch)
+                              if (same_world_reconciliation or shared_persistence_failure) and bound_game is not None else None)
             if (binding == failure_binding or binding == origin_binding) and not waiter.done():
                 waiter.set_result({**result, "status": result.get("status", "failed")})
         game = getattr(self._bridge, "session", None)

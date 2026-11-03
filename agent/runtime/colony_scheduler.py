@@ -9,7 +9,7 @@ import ntpath
 import sqlite3
 import time
 from collections import deque
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 from ...serialization import canonical
@@ -20,6 +20,21 @@ from ...workspace.planner_completion import validate_planner_completion
 from ...workspace.session_view import anchor_seq, trigger_message
 from ..runtime.audit import AgentAuditLedger, private_protocol_redacted
 from ..runtime.session import AgentRunSession
+
+
+@dataclass(frozen=True)
+class _PlannerResult:
+    origin: object
+    context_tick: int
+    start_seq: int
+    cursor: int
+    result: dict
+    audit: dict
+
+    @property
+    def arguments(self):
+        return (self.origin.colony_id, self.origin.load_epoch, self.context_tick,
+                self.start_seq, self.cursor, self.result, self.audit)
 
 
 class ColonyScheduler:
@@ -208,14 +223,18 @@ class ColonyScheduler:
 
     async def close(self):
         if self._worker is not None:
-            self._worker.cancel()
-            self._frontdesk_worker.cancel()
-            if self._event_worker is not None:
-                self._event_worker.cancel()
-            if self._watchdog_worker is not None:
-                self._watchdog_worker.cancel()
+            for task in (self._worker, self._frontdesk_worker, self._event_worker, self._watchdog_worker):
+                if task is not None:
+                    task.cancel()
             await asyncio.gather(*(task for task in (self._worker, self._frontdesk_worker, self._event_worker, self._watchdog_worker)
                                    if task is not None), return_exceptions=True)
+        try:
+            try:
+                await self._persist_planner_result()
+            except Exception as error:
+                await self._planner_error(error, self.unsaved_result.origin)
+                raise
+        finally:
             try:
                 if self._event_port is not None and self._event_identity and self._event_identity() is not None:
                     if "colony_pause.v1" in self._event_port.capabilities:
@@ -225,7 +244,8 @@ class ColonyScheduler:
                 self._event_identity = None
                 self._worker = None
                 self._watchdog_worker = None
-                ColonyScheduler._owner = None
+                if ColonyScheduler._owner is self:
+                    ColonyScheduler._owner = None
 
     async def _run_events(self):
         """Poll only the negotiated bound port; a change requires a fresh binding."""
@@ -542,7 +562,7 @@ class ColonyScheduler:
                          {"type": "object", "properties": {"letter_defs": {"type": "array", "items": {"type": "string"}}},
                           "required": ["letter_defs"], "additionalProperties": False}, pause_policy))
 
-    async def _record_dispatch_error(self, role, error, game, code):
+    async def _record_dispatch_error(self, role, error, game, code, *, completion=None):
         """Record bounded location metadata without exception text or frame locals."""
         frames = deque(maxlen=8)
         frame_count = 0
@@ -556,8 +576,11 @@ class ColonyScheduler:
         connection = getattr(game, "connection_epoch", None)
         if not isinstance(connection, str) or not connection or len(connection) > 128:
             connection = None
-        payload = {"role": role, "phase": "scheduler_dispatch", "exception_type": type(error).__name__[:128],
+        payload = {"role": role, "phase": "planner_result_persistence" if completion else "scheduler_dispatch", "exception_type": type(error).__name__[:128],
                    "origin_connection_epoch": connection, "frames": list(frames), "frames_truncated": frame_count > 8}
+        if completion is not None:
+            payload.update(start_seq=completion.start_seq, context_tick=completion.context_tick,
+                           run_id=completion.audit.get("run_id"))
         diagnostic_seq = None
         try:
             async with asyncio.timeout(1):
@@ -567,7 +590,8 @@ class ColonyScheduler:
                 diagnostic_seq = value
         except Exception:
             pass  # The original failure still owns the stop decision.
-        return {"error_code": code, "phase": "scheduler_dispatch", "exception_type": payload["exception_type"],
+        return {"error_code": code, "phase": payload["phase"], "exception_type": payload["exception_type"],
+                **({key:payload[key] for key in ("start_seq", "context_tick", "run_id")} if completion else {}),
                 "diagnostic_seq": diagnostic_seq,
                 "diagnostic_status": "recorded" if diagnostic_seq is not None else "unconfirmed"}
 
@@ -742,28 +766,47 @@ class ColonyScheduler:
                             finally:
                                 self._planner_running = False
                                 self._watchdog_event.set()
-                    except (OSError, sqlite3.Error) as error:
-                        self.error = error
-                        diagnostic = await self._record_dispatch_error("planner", error, game, "workspace_unavailable")
-                        if self.failure_handler is not None:
-                            await self.failure_handler("planner", {"audit": diagnostic}, game)
-                        else:
-                            asyncio.get_running_loop().call_later(1, self._signal.set)
                     except Exception as error:
-                        self.error = error
-                        diagnostic = await self._record_dispatch_error("planner", error, game, getattr(error, "code", "execution_failed"))
-                        if self.failure_handler is not None:
-                            await self.failure_handler("planner", {"audit": diagnostic}, game)
+                        await self._planner_error(error, game)
+
         except asyncio.CancelledError:
             raise
         except Exception as error:
             self.error = error
             raise
 
+    async def _planner_error(self, error, game):
+        self.error = error
+        completion = self.unsaved_result
+        origin = completion.origin if completion is not None else game
+        storage_error = isinstance(error, (OSError, sqlite3.Error))
+        code = ("workspace_unavailable" if storage_error else "planner_result_persistence_failed"
+                if completion is not None else getattr(error, "code", "execution_failed"))
+        diagnostic = await self._record_dispatch_error("planner", error, origin, code, completion=completion)
+        if self.failure_handler is not None:
+            await self.failure_handler("planner", {"audit": diagnostic}, origin)
+        elif storage_error and self._worker is not None and not self._worker.done():
+            asyncio.get_running_loop().call_later(1, self._signal.set)
+
+    async def _persist_planner_result(self):
+        pending = self.unsaved_result
+        if pending is None:
+            return
+        finish_seq = await self.service.call("finish_planner", *pending.arguments)
+        self.unsaved_result = None
+        if (pending.result.get("terminal") or {}).get("kind") == "yield" and self._business_current(pending.origin):
+            binding = (getattr(pending.origin, "connection_epoch", None), pending.origin.colony_id, pending.origin.load_epoch)
+            self._last_yield = (*binding, finish_seq)
+            self._pause_yielded = bool(self.pause_state is not None and self._pause_episode is not None
+                                       and self._pause_episode[:3] == binding and self._pause_evidence_seq is not None
+                                       and self._pause_evidence_seq < finish_seq)
+            self._pause_waiting = False
+            self._watchdog_event.set()
+        self._signal.set()
+        return finish_seq
+
     async def _run_colony(self, game):
-        if self.unsaved_result is not None:
-            await self.service.call("finish_planner", *self.unsaved_result)
-            self.unsaved_result = None
+        await self._persist_planner_result()
         current = self.service.game_session()
         if current is None or (current.colony_id, current.load_epoch) != (game.colony_id, game.load_epoch):
             raise ValueError("The active colony changed before planner execution")
@@ -1050,21 +1093,11 @@ class ColonyScheduler:
             result = await self.service.runtime.execute(session, run_settings)
         finally:
             result = result or session.result or {"status": "interrupted"}
-            self.unsaved_result = (colony_id, load_epoch, current_tick(require_binding=False), start,
-                                   cursor,
-                                   private_protocol_redacted(copy.deepcopy(result)),
-                                   private_protocol_redacted(ledger.snapshot()))
-            finish_seq = await self.service.call("finish_planner", *self.unsaved_result)
-            self.unsaved_result = None
-            if (result.get("terminal") or {}).get("kind") == "yield":
-                binding = (getattr(run_scope or game, "connection_epoch", None), colony_id, load_epoch)
-                self._last_yield = (*binding, finish_seq)
-                self._pause_yielded = bool(self.pause_state is not None and self._pause_episode is not None
-                                           and self._pause_episode[:3] == binding and self._pause_evidence_seq is not None
-                                           and self._pause_evidence_seq < finish_seq)
-                self._pause_waiting = False
-                self._watchdog_event.set()
-            self._signal.set()
+            self.unsaved_result = _PlannerResult(
+                _game_binding(run_scope or game), current_tick(require_binding=False), start, cursor,
+                private_protocol_redacted(copy.deepcopy(result)), private_protocol_redacted(ledger.snapshot()))
+            await self._persist_planner_result()
+
         if not self._binding_current(run_scope or game):
             if self.failure_handler is not None:
                 await self.failure_handler("planner", result, run_scope or game)
