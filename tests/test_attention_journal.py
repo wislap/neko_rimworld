@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from ..agent.runtime.colony_scheduler import ColonyScheduler
+from ..agent.runtime.scheduler_tools import attention_tools
 from ..tool_contracts import ToolExecutionError
 from ..workspace.journal import Journal
 from ..agent.runtime.frontdesk_service import FrontdeskService
@@ -70,7 +71,9 @@ async def test_frontdesk_request_uses_live_received_source_set(tmp_path):
     seq = await service.call("record_utterance", "c", "e", 1, "watch closely")
     sources = set()
     scheduler = ColonyScheduler(service, None)
-    tools = scheduler.scheduler_tools(game, "frontdesk", intent_sources=sources)
+    tools = attention_tools(service, game, "frontdesk", binding_check=lambda: scheduler._business_current(game),
+                            planner_signal=scheduler._signal, attention_available=scheduler._native_attention_available,
+                            intent_sources=sources)
     request = next(tool for tool in tools if tool.name == "attention_request")
     with pytest.raises(ToolExecutionError):
         await request.handler({"action": "declare", "utterance_seq": seq})

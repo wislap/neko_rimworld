@@ -4,14 +4,16 @@ from types import SimpleNamespace
 
 import pytest
 
+from ..agent.runtime import frontdesk_dispatch
 from ..agent.runtime.colony_scheduler import ColonyScheduler
+from ..agent.runtime.dispatch_diagnostics import record_dispatch_error
 from ..entry import NekoRimworldPlugin
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", ["planner", "frontdesk"])
 @pytest.mark.parametrize("record_failure", [False, True, "stuck"])
-async def test_dispatch_exception_records_bounded_diagnostics_and_still_halts(role, record_failure):
+async def test_dispatch_exception_records_bounded_diagnostics_and_still_halts(role, record_failure, monkeypatch):
     game = SimpleNamespace(colony_id="c", load_epoch="e", game_tick=4, connection_epoch="conn")
     events = []
     class Service:
@@ -38,10 +40,13 @@ async def test_dispatch_exception_records_bounded_diagnostics_and_still_halts(ro
     scheduler = ColonyScheduler(service, None, binding=lambda: ("conn", "c", "e"), failure_handler=handler)
     plugin._colony_scheduler = scheduler
     scheduler._games["c"] = scheduler._bind_game(game)
-    async def crash(_):
+    async def crash(*_):
         raise ValueError("private failure text must not leak")
-    setattr(scheduler, "_run_colony" if role == "planner" else "_frontdesk_colony", crash)
-    task = asyncio.create_task(scheduler._run() if role == "planner" else scheduler._run_frontdesk())
+    if role == "planner":
+        scheduler._run_colony = crash
+    else:
+        monkeypatch.setattr(frontdesk_dispatch, "frontdesk_colony", crash)
+    task = asyncio.create_task(scheduler._run() if role == "planner" else frontdesk_dispatch.run_frontdesk(scheduler))
     (scheduler._signal if role == "planner" else scheduler._frontdesk_signal).set()
     try:
         await asyncio.wait_for(completed.wait(), 3)
@@ -73,7 +78,6 @@ async def test_deep_dispatch_trace_keeps_raise_site_and_zero_seq_is_unconfirmed(
             self.payload = args[5]
             return 0
     service = Service()
-    scheduler = ColonyScheduler(service, None)
     secret = "local-secret-and-message-must-not-leak"
     def deep(level):
         if level == 0:
@@ -82,7 +86,7 @@ async def test_deep_dispatch_trace_keeps_raise_site_and_zero_seq_is_unconfirmed(
     try:
         deep(12)
     except ValueError as error:
-        diagnostic = await scheduler._record_dispatch_error("planner", error, game, "execution_failed")
+        diagnostic = await record_dispatch_error(service, "planner", error, game, "execution_failed")
     assert diagnostic["diagnostic_seq"] is None and diagnostic["diagnostic_status"] == "unconfirmed"
     assert service.payload["frames_truncated"] is True
     assert len(service.payload["frames"]) == 8 and service.payload["frames"][-1]["function"] == "deep"
