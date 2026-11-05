@@ -17,6 +17,7 @@ from ...serialization import identity as stable_identity
 from ...tool_contracts import MAX_TOOL_RESULT_CHARS, ToolExecutionError, ToolSpec
 from ..context.model_context import MAX_SOURCE_CHARS, model_size
 from .object_identity import canonical_object_identity
+from .reference_text import is_reference_text
 
 MAX_ACTORS, MAX_DESTINATIONS, MAX_PAIRS = 4, 8, 16
 MAX_NATIVE_READS = MAX_PAIRS * 3 + MAX_ACTORS
@@ -38,15 +39,11 @@ def _invalid(message):
     raise ToolExecutionError("invalid_activity_arguments", message)
 
 
-def _text(value):
-    return isinstance(value, str) and bool(value.strip()) and len(value) <= 256
-
-
 def _ref(value, kinds=("pawn", "thing", "cell")):
     if not isinstance(value, dict) or set(value) - {"kind", "id", "name", "map", "x", "z"}:
         _invalid("Use a Pawn/Thing id or name, or a cell with x/z and optional map.")
     kind = value.get("kind")
-    if kind not in kinds or "map" in value and not _text(value["map"]):
+    if kind not in kinds or "map" in value and not is_reference_text(value["map"]):
         _invalid("Invalid reference kind or map.")
     if kind == "cell":
         if set(value) & {"id", "name"} or any(
@@ -54,7 +51,7 @@ def _ref(value, kinds=("pawn", "thing", "cell")):
         ):
             _invalid("Cells require 32-bit x/z and no id/name.")
     elif (
-        ("id" in value) == ("name" in value) or set(value) & {"x", "z"} or not _text(value.get("id", value.get("name")))
+        ("id" in value) == ("name" in value) or set(value) & {"x", "z"} or not is_reference_text(value.get("id", value.get("name")))
     ):
         _invalid("An object requires exactly one nonempty id or name.")
     return copy.deepcopy(value)
@@ -95,7 +92,7 @@ def normalize_activity(args):
     if (
         not isinstance(stats, list)
         or len(stats) > 8
-        or any(not _text(v) for v in stats)
+        or any(not is_reference_text(v) for v in stats)
         or len(set(stats)) != len(stats)
     ):
         _invalid("stats accepts at most eight distinct StatDef names.")
@@ -113,11 +110,11 @@ def normalize_activity(args):
             or not set(selector) & {"definition", "capabilities"}
         ):
             _invalid("A selector requires kind=things and capabilities or definition.")
-        if any(not _text(selector[k]) for k in ("definition", "map") if k in selector):
+        if any(not is_reference_text(selector[k]) for k in ("definition", "map") if k in selector):
             _invalid("Invalid selector definition/map.")
         caps = selector.get("capabilities", [])
         if "capabilities" in selector and (
-            not isinstance(caps, list) or not 1 <= len(caps) <= 16 or any(not _text(v) for v in caps)
+            not isinstance(caps, list) or not 1 <= len(caps) <= 16 or any(not is_reference_text(v) for v in caps)
         ):
             _invalid("capabilities requires 1..16 names from the connected Mod.")
         destination = {"selector": copy.deepcopy(selector)}
@@ -134,7 +131,7 @@ def normalize_activity(args):
         not isinstance(focus, dict)
         or set(focus) - {"skills", "work", "capacities"}
         or any(
-            not isinstance(v, list) or not 1 <= len(v) <= 32 or any(not _text(n) for n in v) for v in focus.values()
+            not isinstance(v, list) or not 1 <= len(v) <= 32 or any(not is_reference_text(n) for n in v) for v in focus.values()
         )
     ):
         _invalid("actor_focus selects skills/work/capacities by exact definition names or labels.")

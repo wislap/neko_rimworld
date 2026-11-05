@@ -10,11 +10,8 @@ from ...serialization import canonical
 from ...tool_contracts import MAX_TOOL_RESULT_CHARS, WORLD_OBSERVATION_VERSION
 from ..context.model_context import MAX_SOURCE_CHARS, model_size
 from .object_identity import normalize_object_identities
+from .query_catalog import PAWN_KINDS, THING_KINDS
 from .query_surface import SurfaceError
-from .semantic_surface import (
-    PAWN_KINDS,
-    THING_KINDS,
-)
 from .work_assignments import WorkReadings
 from .world_order import order_world_fields
 

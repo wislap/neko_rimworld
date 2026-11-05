@@ -4,8 +4,8 @@ import json
 import pytest
 
 from ..agent.runtime.prompt import build_system_prompt
+from ..agent.world.query_planner import plan_look
 from ..agent.world.query_surface import Surface, SurfaceError
-from ..agent.world.semantic_surface import plan_look
 from ..workspace.journal import Journal
 from .test_semantic_tools import catalog
 
@@ -129,7 +129,7 @@ async def test_public_look_exposes_fresh_windows_only_on_supported_catalog():
     {"status":"unavailable", "sampled_tick":None, "count":None, "truncated":False, "windows":[]},
 ])
 def test_render_preserves_multiple_and_unavailable_window_facts(pause):
-    from ..agent.world.semantic_surface import render
+    from ..agent.world.query_rendering import render
     plan = plan_look(Surface(directory_with_windows()), {"kind":"game"}, ["pause_windows"], 0)
     raw = {"status":"ok", "data":{"results":[{"rows":[{"pause_windows":pause}],
             "scope":{}, "state":"complete", "fields":"complete", "listing":"complete"}]}}

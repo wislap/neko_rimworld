@@ -15,11 +15,9 @@ from .native_state import (
     state_contract,
 )
 from .object_identity import normalize_object_identities
+from .query_catalog import ASPECTS, KINDS, object_schema
 from .query_surface import Surface, SurfaceError
-from .semantic_surface import (
-    ASPECTS,
-    KINDS,
-    _object_schema,
+from .query_validation import (
     normalize_object,
     supported_aspects,
     supports_pause_windows,
@@ -38,7 +36,7 @@ def look_spec(directory):
         "parameters": {
             "type": "object",
             "properties": {
-                "object": _object_schema(directory),
+                "object": object_schema(directory),
                 "aspects": {"type": "array", "minItems": 1, "items": {"enum": [*ASPECTS, "state"]}},
                 "detail": {"type": "integer", "minimum": 0, "maximum": 100, "default": 0},
             },

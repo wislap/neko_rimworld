@@ -7,7 +7,6 @@ are read into memory. There is no payload importer on the consultation path.
 from __future__ import annotations
 
 import asyncio
-import json
 import math
 import os
 import re
@@ -18,7 +17,7 @@ from typing import Any
 
 from ...knowledge import IndexedKnowledgeView, KnowledgeLibrary
 from ...tool_contracts import ToolExecutionError, ToolSetup, ToolSpec
-from .wiki_records import byte_size, paths, render_entry
+from .wiki_records import bounded_text, byte_size, paths, render_entry
 
 MAX_RESULT_BYTES = 8 * 1024
 MAX_CANDIDATES = 3
@@ -92,14 +91,8 @@ def knowledge_directory() -> Path:
     return root / "neko-rimworld" / "knowledge"
 
 
-def _text(value: Any, limit: int = 256) -> str:
-    if not isinstance(value, str):
-        return ""
-    # Bound encoded bytes too, including adversarial escaped control characters.
-    value = value[:limit].encode("utf-8", errors="replace").decode("utf-8")
-    while len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > limit + 2:
-        value = value[: max(0, len(value) - max(1, len(value) // 4))]
-    return value
+def _bounded_or_empty(value: Any, limit: int = 256) -> str:
+    return bounded_text(value[:limit], limit) if isinstance(value, str) else ""
 
 
 class WikiStore:
@@ -145,15 +138,15 @@ class WikiStore:
         result["snapshot"] = {
             "format": snapshot["format"],
             "sha256": snapshot["sha256"],
-            **{key: _text(snapshot[key]) for key in ("game_version", "language", "generated_at")},
+            **{key: _bounded_or_empty(snapshot[key]) for key in ("game_version", "language", "generated_at")},
             "complete": snapshot["complete"],
             "provenance_complete": snapshot.get("provenance_complete", True),
-            "mods": [{k: _text(mod[k], 128) for k in ("package_id", "name")} for mod in snapshot["mods"][:16]],
+            "mods": [{k: _bounded_or_empty(mod[k], 128) for k in ("package_id", "name")} for mod in snapshot["mods"][:16]],
             "mods_truncated": len(snapshot["mods"]) > 16,
         }
-        result["issues"] = [_text(issue) for issue in snapshot["issues"][:4]]
+        result["issues"] = [_bounded_or_empty(issue) for issue in snapshot["issues"][:4]]
         warnings = snapshot.get("warnings", [])
-        result["warnings"] = [_text(warning) for warning in warnings[:4]]
+        result["warnings"] = [_bounded_or_empty(warning) for warning in warnings[:4]]
         result["warnings_truncated"] = result["warnings"] != warnings
         needle = query.strip().casefold()
         terms = _terms(needle)
@@ -262,11 +255,11 @@ class WikiStore:
             for row in ranked[:MAX_CANDIDATES]:
                 entry = self._view.read_entry(row[4])
                 card = {
-                    key: _text(entry[key], 512 if key == "description" else 128)
+                    key: _bounded_or_empty(entry[key], 512 if key == "description" else 128)
                     for key in ("type", "def_name", "label", "description", "source_mod", "package_id")
                 }
                 diagnostics = sorted(entry.get("diagnostics", []), key=lambda d: d["kind"] != "incomplete")
-                notes = [{k: _text(d[k], 128) for k in ("path", "kind", "reason")} for d in diagnostics[:1]]
+                notes = [{k: _bounded_or_empty(d[k], 128) for k in ("path", "kind", "reason")} for d in diagnostics[:1]]
                 card.update(
                     key=entry["key"] if byte_size(entry["key"]) < 2048 else None,
                     match=row[5],

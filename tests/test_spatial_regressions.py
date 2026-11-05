@@ -3,8 +3,12 @@
 import copy
 
 import pytest
-from plugin.plugins.neko_rimworld.agent.world import semantic_surface as surface
 from plugin.plugins.neko_rimworld.agent.world.look_tools import look_spec
+from plugin.plugins.neko_rimworld.agent.world.query_planner import route_object
+from plugin.plugins.neko_rimworld.agent.world.query_rendering import pack, render_blocked
+from plugin.plugins.neko_rimworld.agent.world.query_resolution import lookup_spec
+from plugin.plugins.neko_rimworld.agent.world.query_surface import SurfaceError
+from plugin.plugins.neko_rimworld.agent.world.query_validation import normalize_object
 
 from .consultation_setup import consultation_setup
 
@@ -30,7 +34,7 @@ def test_blocked_definition_lookup_never_certifies_instance_count():
     }
     before = copy.deepcopy(native)
     resolution = {"status": "missing_in_scope", "field": "def_name"}
-    output = surface.render_blocked(
+    output = render_blocked(
         "count", {"kind": "things", "definition": "Thing_Silver2520", "map": "Map_0"}, resolution, native
     )
     assert output["lookup"]["source"] == "thing_defs"
@@ -44,8 +48,8 @@ def test_blocked_definition_lookup_never_certifies_instance_count():
 
 
 def test_pawn_map_and_single_id_route_without_dropping_scope():
-    obj = surface.normalize_object({"kind": "pawn", "id": "pawn1", "map": "map2"})
-    root, args, where = surface.route_object(obj)
+    obj = normalize_object({"kind": "pawn", "id": "pawn1", "map": "map2"})
+    root, args, where = route_object(obj)
     assert root == "pawns" and args == {"map_id": "map2"}
     assert where == {"id": {"in": ["pawn1"]}}
 
@@ -53,11 +57,11 @@ def test_pawn_map_and_single_id_route_without_dropping_scope():
         def compile(self, request):
             return request
 
-    name = surface.normalize_object({"kind": "pawn", "name": "Alice", "map": "map2"})
-    lookup = surface.lookup_spec(Compiler(), name)
+    name = normalize_object({"kind": "pawn", "name": "Alice", "map": "map2"})
+    lookup = lookup_spec(Compiler(), name)
     assert lookup["request"]["blocks"][0]["args"] == {"map_id": "map2"}
-    with pytest.raises(surface.SurfaceError):
-        surface.normalize_object({"kind": "pawn", "id": "a", "ids": ["b"]})
+    with pytest.raises(SurfaceError):
+        normalize_object({"kind": "pawn", "id": "a", "ids": ["b"]})
 
 
 
@@ -80,7 +84,7 @@ async def test_look_reader_rejects_wrong_kind_aspect_before_guessing():
 
 
 def test_native_pack_preserves_actual_lookup_root_and_scope():
-    packed = surface.pack(
+    packed = pack(
         {
             "results": [
                 {
@@ -96,7 +100,7 @@ def test_native_pack_preserves_actual_lookup_root_and_scope():
             ]
         }
     )
-    result = surface.render_blocked(
+    result = render_blocked(
         "count",
         {"kind": "things", "definition": "Thing_Silver2520"},
         {"field": "def_name", "status": "missing_in_scope"},
@@ -112,11 +116,11 @@ def test_native_pack_preserves_actual_lookup_root_and_scope():
 
 
 def test_map_alias_routes_to_map_identity_without_scope_conflict():
-    obj = surface.normalize_object({"kind": "map", "map": "Map_0"})
-    assert surface.route_object(obj) == ("map", {"id": "Map_0"}, None)
-    assert surface.route_object(surface.normalize_object({"kind": "map", "id": "Map_0"})) == surface.route_object(obj)
-    with pytest.raises(surface.SurfaceError):
-        surface.normalize_object({"kind": "map", "map": "Map_0", "id": "Map_1"})
+    obj = normalize_object({"kind": "map", "map": "Map_0"})
+    assert route_object(obj) == ("map", {"id": "Map_0"}, None)
+    assert route_object(normalize_object({"kind": "map", "id": "Map_0"})) == route_object(obj)
+    with pytest.raises(SurfaceError):
+        normalize_object({"kind": "map", "map": "Map_0", "id": "Map_1"})
 
 
 

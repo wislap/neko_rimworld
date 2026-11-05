@@ -2,7 +2,7 @@
 
 import copy
 
-from plugin.plugins.neko_rimworld.agent.world.semantic_surface import apply_lookup, lookup_spec
+from plugin.plugins.neko_rimworld.agent.world.query_resolution import apply_lookup, lookup_spec
 
 
 class RecordingSurface:
@@ -39,14 +39,14 @@ def test_capability_selection_schema_includes_native_meanings():
     import json
     from pathlib import Path
 
-    from plugin.plugins.neko_rimworld.agent.world.semantic_surface import _object_schema
+    from plugin.plugins.neko_rimworld.agent.world.query_catalog import object_schema
     from plugin.plugins.neko_rimworld.game.query_tools import make_game_tools
 
     async def forbidden(arguments):
         raise AssertionError("Catalog schema construction must not read the game")
     catalog = json.loads((Path(__file__).parent / "fixtures/current_query_catalog.json").read_text(encoding="utf-8"))
     directory = make_game_tools(catalog, forbidden).directory
-    schema = _object_schema(directory)
+    schema = object_schema(directory)
     capabilities = schema["properties"]["capabilities"]
     assert "bill_giver" in capabilities["items"]["enum"]
     assert "production" not in capabilities["items"]["enum"]
