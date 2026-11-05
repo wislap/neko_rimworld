@@ -3,6 +3,7 @@ import copy
 
 import pytest
 
+from ..workspace import run_records
 from ..workspace.attention_policy import load_policy
 from ..workspace.cadence import project
 from ..workspace.cadence_events import event_view
@@ -91,7 +92,7 @@ def test_cadence_projection_failure_rolls_back_completion_group(tmp_path, monkey
         before = journal.event_highwater("c")
         def fail(*args):
             raise RuntimeError("injected projection failure")
-        monkeypatch.setattr(journal, "_append_cadence", fail)
+        monkeypatch.setattr(run_records, "append_cadence", fail)
         with pytest.raises(RuntimeError, match="injected"):
             journal.finish_planner(*args)
         assert journal.event_highwater("c") == before

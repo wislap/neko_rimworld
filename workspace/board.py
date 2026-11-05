@@ -1,7 +1,7 @@
-"""Fixed board skeleton and author rules; pure checks with no storage access."""
+"""Fixed board skeleton, author rules and board projections; pure functions with no storage access."""
 
 from ..values import is_nonblank_text
-from .ledger import FRONTDESK, PLANNER, is_integer
+from .ledger import FRONTDESK, LOAD_EVENT, PLANNER, REVISION_EVENT, TAKEOVER_EVENT, is_integer
 
 FIELDS = frozenset(
     {
@@ -132,6 +132,46 @@ def check_revision(current, actor, submission):
         raise BoardError("A verified entry cites its verification evidence")
     row = {key: value for key, value in submission.items() if key != "expected_revision"}
     return {**row, "revision": seen + 1, "author": actor}
+
+
+def current_board(revisions):
+    """Latest revision of every entry, from board revision rows alone."""
+    latest = {}
+    for revision in revisions:
+        if revision["revision"] > latest.get(revision["entry_id"], {"revision": 0})["revision"]:
+            latest[revision["entry_id"]] = revision
+    return sorted(latest.values(), key=lambda entry: entry["entry_id"])
+
+
+def review_marks(revisions, events):
+    """Entries needing review: a load after their latest revision, or a takeover touching their changesets."""
+    last_load = 0
+    load_epoch = None
+    revision_epochs = {}
+    takeovers = []
+    for event in events:
+        if event["kind"] == LOAD_EVENT:
+            if event["seq"] > last_load:
+                last_load = event["seq"]
+                load_epoch = event.get("load_epoch")
+        elif event["kind"] == REVISION_EVENT:
+            revision_epochs[event["seq"]] = event.get("load_epoch")
+        elif event["kind"] == TAKEOVER_EVENT:
+            takeovers.append(event)
+    marks = {}
+    for entry in current_board(revisions):
+        reasons = []
+        revision_epoch = revision_epochs.get(entry["event_seq"])
+        if last_load and (last_load > entry["event_seq"]
+                          or not isinstance(load_epoch, str) or not load_epoch
+                          or not isinstance(revision_epoch, str) or not revision_epoch
+                          or revision_epoch != load_epoch):
+            reasons.append("load")
+        if any(t["seq"] > entry["event_seq"] and t["payload"]["changeset_id"] in entry["changesets"] for t in takeovers):
+            reasons.append("takeover")
+        if reasons:
+            marks[entry["entry_id"]] = reasons
+    return marks
 
 
 def _check_link_shape(submission):
