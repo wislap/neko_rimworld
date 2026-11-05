@@ -11,7 +11,8 @@ import html
 import io
 from collections.abc import Mapping
 
-from .construction_geometry import ConstructionPlanError, _integer, _point, plan_digest
+from ...serialization import identity_digest
+from .construction_geometry import ConstructionPlanError, _integer, _point
 from .spatial_observation import SpatialObservationError, observation_cells
 
 RENDER_FORMAT = "construction_render.v1"
@@ -91,7 +92,7 @@ def build_render_spec(observation, plan=None, check=None):
         "bounds": {"min_x": x0, "min_z": z0, "width": width, "height": height},
         "sample": copy.deepcopy(observation.get("sample")),
         "coverage": copy.deepcopy(observation.get("coverage", {})),
-        "source_sha256": plan_digest(observation),
+        "source_sha256": identity_digest(observation),
         "cells": [cells[p] for p in sorted(cells)],
         "objects": sorted(objects, key=lambda r: str(r.get("id", ""))),
         "elements": [],
@@ -107,7 +108,7 @@ def build_render_spec(observation, plan=None, check=None):
         def world(points):
             return [{"x": x + ox, "z": z + oz} for x, z in (_point(p, "local.cell") for p in points)]
 
-        result["plan_sha256"] = plan_digest(plan)
+        result["plan_sha256"] = identity_digest(plan)
         for key in ("plan_id", "revision"):
             if key in plan:
                 result[key] = copy.deepcopy(plan[key])

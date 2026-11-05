@@ -5,10 +5,10 @@ authority there. Native evidence is a separate, trusted ingestion path; a drawin
 or a planner statement cannot establish that an object exists in the world.
 """
 
-import hashlib
 import json
 from copy import deepcopy
 
+from ..serialization import identity_digest
 from .ledger import RETURN_EVENT, TAKEOVER_EVENT, is_integer
 
 FORMAT = "construction_state.v1"
@@ -47,8 +47,7 @@ def _plan(plan):
         if not isinstance(row.get("cells"), list) or not row["cells"] or any(not isinstance(cell, dict) or any(not is_integer(cell.get(axis)) for axis in ("x", "z")) for cell in row["cells"]):
             raise ValueError("Plan areas require explicit integer cells")
     # Sorting object keys makes plan identity independent of JSON object order.
-    encoded = json.dumps(plan, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":"))
-    return deepcopy(plan), hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    return deepcopy(plan), identity_digest(plan)
 
 
 def _event(kind, actor, **payload):
@@ -81,8 +80,7 @@ def _purpose_basis(current):
         basis["elements"].append({**{field: element.get(field) for field in ("id", "intent", "stage", "binding", "generation")},
                                   "native_action_id": (element.get("stop") or {}).get("native_action_id"),
                                   "fact_epoch": (element.get("fact") or {}).get("load_epoch")})
-    encoded = json.dumps(basis, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    return identity_digest(basis)
 
 
 def project(events, *, load_epoch):

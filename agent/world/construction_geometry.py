@@ -7,11 +7,10 @@ Plan coordinates are local to origin; observation coordinates are world cells.
 from __future__ import annotations
 
 import copy
-import hashlib
-import json
 from collections import deque
 from collections.abc import Mapping
 
+from ...serialization import identity_digest
 from .spatial_observation import SpatialObservationError, observation_cells
 
 PLAN_FORMAT = "construction_plan.v1"
@@ -25,11 +24,6 @@ SIDES = frozenset({"north", "east", "south", "west"})
 
 class ConstructionPlanError(ValueError):
     """The selected plan cannot be represented without guessing its meaning."""
-
-
-def plan_digest(value):
-    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _integer(value, name, *, minimum=None, maximum=None):
@@ -647,8 +641,8 @@ def inspect_layout(plan, observation=None):
     )
     return {
         "format": CHECK_FORMAT,
-        "plan_sha256": plan_digest(plan),
-        "observation_sha256": plan_digest(observation) if observation is not None else None,
+        "plan_sha256": identity_digest(plan),
+        "observation_sha256": identity_digest(observation) if observation is not None else None,
         "status": status,
         "checks": checks,
         "issues": issues,

@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .serialization import identity_digest
+
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_IMAGE_PIXELS = 16_777_216
 DEFAULT_MEDIA_CAPACITY_BYTES = 256 * 1024 * 1024
@@ -63,14 +65,7 @@ def _png_dimensions(data: bytes) -> tuple[int, int]:
 
 
 def _reference_identity(digest: str, metadata: Mapping[str, Any]) -> str:
-    value = json.dumps(
-        {"sha256": digest, "metadata": metadata},
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+    return identity_digest({"sha256": digest, "metadata": metadata})
 
 
 def _digest(reference: Mapping[str, Any]) -> str:

@@ -3,7 +3,8 @@ import json
 
 import pytest
 
-from plugin.plugins.neko_rimworld.agent.world.construction_geometry import compile_plan, inspect_layout, plan_digest
+from plugin.plugins.neko_rimworld.agent.world.construction_geometry import compile_plan, inspect_layout
+from plugin.plugins.neko_rimworld.serialization import identity_digest
 from plugin.plugins.neko_rimworld.agent.world.spatial_observation import SpatialObservationError, observation_cells
 from plugin.plugins.neko_rimworld.agent.world.spatial_rendering import build_render_spec, render_scene_svg
 from plugin.plugins.neko_rimworld.game import protocol as wire
@@ -141,11 +142,11 @@ def test_grouped_and_flat_geometry_drawing_and_roof_facts_are_equivalent():
     }
     # The actual original response remains the source identity, even when its
     # expanded cell meaning is equal. Only provenance labels differ in the SVG.
-    assert second_spec["source_sha256"] == plan_digest(compressed) != first_spec["source_sha256"]
+    assert second_spec["source_sha256"] == identity_digest(compressed) != first_spec["source_sha256"]
     normalized = (
         render_scene_svg(compressed, compiled, second)
-        .replace(plan_digest(compressed), plan_digest(flat))
-        .replace(plan_digest(compressed)[:16], plan_digest(flat)[:16])
+        .replace(identity_digest(compressed), identity_digest(flat))
+        .replace(identity_digest(compressed)[:16], identity_digest(flat)[:16])
     )
     assert normalized == render_scene_svg(flat, compiled, first)
     adoption = construction.prepare_adoption(

@@ -8,12 +8,12 @@ request reuse and presentation of a bounded move/transfer comparison.
 from __future__ import annotations
 
 import copy
-import json
 import re
 from collections.abc import Mapping
 from typing import Protocol
 
 from ...schema_serialization import schema_contract
+from ...serialization import identity as stable_identity
 from ...tool_contracts import MAX_TOOL_RESULT_CHARS, ToolExecutionError, ToolSpec
 from ..context.model_context import MAX_SOURCE_CHARS, model_size
 from .object_identity import canonical_object_identity
@@ -32,10 +32,6 @@ def _looks_like_native_id(value, kind):
     if kind == "thing":
         return value.startswith(("Thing_", "Building_", "Plant_", "Apparel_", "Weapon_"))
     return kind == "cell" and value.startswith("Cell_")
-
-
-def _key(value):
-    return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
 def _invalid(message):
@@ -68,7 +64,7 @@ def _refs(values, maximum, kinds=("pawn", "thing", "cell")):
     if not isinstance(values, list) or not 1 <= len(values) <= maximum:
         _invalid(f"Provide 1..{maximum} references.")
     refs = [_ref(v, kinds) for v in values]
-    if len({_key(v) for v in refs}) != len(refs):
+    if len({stable_identity(v) for v in refs}) != len(refs):
         _invalid("Duplicate candidates; use one reference per object.")
     return refs
 
@@ -337,7 +333,7 @@ class SemanticActivityDataSource:
         name = ref.get("name")
         if _looks_like_native_id(name, ref["kind"]):
             return {key: value for key, value in ref.items() if key != "name"} | {"id": name}
-        lookup = _key(ref)
+        lookup = stable_identity(ref)
         if lookup in self._resolved:
             return copy.deepcopy(self._resolved[lookup])
         request = dict(targets=[ref], sections=["identity"], exact_lookup=True)
@@ -561,7 +557,7 @@ async def evaluate_activity(arguments, source: ActivityDataSource):
     activities = [await source.resolve(normalize_activity(arguments))]
 
     reads, requests, candidates, read_options = {}, {}, [], {}
-    actors = {_key(actor) for item in activities for actor in item["actors"]}
+    actors = {stable_identity(actor) for item in activities for actor in item["actors"]}
     if len(actors) > MAX_ACTORS:
         _invalid(f"At most {MAX_ACTORS} actors in one activity.")
     maps = {ref.get("map") for item in activities for ref in (*item["actors"], *item["destination"]["candidates"], item["subject"], item["start"], item.get("user")) if ref and ref.get("map") not in (None, "current")}
@@ -586,7 +582,7 @@ async def evaluate_activity(arguments, source: ActivityDataSource):
                             args = dict(args, include_objects=True)
                         if activity.get("user"):
                             args["user"] = activity["user"]
-                    key = _key([operation, args])
+                    key = stable_identity([operation, args])
                     if key not in requests:
                         requests[key] = (f"r{len(requests) + 1}", operation, args)
                         read_options[requests[key][0]] = {"include": [], **({"focus": copy.deepcopy(activity.get("actor_focus", {}))} if kind == "actor_state" else {})}
@@ -703,7 +699,7 @@ async def evaluate_activity(arguments, source: ActivityDataSource):
         # Measure the composed result after adding this projected read. Preserve
         # every completed read and mark only the next work as not computed.
         sized = {"tool": "evaluate_activity", "data": result}
-        if (len(_key(result)) > MAX_SOURCE_CHARS) or model_size(
+        if (len(stable_identity(result)) > MAX_SOURCE_CHARS) or model_size(
             sized, arguments=arguments
         ) > MAX_TOOL_RESULT_CHARS - 8_000:
             reads[read_id] = dict(
