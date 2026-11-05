@@ -117,3 +117,10 @@ def test_counter_reports_a_safe_budget_metric() -> None:
 
     assert tokens > 0
     assert tokenizer in {"o200k_base", "utf8_bytes_upper_bound"}
+
+
+def test_counter_tolerates_special_token_text() -> None:
+    tokens, tokenizer = count_handoff_tokens("report <|endoftext|> done")
+
+    assert tokens > 0
+    assert tokenizer in {"o200k_base", "utf8_bytes_upper_bound"}

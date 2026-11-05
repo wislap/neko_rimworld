@@ -370,7 +370,7 @@ class FrontdeskService:
                                                      update_only, terminal=True),)
                     session.frontdesk_update_only = True
                     session.inbox = inbox
-                runs = select_narrative(events, summary, now_tick=game.game_tick, window_ticks=window)
+                runs = select_narrative(events, summary)
                 session.narrative_request = summary_request(summary, runs, policy["narrative_threshold"])
                 if session.narrative_request is not None:
                     async def accept_summary(text):

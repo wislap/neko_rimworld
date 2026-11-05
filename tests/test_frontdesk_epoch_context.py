@@ -147,7 +147,7 @@ async def test_real_submission_summary_has_source_but_omits_long_history_from_ne
     messages = [{"role": "assistant", "content": None, "tool_calls": [call]}, {"role": "tool", "tool_call_id": "submit-1", "content": "raw observation secret"}]
     run = await service.call("record_run", "c", "e", 10, "frontdesk", utterance, messages)
     events = await service.call("context_events", "c", 20, [], 180_000, 0)
-    source = select_narrative(events, None, now_tick=20)
+    source = select_narrative(events, None)
     result = await service.consult(game, "new question", settings())
     assert result["answer"] == "New complete answer."
     summary_input = str(model.requests[0])

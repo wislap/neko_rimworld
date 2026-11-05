@@ -6,7 +6,7 @@ import copy
 import hashlib
 import json
 
-from ..model.tokenization import tokenizer
+from ..model.tokenization import count_tokens
 
 TOKEN_BUDGET = 1_000
 SECTIONS = ("threats", "conditions", "alerts", "quests", "events")
@@ -14,14 +14,6 @@ SECTIONS = ("threats", "conditions", "alerts", "quests", "events")
 
 def _json(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-
-
-def _count(text):
-    encoding = tokenizer()
-    if encoding is None:
-        # UTF-8 bytes are a conservative upper bound for a byte-level tokenizer.
-        return len(text.encode("utf-8")), "utf8_bytes_upper_bound"
-    return len(encoding.encode(text, disallowed_special=())), encoding.name
 
 
 def _items(data):
@@ -143,27 +135,27 @@ def compile_situation(snapshot):
     for name in SECTIONS:
         if candidates[name]:
             view["sections"][name]["items"].append(_minimal_fact(candidates[name][0]))
-            if _count(render())[0] > TOKEN_BUDGET:
+            if count_tokens(render())[0] > TOKEN_BUDGET:
                 view["sections"][name]["items"].pop()
                 exhausted.add(name)
     for name in SECTIONS:
         if view["sections"][name]["items"]:
             minimum = view["sections"][name]["items"][0]
             view["sections"][name]["items"][0] = candidates[name][0]
-            if _count(render())[0] > TOKEN_BUDGET:
+            if count_tokens(render())[0] > TOKEN_BUDGET:
                 view["sections"][name]["items"][0] = minimum
     for index in range(1, max((len(items) for items in candidates.values()), default=0)):
         for name in SECTIONS:
             if name in exhausted or index >= len(candidates[name]):
                 continue
             view["sections"][name]["items"].append(candidates[name][index])
-            if _count(render())[0] > TOKEN_BUDGET:
+            if count_tokens(render())[0] > TOKEN_BUDGET:
                 view["sections"][name]["items"][-1] = _minimal_fact(candidates[name][index])
-                if _count(render())[0] > TOKEN_BUDGET:
+                if count_tokens(render())[0] > TOKEN_BUDGET:
                     view["sections"][name]["items"].pop()
                     exhausted.add(name)
     content = render()
-    if _count(content)[0] > TOKEN_BUDGET:
+    if count_tokens(content)[0] > TOKEN_BUDGET:
         # Oversized source metadata is still available in the original evidence.
         view.pop("clock", None)
         view["map_at_sample"] = data.get("sample", {}).get("map_id")
@@ -173,7 +165,7 @@ def compile_situation(snapshot):
             if "error" in section:
                 section["error"] = {"code": section["error"].get("code"), "detail_omitted": True}
         content = render()
-    tokens, method = _count(content)
+    tokens, method = count_tokens(content)
     if tokens > TOKEN_BUDGET:
         raise ValueError("Situation metadata exceeds the background budget")
     return {
@@ -197,10 +189,10 @@ def unavailable_situation(code, message, *, observation=None):
     content = "Game situation snapshot (sampled background data):\n" + _json(failure)
     # Native errors are bounded on the wire, but disclose only their stable code
     # if an exceptional diagnostic cannot fit. Full error stays in the audit.
-    if _count(content)[0] > TOKEN_BUDGET:
+    if count_tokens(content)[0] > TOKEN_BUDGET:
         failure.pop("message")
         content = "Game situation snapshot (sampled background data):\n" + _json(failure)
-    tokens, method = _count(content)
+    tokens, method = count_tokens(content)
     return {
         **failure,
         "observation_id": observation.get("observation_id") if observation else None,

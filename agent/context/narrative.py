@@ -2,13 +2,13 @@
 
 import json
 
-from ..model.tokenization import tokenizer
+from ..model.tokenization import count_tokens
 
 SUMMARY_EVENT = "frontdesk.narrative_summary"
 DEFAULT_THRESHOLD = 60_000
 
 
-def select_narrative(events, summary, *, now_tick, window_ticks=180_000):
+def select_narrative(events, summary):
     covered = summary["payload"]["covered_through_seq"] if summary else 0
     runs = []
     for event in events:
@@ -45,8 +45,7 @@ def narrative_texts(event):
 def summary_request(summary, runs, threshold=DEFAULT_THRESHOLD):
     source = {"previous_summary": summary["payload"]["text"] if summary else None, "runs": runs}
     data = json.dumps(source, ensure_ascii=False, separators=(",", ":"))
-    encoding = tokenizer()
-    count = len(encoding.encode(data, disallowed_special=())) if encoding else len(data.encode("utf-8"))
+    count, _ = count_tokens(data)
     if not runs or count <= threshold:
         return None
     return [

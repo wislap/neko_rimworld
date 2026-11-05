@@ -10,7 +10,7 @@ from typing import Any, Mapping
 from ...game.state import redact_text
 from ...schema_serialization import schema_contract
 from ...tool_contracts import ToolExecutionError, ToolSpec
-from ..model.tokenization import tokenizer as _tokenizer
+from ..model.tokenization import count_tokens
 
 PLAIN_ANSWER_GUIDANCE = "Standalone conclusion and material conditions; aim <=100 tokens, hard maximum 180."
 PLAIN_DETAIL_GUIDANCE = "Remaining explicitly requested findings/tables only. Full answer+detail <=12000 characters. Omitted retains saved detail; null clears it."
@@ -40,10 +40,7 @@ class SubmissionPatchError(HandoffValidationError):
 
 
 def count_handoff_tokens(text: str) -> tuple[int, str]:
-    encoding = _tokenizer()
-    if encoding is not None:
-        return len(encoding.encode(text)), "o200k_base"
-    return len(text.encode("utf-8", "replace")), "utf8_bytes_upper_bound"
+    return count_tokens(text)
 
 
 def _validated_text(value: object, *, field: str, max_chars: int) -> str:
