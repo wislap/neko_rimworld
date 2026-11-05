@@ -12,7 +12,7 @@ async def test_undo_rejects_connection_change_while_waiting_for_write_lock():
     game = SimpleNamespace(colony_id="c", load_epoch="e", game_tick=1)
     plugin._bridge = SimpleNamespace(session=game, connection_key="A")
     lock = asyncio.Lock()
-    plugin._colony_scheduler = SimpleNamespace(halted=False, write_lock=lock)
+    plugin._autoplay.scheduler = SimpleNamespace(halted=False, write_lock=lock)
     plugin._workspace_service = object()
     await lock.acquire()
     task = asyncio.create_task(plugin.autoplay_undo(seq=7, ui_nonce=plugin._settings_action_nonce))
@@ -52,7 +52,7 @@ async def test_undo_rejects_binding_changed_before_dispatch(monkeypatch, stage):
         if stage == "setup":
             plugin._bridge.connection_key = "B"
         if stage == "scheduler":
-            plugin._colony_scheduler = Scheduler()
+            plugin._autoplay.scheduler = Scheduler()
         return SimpleNamespace(write_catalog={}, write_port=object(),
                                write_identity=lambda: (plugin._bridge.connection_key, "c", "e"),
                                ledger_query=object(), write_fields_query=object())
@@ -69,8 +69,8 @@ async def test_undo_rejects_binding_changed_before_dispatch(monkeypatch, stage):
     monkeypatch.setattr(takeovers, "TakeoverControl", Guard)
     plugin._workspace_service = Work()
     plugin._load_agent_tools = setup
-    scheduler = plugin._colony_scheduler = Scheduler()
-    result = await plugin._autoplay_undo_locked(7, scheduler)
+    scheduler = plugin._autoplay.scheduler = Scheduler()
+    result = await plugin._autoplay.undo_locked(7, scheduler)
     if stage == "stable":
         assert result.is_ok() and calls == [{"token": "token"}]
         return
@@ -113,9 +113,9 @@ async def test_undo_unknown_outcome_stops_and_reports_without_retry(monkeypatch)
     monkeypatch.setattr(takeovers, "TakeoverControl", Guard)
     plugin._workspace_service = Work()
     plugin._load_agent_tools = setup
-    plugin._autoplay_failure = failure
-    scheduler = plugin._colony_scheduler = Scheduler()
-    result = await plugin._autoplay_undo_locked(7, scheduler)
+    plugin._autoplay.failure = failure
+    scheduler = plugin._autoplay.scheduler = Scheduler()
+    result = await plugin._autoplay.undo_locked(7, scheduler)
     assert not result.is_ok() and result.error.code == "undo_outcome_unknown"
     assert len(calls) == 1 and failures == [("scheduler", "undo_outcome_unknown", "A")]
 
@@ -152,9 +152,9 @@ async def test_undo_audit_failure_preserves_outcome_and_reconciliation(monkeypat
         failures.append(result)
     monkeypatch.setattr(write_service, "WriteService", Writer)
     monkeypatch.setattr(takeovers, "TakeoverControl", Guard)
-    plugin._workspace_service, plugin._load_agent_tools, plugin._autoplay_failure = Work(), setup, failure
-    scheduler = plugin._colony_scheduler = Scheduler()
-    result = await plugin._autoplay_undo_locked(7, scheduler)
+    plugin._workspace_service, plugin._load_agent_tools, plugin._autoplay.failure = Work(), setup, failure
+    scheduler = plugin._autoplay.scheduler = Scheduler()
+    result = await plugin._autoplay.undo_locked(7, scheduler)
     assert not result.is_ok() and result.error.details["outcome"] == outcome
     assert failures[0]["write_recording"]["needs_reconciliation"] is (outcome != "not_sent")
     if outcome == "not_sent":

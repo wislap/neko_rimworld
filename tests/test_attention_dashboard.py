@@ -38,7 +38,7 @@ async def test_dashboard_reads_current_scope_and_reports_delivery_outcome_withou
     plugin, _ = make_plugin({"neko_rimworld": {}})
     game = SimpleNamespace(colony_id="c", load_epoch="e", game_tick=250)
     plugin._bridge = SimpleNamespace(session=game, connection_key="conn", attention_available=True, running=True)
-    plugin._autoplay_budget = None
+    plugin._autoplay.budget = None
     service = FrontdeskService(tmp_path / "events.sqlite", None, game_session=lambda: game)
     plugin._workspace_service = service
     await service.call("record_autoplay_activation", "c", "e", 0, CHOICES)
@@ -80,7 +80,7 @@ async def test_dashboard_reads_current_scope_and_reports_delivery_outcome_withou
         "pause.watchdog",
         {"episode": list(episode), "action": "notify_result", "outcome": "rejected"},
     )
-    plugin._colony_scheduler = SimpleNamespace(pause_state=state)
+    plugin._autoplay.scheduler = SimpleNamespace(pause_state=state)
     before = await service.call("events", "c")
     try:
         dashboard = await plugin.dashboard_ui_context()
@@ -165,10 +165,10 @@ async def test_dashboard_capability_unknown_until_bound_projection_then_explicit
     plugin, _ = make_plugin({"neko_rimworld": {}})
     game = SimpleNamespace(colony_id="c", load_epoch="e", game_tick=0)
     plugin._bridge = SimpleNamespace(session=game, connection_key="conn", attention_available=False, running=True)
-    plugin._autoplay_budget = None
+    plugin._autoplay.budget = None
     service = FrontdeskService(tmp_path / "events.sqlite", None, game_session=lambda: game)
     plugin._workspace_service = service
-    plugin._colony_scheduler = SimpleNamespace(pause_state=None)
+    plugin._autoplay.scheduler = SimpleNamespace(pause_state=None)
     try:
         unprojected = await plugin.dashboard_ui_context()
         assert unprojected["autoplay"]["attention"]["available"] is None
@@ -196,7 +196,7 @@ async def test_dashboard_does_not_claim_watchdog_counts_without_eligible_episode
     plugin, _ = make_plugin({"neko_rimworld": {}})
     game = SimpleNamespace(colony_id="c", load_epoch="e", game_tick=0)
     plugin._bridge = SimpleNamespace(session=game, connection_key="conn", attention_available=True, running=True)
-    plugin._autoplay_budget = None
+    plugin._autoplay.budget = None
     service = FrontdeskService(tmp_path / "events.sqlite", None, game_session=lambda: game)
     plugin._workspace_service = service
     state = {
@@ -213,7 +213,7 @@ async def test_dashboard_does_not_claim_watchdog_counts_without_eligible_episode
         "force_paused": False,
         "windows_force_paused": False,
     }
-    plugin._colony_scheduler = SimpleNamespace(pause_state=state)
+    plugin._autoplay.scheduler = SimpleNamespace(pause_state=state)
     try:
         dashboard = await plugin.dashboard_ui_context()
         watchdog = dashboard["autoplay"]["pause_watchdog"]
@@ -270,7 +270,7 @@ async def test_dashboard_scope_change_during_projection_returns_unknown(tmp_path
     plugin, _ = make_plugin({"neko_rimworld": {}})
     game = SimpleNamespace(colony_id="c", load_epoch="e", game_tick=250)
     plugin._bridge = SimpleNamespace(session=game, connection_key="conn", attention_available=True, running=True)
-    plugin._autoplay_budget = None
+    plugin._autoplay.budget = None
     service = FrontdeskService(tmp_path / "events.sqlite", None, game_session=lambda: game)
     plugin._workspace_service = service
     await service.call("record_autoplay_activation", "c", "e", 0, CHOICES)
@@ -297,7 +297,7 @@ async def test_dashboard_scope_change_during_projection_returns_unknown(tmp_path
         "force_paused": False,
         "windows_force_paused": False,
     }
-    plugin._colony_scheduler = SimpleNamespace(pause_state=state)
+    plugin._autoplay.scheduler = SimpleNamespace(pause_state=state)
     assert (await plugin.dashboard_ui_context())["autoplay"]["attention"]["level"] == "urgent"
     entered, release = asyncio.Event(), asyncio.Event()
     original = service.call
@@ -341,10 +341,10 @@ async def test_dashboard_shows_valid_declaration_when_native_capability_missing(
     plugin, _ = make_plugin({"neko_rimworld": {}})
     game = SimpleNamespace(colony_id="c", load_epoch="e", game_tick=1)
     plugin._bridge = SimpleNamespace(session=game, connection_key="conn", attention_available=False, running=True)
-    plugin._autoplay_budget = None
+    plugin._autoplay.budget = None
     service = FrontdeskService(tmp_path / "events.sqlite", None, game_session=lambda: game)
     plugin._workspace_service = service
-    plugin._colony_scheduler = SimpleNamespace(pause_state=None)
+    plugin._autoplay.scheduler = SimpleNamespace(pause_state=None)
     try:
         await service.call("record_autoplay_activation", "c", "e", 0, CHOICES)
         if actor == "planner":

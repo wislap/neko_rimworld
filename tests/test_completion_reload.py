@@ -41,13 +41,13 @@ async def test_response_after_reload_saves_old_terminal_and_runs_new_epoch(tmp_p
         return result
     service.call = commit_without_ack
     plugin, _ = make_plugin({"neko_rimworld":{}})
-    plugin._autoplay_waiters = {}
+    plugin._autoplay.waiters = {}
     plugin._bridge = SimpleNamespace(session=state["game"], connection_key="A")
     async def handler(role, result, origin):
-        await plugin._autoplay_failure(role, result, origin, origin_scheduler=scheduler)
+        await plugin._autoplay.failure(role, result, origin, origin_scheduler=scheduler)
     scheduler = ColonyScheduler(service, settings(), failure_handler=None if lost_ack else handler,
                                 binding=lambda:(state["game"].connection_epoch, "c", state["game"].load_epoch))
-    plugin._colony_scheduler = scheduler
+    plugin._autoplay.scheduler = scheduler
     scheduler.start()
     try:
         await scheduler.wake(state["game"], source="plugin", text="start old")
@@ -118,21 +118,21 @@ async def test_real_persistence_failure_keeps_original_scope_and_stops_shared_ru
     recorded = []
     class Service:
         async def call(self, *args, **kwargs): recorded.append(args)
-    scheduler = plugin._colony_scheduler = SimpleNamespace(halted=False, budget=SimpleNamespace(blocked=False), service=Service())
-    plugin._autoplay_waiters = {}
+    scheduler = plugin._autoplay.scheduler = SimpleNamespace(halted=False, budget=SimpleNamespace(blocked=False), service=Service())
+    plugin._autoplay.waiters = {}
     for index, binding in enumerate(((scheduler,"A","c","old"), (scheduler,"B","c","new"))):
         future = asyncio.get_running_loop().create_future()
         future._autoplay_binding = binding
-        plugin._autoplay_waiters[index] = future
+        plugin._autoplay.waiters[index] = future
     async def notify(*args, **kwargs): pass
-    plugin._audit_failure_notification = notify
-    await plugin._autoplay_failure("planner", {"audit":{"error_code":code, "start_seq":4,
+    plugin._autoplay.audit_failure_notification = notify
+    await plugin._autoplay.failure("planner", {"audit":{"error_code":code, "start_seq":4,
                                   "context_tick":100, "run_id":"old-run"}}, old, origin_scheduler=scheduler)
     assert scheduler.halted and scheduler.budget.blocked
-    assert plugin._autoplay_fault["origin_load_epoch"] == "old"
-    assert plugin._autoplay_fault["origin_connection_epoch"] == "A"
-    assert plugin._autoplay_fault["start_seq"] == 4
-    assert all(waiter.done() for waiter in plugin._autoplay_waiters.values())
+    assert plugin._autoplay.fault["origin_load_epoch"] == "old"
+    assert plugin._autoplay.fault["origin_connection_epoch"] == "A"
+    assert plugin._autoplay.fault["start_seq"] == 4
+    assert all(waiter.done() for waiter in plugin._autoplay.waiters.values())
     assert not any(args[4] == "autoplay.stale_failure" for args in recorded)
 
 
@@ -149,21 +149,21 @@ async def test_stop_keeps_pending_owner_until_storage_recovers():
                 raise OSError("injected unavailable store")
             return 20
     async def failure(role, result, origin):
-        await plugin._autoplay_failure(role, result, origin, origin_scheduler=scheduler)
+        await plugin._autoplay.failure(role, result, origin, origin_scheduler=scheduler)
     scheduler = ColonyScheduler(Service(), None, failure_handler=failure)
     scheduler.budget = SimpleNamespace(blocked=False)
     pending = _PlannerResult(old,10,4,7,{"status":"interrupted"},{"run_id":"old-run"})
     scheduler.unsaved_result = pending
-    plugin._colony_scheduler = scheduler
+    plugin._autoplay.scheduler = scheduler
     plugin._bridge = SimpleNamespace(session=current, connection_key="B")
-    plugin._autoplay_waiters = {}
+    plugin._autoplay.waiters = {}
     async def notify(*args, **kwargs): pass
-    plugin._audit_failure_notification = notify
+    plugin._autoplay.audit_failure_notification = notify
     with pytest.raises(OSError):
-        await plugin._stop_autoplay()
-    assert plugin._colony_scheduler is scheduler and scheduler.unsaved_result is pending
+        await plugin._autoplay.stop()
+    assert plugin._autoplay.scheduler is scheduler and scheduler.unsaved_result is pending
     assert scheduler.halted and scheduler.budget.blocked
     assert scheduler._worker is None
     unavailable = False
-    await plugin._stop_autoplay()
-    assert plugin._colony_scheduler is None and scheduler.unsaved_result is None
+    await plugin._autoplay.stop()
+    assert plugin._autoplay.scheduler is None and scheduler.unsaved_result is None

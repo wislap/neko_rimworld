@@ -262,7 +262,7 @@ async def test_export_diagnostics_separate_failure_stage_without_exposing_errors
                 raise outcome
             return outcome
         plugin.export_push = export
-        return await plugin._export_report(report_id, context)
+        return await plugin._report_service.export(report_id, context)
 
     for outcome, expected in [
         (TimeoutError("secret timeout"), {"stage": "export_push", "kind": "timeout"}),
@@ -277,11 +277,11 @@ async def test_export_diagnostics_separate_failure_stage_without_exposing_errors
                          "diagnostic": expected}
         assert "secret" not in str(value)
     assert await run_export({"success": True}) == {"status": "exported"}
-    assert await plugin._export_report(report_id, {}) == {"status": "unavailable", "reason": "no_host_run"}
+    assert await plugin._report_service.export(report_id, {}) == {"status": "unavailable", "reason": "no_host_run"}
     def failed_read(_):
         raise OSError("secret path")
     plugin._reports.read = failed_read
-    assert await plugin._export_report(report_id, context) == {
+    assert await plugin._report_service.export(report_id, context) == {
         "status": "unavailable", "reason": "export_failed", "report_retained": None,
         "diagnostic": {"stage": "report_read", "kind": "error"}}
 
@@ -289,6 +289,6 @@ async def test_export_diagnostics_separate_failure_stage_without_exposing_errors
 @pytest.mark.asyncio
 async def test_missing_report_export_does_not_claim_report_is_retained():
     plugin, _ = make_plugin({})
-    outcome = await plugin._export_report("f" * 32, {"run_id": "host-run"})
+    outcome = await plugin._report_service.export("f" * 32, {"run_id": "host-run"})
     assert outcome == {"status": "unavailable", "reason": "export_failed", "report_retained": None,
                        "diagnostic": {"stage": "report_read", "kind": "error"}}

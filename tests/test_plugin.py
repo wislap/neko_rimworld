@@ -9,13 +9,9 @@ import socket
 from typing import Any
 
 import pytest
-from plugin.plugins.neko_rimworld.entry import (
-    BridgeSettings,
-    NekoRimworldPlugin,
-    _agent_handoff,
-    _parse_settings,
-    _query_summary,
-)
+from plugin.plugins.neko_rimworld.agent.delivery.handoff import attach_agent_handoff
+from plugin.plugins.neko_rimworld.configuration import BridgeSettings, SettingsSaveOperations, parse_bridge_settings
+from plugin.plugins.neko_rimworld.entry import NekoRimworldPlugin, _query_summary
 from plugin.plugins.neko_rimworld.agent.model.model_client import AgentModelSettings, build_agent_model_settings
 from plugin.plugins.neko_rimworld.agent.runtime.audit import AgentAuditLedger, AgentAuditRegistry, AgentRunState
 from plugin.plugins.neko_rimworld.agent.runtime.loop import AgentRuntime
@@ -78,6 +74,7 @@ class FakeLogger:
 
 def make_plugin(config: object) -> tuple[NekoRimworldPlugin, list[dict[str, Any]]]:
     plugin = object.__new__(NekoRimworldPlugin)
+    plugin._compose_services()
     logger = FakeLogger()
     reports: list[dict[str, Any]] = []
     plugin.logger = logger
@@ -88,7 +85,7 @@ def make_plugin(config: object) -> tuple[NekoRimworldPlugin, list[dict[str, Any]
     plugin._bridge = None
     plugin._last_dashboard = {}
     plugin._workspace_service = None
-    plugin._consultation_tasks = set()
+    plugin._settings_saves = SettingsSaveOperations()
     plugin._settings_action_nonce = "hosted-ui-action-nonce"
     plugin._reconfigure_lock = asyncio.Lock()
     plugin.get_logger = lambda _suffix=None: logger
@@ -120,7 +117,7 @@ def reserve_port() -> int:
 
 
 def test_settings_are_bounded_without_exposing_token() -> None:
-    settings, warnings = _parse_settings(
+    settings, warnings = parse_bridge_settings(
         {
             "neko_rimworld": {
                 "port": True,
@@ -135,8 +132,8 @@ def test_settings_are_bounded_without_exposing_token() -> None:
 
 
 def test_token_length_matches_csharp_utf16_contract() -> None:
-    accepted, accepted_warnings = _parse_settings({"neko_rimworld": {"pairing_token": "😀" * 20}})
-    rejected, rejected_warnings = _parse_settings({"neko_rimworld": {"pairing_token": "😀" * 65}})
+    accepted, accepted_warnings = parse_bridge_settings({"neko_rimworld": {"pairing_token": "😀" * 20}})
+    rejected, rejected_warnings = parse_bridge_settings({"neko_rimworld": {"pairing_token": "😀" * 65}})
     assert accepted.token_configured
     assert not accepted_warnings
     assert not rejected.token_configured
@@ -764,7 +761,7 @@ async def test_consult_returns_only_independent_agent_result(tmp_path) -> None:
 def test_agent_handoff_does_not_derive_agent_text_from_degraded_fields() -> None:
     from utils.result_parser import parse_plugin_result
 
-    result = _agent_handoff(
+    result = attach_agent_handoff(
         {
             "status": "degraded",
             "answer": "The colony snapshot is available.",

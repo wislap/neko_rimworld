@@ -91,6 +91,8 @@ async def test_idle_query_passes_binding_and_busy_without_changing_ordinary_read
             return fixture_response()
 
     plugin = object.__new__(NekoRimworldPlugin)
+
+    plugin._compose_services()
     plugin._bridge = Bridge()
     await plugin._agent_query_tool({"operation": "query", "arguments": {}})
     with pytest.raises(ToolExecutionError) as caught:

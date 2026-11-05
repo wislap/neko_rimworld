@@ -39,6 +39,8 @@ async def test_provider_composes_wiki_without_losing_original_setup(tmp_path, mo
         return original
 
     plugin = object.__new__(NekoRimworldPlugin)
+
+    plugin._compose_services()
     plugin._reports = ReportStore()
     plugin._catalog_tools = SimpleNamespace(load=load)
     plugin._knowledge_directory = tmp_path
@@ -68,6 +70,8 @@ async def test_invalid_knowledge_does_not_advertise_wiki(tmp_path, library):
         return ToolSetup(())
 
     plugin = object.__new__(NekoRimworldPlugin)
+
+    plugin._compose_services()
     plugin._reports = ReportStore()
     plugin._catalog_tools = SimpleNamespace(load=load)
     plugin._knowledge_directory = tmp_path
@@ -88,6 +92,8 @@ def test_provider_returns_while_background_refresh_is_blocked(tmp_path, monkeypa
         return original
 
     plugin = object.__new__(NekoRimworldPlugin)
+
+    plugin._compose_services()
     plugin._reports = ReportStore()
     plugin._catalog_tools = SimpleNamespace(load=load)
     plugin._knowledge = library

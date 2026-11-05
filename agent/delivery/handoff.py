@@ -312,8 +312,44 @@ def attach_agent_handoff(result: object) -> dict[str, Any]:
     return source
 
 
+def consultation_handoff(result, question):
+    """Carry operational state through the host's bounded text projection."""
+    handoff = attach_agent_handoff(result)
+    chinese = any("\u4e00" <= c <= "\u9fff" for c in question)
+    notices = []
+    if result.get("status") != "ok":
+        code = result.get("audit", {}).get("error_code")
+        reasons = {
+            "agent_run_budget": ("调查超时，未完整完成。", "Consultation incomplete: time limit."),
+            "agent_request_budget": ("模型请求次数已达上限，调查未完整完成。", "Consultation incomplete: model request limit."),
+            "world_changed": ("游戏世界已改变，需重新咨询。", "The game world changed; consult again."),
+            "agent_input_budget": ("输入预算已耗尽，调查未完整完成。", "Consultation incomplete: input limit."),
+        }
+        message = reasons.get(
+            code, ("调查未完整完成，请检查插件面板。", "Consultation incomplete; check the plugin panel.")
+        )
+        notices.append(message[0 if chinese else 1])
+    if result.get("workspace", {}).get("history_saved") is False:
+        notices.append("历史未保存。" if chinese else "History not saved.")
+    if result.get("continuity", {}).get("bound") is False:
+        notices.append(
+            "此轮为独立咨询，未接入持续工作。" if chinese else "Standalone consultation; no ongoing workspace attached."
+        )
+    if notices:
+        notice = " ".join(notices)
+        summary = notice + " " + handoff["summary"]
+        if count_handoff_tokens(summary)[0] > 200:
+            summary = notice + (
+                " 请在插件面板查看结果与证据。" if chinese else " Check the plugin panel for results and evidence."
+            )
+        handoff["summary"] = handoff["reply"] = summary
+        tokens, tokenizer = count_handoff_tokens(summary)
+        handoff["delivery"].update(handoff_tokens=tokens, tokenizer=tokenizer, operational_notice=True)
+    return handoff
+
+
 __all__ = [
     "HANDOFF_TOKEN_BUDGET", "HANDOFF_TRANSPORT_TOKEN_BUDGET", "HandoffValidationError",
     "SubmissionDraft", "SubmissionPatchError", "validate_full_text", "validate_agent_text",
-    "attach_agent_handoff", "count_handoff_tokens", "validate_submission",
+    "attach_agent_handoff", "consultation_handoff", "count_handoff_tokens", "validate_submission",
 ]

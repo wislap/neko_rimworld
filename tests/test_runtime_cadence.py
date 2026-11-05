@@ -158,9 +158,9 @@ async def test_startup_pause_uses_native_owner_without_overwriting_user_or_unkno
     plugin.data_path = lambda name: tmp_path / name
     plugin._agent_settings = settings()
     plugin._bridge = SimpleNamespace(session=game, connection_key="scripted")
-    plugin._autoplay_budget = None
-    plugin._colony_scheduler = None
-    plugin._autoplay_waiters = {}
+    plugin._autoplay.budget = None
+    plugin._autoplay.scheduler = None
+    plugin._autoplay.waiters = {}
     notifications = []
     plugin.ctx = SimpleNamespace(push_message=lambda **kwargs: notifications.append(kwargs) or {"submitted": True})
     world.capabilities = world.capabilities | {"colony_write.ledger_snapshot.v1"}
@@ -179,7 +179,7 @@ async def test_startup_pause_uses_native_owner_without_overwriting_user_or_unkno
     plugin._load_agent_tools = provider
     monkeypatch.setattr(ColonyScheduler, "start", lambda self: None)
     monkeypatch.setattr(ColonyScheduler, "resume", lambda self, bound: None)
-    scheduler = await plugin.start_colony_scheduler(CHOICES)
+    scheduler = await plugin._autoplay.start(CHOICES)
     try:
         expected = "planner" if initial == "running" else initial
         assert world.paused and world.pause_state()["owner"] == expected
@@ -196,7 +196,7 @@ async def test_startup_pause_uses_native_owner_without_overwriting_user_or_unkno
         assert initial_attention["sample"]["finished_tick"] == 0
         assert not any(event["kind"] == "game.event" for event in events)
     finally:
-        await plugin._stop_autoplay()
+        await plugin._autoplay.stop()
         await plugin._workspace_service.close()
 
 
@@ -363,8 +363,8 @@ async def test_startup_unknown_pause_read_fails_before_writing(tmp_path, monkeyp
     plugin.data_path = lambda name: tmp_path / name
     plugin._agent_settings = settings()
     plugin._bridge = SimpleNamespace(session=game, connection_key="scripted")
-    plugin._autoplay_budget = None
-    plugin._colony_scheduler = None
+    plugin._autoplay.budget = None
+    plugin._autoplay.scheduler = None
     calls = []
 
     async def unreadable(operation, arguments):
@@ -389,7 +389,7 @@ async def test_startup_unknown_pause_read_fails_before_writing(tmp_path, monkeyp
 
     plugin._load_agent_tools = provider
     with pytest.raises(ValueError, match="Startup pause state unavailable"):
-        await plugin.start_colony_scheduler(CHOICES)
+        await plugin._autoplay.start(CHOICES)
     try:
         events = await plugin._workspace_service.call("events", "scripted")
         assert calls == [] and not any(e["kind"] == "autoplay.activation" for e in events)
@@ -413,9 +413,9 @@ async def test_startup_preserves_forced_native_pause_without_sending_write(tmp_p
     plugin.data_path = lambda name: tmp_path / name
     plugin._agent_settings = settings()
     plugin._bridge = SimpleNamespace(session=game, connection_key="scripted")
-    plugin._autoplay_budget = None
-    plugin._colony_scheduler = None
-    plugin._autoplay_waiters = {}
+    plugin._autoplay.budget = None
+    plugin._autoplay.scheduler = None
+    plugin._autoplay.waiters = {}
     calls = []
     state = {
         **world.pause_state(),
@@ -456,11 +456,11 @@ async def test_startup_preserves_forced_native_pause_without_sending_write(tmp_p
     plugin._load_agent_tools = provider
     monkeypatch.setattr(ColonyScheduler, "start", lambda self: None)
     monkeypatch.setattr(ColonyScheduler, "resume", lambda self, bound: None)
-    scheduler = await plugin.start_colony_scheduler(CHOICES)
+    scheduler = await plugin._autoplay.start(CHOICES)
     try:
         assert calls == [] and scheduler.pause_state == state
     finally:
-        await plugin._stop_autoplay()
+        await plugin._autoplay.stop()
         await plugin._workspace_service.close()
 
 
