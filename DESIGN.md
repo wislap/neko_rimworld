@@ -1,11 +1,19 @@
-# N.E.K.O RimWorld v3.2 consultation architecture
+# N.E.K.O RimWorld v3.3 runtime architecture
 
 The host sees `rimworld_consult(question)`. The plugin owns an independent,
-read-only consultation with the configured model; it does not execute game orders.
-Product metadata uses `3.2.0`; this describes the v3.2 source implementation,
+read-only consultation with the configured model. Explicit autoplay adds guarded native configuration writes.
+Product metadata uses `3.3.0`; this describes the current source implementation,
 not a published/deployed release or a content-quality certification. Protocol
 versions and SDK support ranges retain their independent contracts.
 The native query contract is in [DATA_PATH.md](DATA_PATH.md).
+
+## Persistent autoplay
+
+The frontdesk owns user intents and communication; one serial planner owns strategy, tasks and native writes. Journal transactions append original observations, user words, board revisions, usage and terminal results. ColonyScheduler is the only role dispatcher. Native attention is classified by one versioned policy; cadence derives startup/daily/signal/escalated work and steady/focus/urgent levels from recorded facts. The same runtime executes these run types.
+
+Confirmed initial observation, load, activation and native events determine current epoch. Role progress and delayed old results cannot change it. Completion retains its original scope/context and uses that scope’s recording watermark. A reload keeps activation’s fixed daily schedule, invalidates old declarations and permits new-scope work while old results are saved without deriving old work. Initial read-only confirmation records colony.observed; legacy history without a confirmed identity receives the existing load-review notice.
+
+The product defaults to read-only and never auto-enables autoplay. See [runtime defaults and study differences](docs/RUNTIME-DEFAULTS.md) for budgets, startup behavior and pending real acceptance.
 
 ## Runtime and boundaries
 
@@ -52,12 +60,11 @@ without reconstructing reference parts.
 `submit_response(answer, detail?, language?)` accepts answer as one text string.
 The short answer must fit 180 tokens; answer plus detail must fit 12000 characters.
 There are no answer parts, citation rendering, fact budgets or policy switches.
-The deterministic claims checker always binds assertions to current observation
-subjects and scope. A rejected claim does not enter committed text or failure output.
+Natural-language claim checks retain scope-bound audit diagnostics; they do not reject the entire submission or add a model call. Format, explicit references and transport bounds still validate delivery. Successful delivery is not a factual certification.
 
 Valid draft fields survive rejection. Omitted detail stays saved; explicit null
 clears it. A pure short-answer length repair sends answer alone using a small
-request and preserves detail. Other claim/structure failures retain the research
+request and preserves detail. Other structural failures retain the research
 context. Trailing tool-serialization fragments are removed only from rendered
 authored text; saved input and native observations remain unchanged.
 
@@ -88,3 +95,9 @@ Historical design and implementations are sealed outside production. Old
 experiments reproduce their original source rather than selecting retired modes
 inside the current runtime. The earlier selected A deployment and its historical evaluation, plus the v3.2
 source and latest regression scope, remain described in [README.md](README.md).
+
+## Distribution and test ownership
+
+Player packages exclude tests and their fixtures. ScriptedGameWorld lives in tests/scripted_world.py for software interleavings; production imports no test port. SemanticInteraction directly owns its submission-tool composition, using the shared handoff functions; there is no alternate research-surface base. Natural-language checks retain diagnostics, with no dormant claims_blocked state or hard rejection path.
+
+The player runtime owns mechanism generation validation and lookup in `mechanisms/store.py`, including its format identity. Offline index construction lives in the companion workspace scripts (`mechanism_index.py` / `index_game_mechanisms.py`) and is absent from the player package. Reader tests use independent synthetic generations; the scripts qualify the actual writer against this reader. The root package lazily exports only `NekoRimworldPlugin`; internal helpers are imported from their owning modules.

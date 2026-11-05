@@ -25,6 +25,7 @@ from .audit import (
 )
 from .execution_environment import ExecutionEnvironment
 from .prompt import build_runtime_advisory
+from .observation_record import record_observation
 from .session import AgentRunSession
 from .tools import ToolRegistry
 
@@ -134,6 +135,8 @@ class AgentRuntime:
                 raise asyncio.CancelledError
             return result
         finally:
+            if session.media_store is not None:
+                session.media_store.release("run:" + ledger.run_id)
             self._active_tasks.pop(ledger.run_id, None)
             self._audit_registry.finish(ledger)
 
@@ -363,6 +366,7 @@ class AgentRuntime:
             "knowledge_omitted": session.knowledge_omitted,
             "evidence_views": copy.deepcopy(session.evidence_views),
             "situation_context": copy.deepcopy(session.situation_context),
+            "attachments": [copy.deepcopy(item["media"]) for item in session.attachments],
         }
         if session.workspace_id is not None:
             record["workspace_id"] = session.workspace_id
@@ -540,7 +544,7 @@ class AgentRuntime:
                 from ..delivery.references import visible_references
                 session.visible_reply_references = visible_references(
                     request_messages, session.observations, session.colony_id,
-                    session.budget_scope[1], session.run_start)
+                    session.budget_scope[1], session.run_start, media_manifest=session.last_request_media)
             ledger.transition(
                 AgentRunState.MODEL_RESPONDED,
                 "model_response_received",
@@ -635,7 +639,7 @@ class AgentRuntime:
                                     call, "world_changed", "The active colony changed.", recoverable=False
                                 )
                             else:
-                                session.observations.append(result.observation)
+                                await record_observation(session, result.observation, source=setup.observation_source)
                         session.retain_knowledge(result)
                         ledger.record(
                             "tool_completed" if result.ok else "tool_failed",
@@ -661,7 +665,9 @@ class AgentRuntime:
                         )
                     tool_message = session.tool_message(result)
                     if session.persist_progress is not None:
-                        await session.persist_progress({"stage": "tool", "message": tool_message, "tool_call_id": result.call_id, "tool_result": result.value, "observation": result.observation})
+                        await session.persist_progress({"stage": "tool", "message": tool_message, "tool_call_id": result.call_id,
+                            "tool_result": result.value, "observation": result.observation,
+                            **({"observation_source": setup.observation_source} if result.observation is not None else {})})
                     tool_messages.append(tool_message)
                     if session.evidence_views and session.evidence_views[-1]["call_id"] == result.call_id:
                         ledger.record("model_evidence_compiled", session.evidence_views[-1])

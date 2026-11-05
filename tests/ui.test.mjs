@@ -78,7 +78,7 @@ test("the guide translates every chapter and offers public downloads without run
       const external=[];h.window.parent.postMessage=message=>{if(message.type==='neko-hosted-surface-open-external')external.push(message.payload.url)};
       for(const link of links)link.click();
       assert.equal(external.length,7,"sandboxed downloads must go through the host external-link handler");
-      assert.ok(external.includes("https://github.com/wislap/NekoRimWorld/releases/download/v3.2.0/NekoRimWorld-3.2.0.zip"));
+      assert.ok(external.includes("https://github.com/wislap/NekoRimWorld/releases"));
       assert.ok(external.includes("https://github.com/wislap/n.e.k.o_plugin_neko_rimworld/releases"));
       assert.ok(external.every(url=>url.startsWith("https://")));
       for(const detail of h.root.querySelectorAll('details'))detail.querySelector('summary').click();
@@ -948,5 +948,125 @@ test("autoplay shows an active focus request when native attention is unavailabl
    assert.match(text,locale === "en" ? /Calculated from recorded facts and active requests/ : /根据已记录事实与有效声明计算/);
    assert.match(text,/Review treatment/);assert.match(text,/16000/);
   } finally {await h.close()}
+ }
+});
+
+function colonyWorkFixture() {
+ const render_spec={format:"construction_render.v1",map_id:"map:1",bounds:{min_x:10,min_z:20,width:3,height:3},sample:{game_tick:100},source_sha256:"observation-hash",plan_sha256:"plan-hash",coverage:{cells_complete:false,objects_complete:true},
+  cells:[{x:10,z:20,known:true,walkable:true},{x:12,z:22,known:false}],objects:[{id:"bed:1",stage:"built",cells:[{x:10,z:20}]}],elements:[{id:"wall:1",layer:"building",cells:[{x:11,z:21}],interaction_cells:[{x:10,z:21},{x:12,z:21}]}],areas:[],issues:[{severity:"unknown",code:"observation_incomplete",reason:"Northern cells need observation",cells:[{x:12,z:22}],element_ids:["wall:1"]}]};
+ return {format:"colony_work.v1",load_epoch:"load:1",suggestions:[{event_seq:1,load_epoch:"load:old",suggestion_id:"possible-kitchen",plan:{title:"Possible kitchen"},reason:"Discuss this candidate",attachments:[],render_spec:{...render_spec,plan_id:'<script>alert("candidate")</script>'}}],
+  construction:{plans:[{plan_id:"house:1",task_id:"shelter",revision:2,plan:{title:"Shelter"},placement_complete:true,construction_complete:false,purpose_status:"not_evaluated",phase:"in_progress",counts:{required:2,fulfilled:1,stopped:1,unknown:0},render_spec,
+   elements:[{id:"wall:1",intent:"continue",stage:"frame",fresh:true,object_id:"frame:1"},{id:"bed:1",intent:"taken_over",stage:"user_replaced",fresh:false,intent_reason:"Player changed the bed"},{id:"roof:1",intent:"continue",stage:"designated",fresh:true}],attachments:[{evidence_id:"image:source-reference",reference_id:"source-reference",sha256:"image-byte-hash",mime_type:"image/png",width:64,height:64,metadata:{map_id:"map:1",load_epoch:"load:1",observation_id:"scene:1",revision:2}}],history:[{kind:"construction.adopted",seq:2,revision:1,load_epoch:"load:1"},{kind:"construction.revised",seq:3,revision:2,load_epoch:"load:1"}]}]},
+  resources:{decisions:[{allocation_id:"wood-choice",revision:1,reason:"Build shelter before kitchen",snapshot:{quantities:{WoodLog:80},map_id:"map:1",scope:{selected_sources:["spawned_ground","trader_stock"]},game_tick:100,load_epoch:"load:1",complete:true},assessment:{
+   independent:[{demand_id:"house",revision:2,window:"today",required:{WoodLog:60},shortfalls:{},unknown:[],satisfied:true},{demand_id:"kitchen",revision:1,window:"today",required:{WoodLog:50},shortfalls:{},unknown:[],satisfied:true}],
+   joint:[{window:"today",required:{WoodLog:110},shortfalls:{WoodLog:30},unknown:[],satisfied:false,status:"shortfall"}],
+   selected:{window:"today",current_stock:{satisfied:true,shortfalls:{}},demands:[{demand_id:"house",share:{WoodLog:60},remaining:{WoodLog:0},satisfied:true},{demand_id:"kitchen",share:{WoodLog:20},remaining:{WoodLog:30},satisfied:false}],stale:false},competition:[{resource:"WoodLog",window:"today",demand_ids:["house","kitchen"],shortfall:30}],discrepancies:[]},history:[{seq:4,revision:1,observation_id:"stock:1"}]}]},
+  policies:{impacts:[{impact_id:"food-impact",revision:1,permission:{policy_id:"food:1",scope_id:"colonists",mode:"members",members:["pawn:A"]},action:"edit",protections:[{kind:"effective_rules",pawn_id:"pawn:B",policy_id:"food:1"}],assessment:{status:"scope_conflict",actual_members:["pawn:A","pawn:B"],affected_members:["pawn:A","pawn:B"],extra_members:["pawn:B"],reasons:["additional_members","protected_effect"]},history:[{seq:5,revision:1,status:"scope_conflict"}]}]},
+  observations:{intents:[{observation_id:"watch:1",task_id:"shelter",revision:1,binding:{colony_id:"colony:1",load_epoch:"load:1",connection_epoch:"connection:1"},active:true,coverage_status:"partial",conditions:[{id:"door-watch",kind:"object_lifecycle",target_ids:["door:1"],sample_interval_ticks:250,expires_at_tick:10000,max_samples:20},{id:"wall-watch",kind:"object_lifecycle",target_ids:["wall:1"],sample_interval_ticks:250,expires_at_tick:10000,max_samples:20}],latest_facts:[{condition_id:"door-watch",status:"changed",sample_tick:500,receipt_id:"receipt:1",binding:{colony_id:"colony:1",load_epoch:"load:1",connection_epoch:"connection:1"}}],history:[{kind:"observation.requested",seq:6,revision:1}]}],coverage:[{observation_id:"watch:1",revision:1,status:"partial",binding:{colony_id:"colony:1",load_epoch:"load:1",connection_epoch:"connection:1"},covered_condition_ids:["door-watch"],uncovered_condition_ids:["wall-watch"],receipt_id:"receipt:1",ack:{reason:"Wall currently unavailable"}}]}};
+}
+
+test("colony projects distinguish discussion candidates, adopted revisions and native fulfillment without issuing writes",async()=>{
+ for(const locale of ["zh-CN","en"]){
+  const h=setup(locale,{session:{colony_id:"colony:1",load_epoch:"load:1"},autoplay:{enabled:false,colony_work:colonyWorkFixture()}});
+  try{await flush();await h.tab(locale==="en"?"Autoplay":"自动游玩");const content=h.root.textContent;
+   assert.match(content,locale==="en"?/Candidate — not adopted/:/尚未正式采用/);assert.match(content,/Possible kitchen/);assert.match(content,/Shelter/);
+   assert.match(content,locale==="en"?/Revision 2/:/修订 2/);assert.match(content,locale==="en"?/Construction complete: No/:/建筑已完工: 否/);
+   assert.match(content,locale==="en"?/Purpose assessment: Not evaluated/:/用途评价: 尚未评价/);
+   assert.match(content,locale==="en"?/Taken over by player/:/玩家已接管/);assert.match(content,locale==="en"?/Historical \/ needs reconciliation/:/历史证据 \/ 待重新核对/);
+   assert.match(content,/Northern cells need observation/);assert.doesNotMatch(content,/colony\.(?:value|image|title)/);
+   const image=h.root.querySelector('svg[role="img"]');assert.ok(image);assert.equal(image.namespaceURI,"http://www.w3.org/2000/svg");
+   const svg=image.outerHTML;assert.equal(image.querySelector('script'),null);assert.match(svg,/&lt;script&gt;/);assert.match(svg,/viewBox="0 0 3 3"/);assert.match(svg,/url\(#unknown\)/);
+   assert.equal(image.querySelectorAll('rect[stroke="#006d77"]').length,2);assert.match(content,/image-byte-hash/);assert.match(content,locale==="en"?/Area designated/:/区域已划定/);
+   const plan=h.state.autoplay.colony_work.construction.plans[0];plan.protected_targets=[{element_id:"retired-old-bed",source:"native",object_id:"old-bed",reason:"user_cancelled",seq:77,target:{map_id:"map:1",position:{x:10,z:20},definition:"Bed",layer:"building"}}];plan.elements[1].stop={reason:"user_replaced",released_by:78};h.render();await flush();
+   assert.match(h.root.textContent,/retired-old-bed/);assert.match(h.root.textContent,locale==="en"?/different plan does not release/:/换用其他方案不会解除/);assert.match(h.root.textContent,/map:1 · Bed · x 10, z 20/);assert.match(h.root.textContent,/78/);
+   assert.ok(h.calls.every(call=>call.id==="workspace_view"),"reading project states must not consult, register observations or write game state");
+  }finally{await h.close()}
+ }
+});
+
+test("operating view preserves independent, joint and selected resource readings and shared policy effects",async()=>{
+ for(const locale of ["en","zh-CN"]){
+  const h=setup(locale,{session:{load_epoch:"load:1"},autoplay:{enabled:true,colony_work:colonyWorkFixture()}});
+  try{await flush();await h.tab(locale==="en"?"Autoplay":"自动游玩");await h.click(locale==="en"?"Production and living":"生产与生活",'[role="tab"]');
+   const content=h.root.textContent;assert.match(content,/WoodLog: 80/);assert.match(content,/WoodLog: 110/);assert.match(content,/WoodLog: 30/);assert.match(content,/WoodLog: 20/);
+   assert.match(content,locale==="en"?/Independent requirement/:/独立需求/);assert.match(content,locale==="en"?/Joint requirement/:/联合需求/);assert.match(content,locale==="en"?/Selected allocation/:/已选分配/);
+   assert.match(content,/pawn:A, pawn:B/);assert.match(content,locale==="en"?/Scope conflict/:/范围冲突/);assert.match(content,locale==="en"?/Effective rules/:/保护实际生效规则/);
+   assert.match(content,locale==="en"?/Spawned on map ground.*Trader goods/:/地图地面物资.*商人物资/);assert.match(content,locale==="en"?/Impact assessment recorded at selection/:/选择时记录的影响评价/);
+   h.state.autoplay.colony_work.resources.decisions[0].assessment.selected.stale=true;h.state.autoplay.colony_work.resources.decisions[0].assessment.discrepancies=[{kind:"stock_changed"}];h.render();await flush();
+   assert.match(h.root.textContent,locale==="en"?/Stock changed/:/库存已变化/);assert.match(h.root.textContent,locale==="en"?/differs from the latest assessment/:/与最新评价存在差异/);
+   assert.doesNotMatch(h.root.textContent,/colony\.(?:value|resource|policy)/);assert.ok(h.calls.every(call=>call.id==="workspace_view"));
+   const decision=h.state.autoplay.colony_work.resources.decisions[0];decision.current_snapshot={...decision.snapshot,quantities:{WoodLog:65},game_tick:200};decision.current_demands=[{id:"kitchen",revision:2,window:"today",resources:{WoodLog:60}}];decision.evidence_status="current_epoch";h.render();await flush();
+   assert.match(h.root.textContent,locale==="en"?/Latest stock assessment sample: WoodLog: 65/:/最近一次库存评价采样: WoodLog: 65/);assert.match(h.root.textContent,locale==="en"?/Current load evidence/:/当前读档证据/);
+   decision.evidence_status="historical";for(const reading of [...decision.assessment.independent,...decision.assessment.joint,decision.assessment.selected.current_stock,...decision.assessment.selected.demands]){reading.historical_satisfied=reading.satisfied;reading.satisfied=null}decision.assessment.joint[0].status="historical";h.render();await flush();
+   assert.match(h.root.textContent,locale==="en"?/Current sufficiency is unknown/:/当前是否充足尚不清楚/);
+   const selectedTable=[...h.root.querySelectorAll('table')].find(table=>table.querySelector('thead').textContent.includes(locale==="en"?"Allocated share":"分配份额"));assert.ok(selectedTable);assert.match(selectedTable.textContent,locale==="en"?/Unknown/:/未知/);assert.doesNotMatch(selectedTable.querySelector('tbody').textContent,locale==="en"?/Yes/:/是/);
+  }finally{await h.close()}
+ }
+});
+
+test("observation view shows pending conditions, native receipts and lost coverage after load changes",async()=>{
+ const h=setup("en",{session:{load_epoch:"load:1"},autoplay:{enabled:true,colony_work:colonyWorkFixture()}});
+ try{await flush();await h.tab("Autoplay");await h.click("Observation coverage",'[role="tab"]');
+  let content=h.root.textContent;assert.match(content,/watch:1/);assert.match(content,/Partial/);assert.match(content,/wall-watch/);assert.match(content,/receipt:1/);assert.match(content,/Wall currently unavailable/);assert.match(content,/10000/);assert.match(content,/500/);
+  h.state.session.load_epoch="load:2";h.state.autoplay.colony_work.load_epoch="load:2";h.state.autoplay.colony_work.observations.intents[0].coverage_status="pending_rebind";Object.assign(h.state.autoplay.colony_work.observations.coverage[0],{status:"pending_rebind",binding:{colony_id:"colony:1",load_epoch:"load:2",connection_epoch:"connection:2"},covered_condition_ids:[],uncovered_condition_ids:["door-watch","wall-watch"],receipt_id:null,ack:null});h.render();await flush();
+  content=h.root.textContent;assert.match(content,/Waiting for connection registration/);assert.match(content,/Changed500Historical \/ needs reconciliationreceipt:1/);assert.doesNotMatch([...h.root.querySelectorAll('table')].at(-1).textContent,/receipt:1|Continuously covered/);
+  h.state.autoplay.colony_work.observations.coverage[0].condition_states={"door-watch":"unknown","wall-watch":"expired","food-watch":"exhausted"};h.render();await flush();assert.match(h.root.textContent,/door-watch: Unknown/);assert.match(h.root.textContent,/wall-watch: Expired/);assert.match(h.root.textContent,/food-watch: Sample limit reached/);
+  await h.click("Decision history",'[role="tab"]');content=h.root.textContent;for(const id of ["house:1","wood-choice","food-impact","watch:1"])assert.match(content,new RegExp(id));
+  assert.ok(h.calls.every(call=>call.id==="workspace_view"));
+ }finally{await h.close()}
+});
+
+test("old colony-work records remain visibly historical and do not become current evidence",async()=>{
+ const h=setup("en",{session:{load_epoch:"load:other"},autoplay:{enabled:false,colony_work:colonyWorkFixture()}});
+ try{await flush();await h.tab("Autoplay");assert.match(h.root.textContent,/another load or an unavailable session/);
+  h.state.autoplay.colony_work.construction.plans[0].render_spec.bounds.width=65;h.render();await flush();assert.match(h.root.textContent,/No native observation image/);
+  assert.ok(h.calls.every(call=>call.id==="workspace_view"));
+ }finally{await h.close()}
+});
+
+test("visual input remains opt-in and saves an explicit positive reservation through the existing receipt",async()=>{
+ for(const locale of ["en","zh-CN"]){
+  const h=setup(locale);
+  try{await flush();await h.tab(locale==="en"?"Settings":"设置");
+   const checkbox=h.root.querySelector('input[type="checkbox"]');assert.ok(checkbox);assert.equal(checkbox.checked,false);
+   const reservation=[...h.root.querySelectorAll('input[type="number"]')].at(-1);assert.equal(reservation.value,"0");
+   assert.match(h.root.textContent,locale==="en"?/Local previews and exports remain available/:/仍可在本地预览与导出图像/);
+   checkbox.checked=true;checkbox.dispatchEvent(new h.window.Event("change",{bubbles:true}));await flush();
+   await h.click(locale==="en"?"Save model settings":"保存模型设置");assert.equal(h.calls.filter(call=>call.id==="begin_settings_save").length,0);assert.match(h.root.textContent,locale==="en"?/requires a value greater than zero/:/必须大于零/);
+   await h.type(reservation,"2048");await h.click(locale==="en"?"Save model settings":"保存模型设置");
+   const saved=h.calls.find(call=>call.id==="begin_settings_save");assert.ok(saved);assert.equal(saved.args.kind,"agent");assert.equal(saved.args.image_input_enabled,true);assert.equal(saved.args.image_input_tokens_per_image,2048);assert.equal(saved.args.ui_nonce,"test-nonce");assert.match(saved.args.operation_id,/^[a-f0-9]{32}$/);
+   assert.match(h.root.textContent,locale==="en"?/Saved/:/已保存/);assert.ok(h.calls.every(call=>["workspace_view","begin_settings_save"].includes(call.id)),"changing endpoint capability must not start a consultation or a probe");
+  }finally{await h.close()}
+ }
+});
+
+test("visual capability edits survive dashboard refresh and cannot be saved with fractional reservations",async()=>{
+ const h=setup("en");
+ try{await h.tab("Settings");const reservation=[...h.root.querySelectorAll('input[type="number"]')].at(-1);await h.type(reservation,"1234");
+  Object.assign(h.state.configuration,{image_input_enabled:true,image_input_tokens_per_image:4096});h.render();await flush();assert.equal(reservation.value,"1234");assert.equal(h.root.querySelector('input[type="checkbox"]').checked,false);
+  await h.type(reservation,"1.5");await h.click("Save model settings");assert.equal(h.calls.filter(call=>call.id==="begin_settings_save").length,0);assert.match(h.root.textContent,/integer image reservation/);
+ }finally{await h.close()}
+});
+
+test("planner purpose findings stay separate from native completion and area returns count only actual protected cells",async()=>{
+ for(const locale of ["en","zh-CN"]){
+  const work=colonyWorkFixture(), plan=work.construction.plans[0];
+  plan.purpose_status="supported";plan.purpose_assessment={source:"planner_assessment",plan_id:"house:1",task_id:"shelter",revision:2,load_epoch:"load:1",goal:"Safe sleeping space",judgment:"supported",findings:["The recorded scene supports the requested sleeping layout."],evidence_ids:["scene:1","construction:1"],evidence_refs:[{observation_id:"scene:1",operation:"inspect_construction",sha256:"native-scene-hash",map_id:"map:1",game_tick:101,sample:{started_tick:100,finished_tick:101,load_epoch:"load:1"}},{observation_id:"construction:1",operation:"inspect_construction_intents",sha256:"native-progress-hash",map_id:"map:1",game_tick:105}],assessed_seq:8,assessed_tick:150,facts_through_seq:7,basis_fingerprint:"basis-hash",freshness:"current",stale:false,stale_reasons:[],current_revision:2,current_load_epoch:"load:1"};
+  const scopes=[{object:"Area_BuildRoof_7",field:"area_flag:10:20"},{object:"Area_BuildRoof_7",field:"area_flag:11:20"}];
+  const stop={source:"native",reason:"user_cancelled",scope:null,scopes,scope_returns:[{...scopes[0],return_seq:70}],target:{map_id:"map:1",kind:"roof",cells:[[10,20],[11,20],[10,21],[11,21]]}};
+  plan.elements[2].stop=stop;plan.protected_targets=[{element_id:"roof:1",seq:60,...stop}];
+  const h=setup(locale,{session:{load_epoch:"load:1"},autoplay:{enabled:true,colony_work:work}});
+  try{await flush();await h.tab(locale==="en"?"Autoplay":"自动游玩");let content=h.root.textContent;
+   assert.match(content,locale==="en"?/Planner finds supporting evidence/:/规划者认为有支持依据/);assert.match(content,locale==="en"?/Construction complete: No/:/建筑已完工: 否/);
+   assert.match(content,locale==="en"?/This is a model judgment/:/这是模型判断/);assert.match(content,/The recorded scene supports/);assert.match(content,/scene:1, construction:1/);assert.match(content,/Safe sleeping space/);
+   assert.match(content,locale==="en"?/Assessment event tick: 150/:/评价事件 tick: 150/);assert.match(content,/100–101/);assert.match(content,/native-scene-hash/);assert.match(content,/native-progress-hash/);
+   assert.match(content,locale==="en"?/Protected cells: 2 · Returned: 1 · Awaiting return: 1/:/受保护格数：2 · 已归还：1 · 待归还：1/);assert.doesNotMatch(content,locale==="en"?/Protected cells: 4|Awaiting return: 3/:/受保护格数：4|待归还：3/);
+   plan.purpose_status="unmet";plan.purpose_assessment.judgment="unmet";h.render();await flush();assert.match(h.root.textContent,locale==="en"?/Planner finds purpose unmet/:/规划者认为用途尚未满足/);
+   plan.purpose_status="unknown";plan.purpose_assessment.judgment="unknown";h.render();await flush();assert.match(h.root.textContent,locale==="en"?/Planner cannot determine purpose fulfillment/:/规划者无法判断用途是否满足/);
+   plan.purpose_status="stale";Object.assign(plan.purpose_assessment,{judgment:"supported",freshness:"stale",stale:true,stale_reasons:["revision_changed","load_epoch_changed","related_facts_changed"],current_revision:3,current_load_epoch:"load:2"});h.render();await flush();content=h.root.textContent;
+   assert.match(content,locale==="en"?/Assessment needs renewal/:/评价待重新核对/);assert.match(content,locale==="en"?/Related native facts or continuing intent changed/:/相关原生事实或持续意图已变化/);assert.match(content,/load:2/);assert.match(content,locale==="en"?/Construction complete: No/:/建筑已完工: 否/);
+   plan.elements[2].stop={reason:"user_cancelled",scope:scopes[0],released_by:71};plan.protected_targets=[];h.render();await flush();assert.match(h.root.textContent,locale==="en"?/Protected cells: 1 · Returned: 1 · Awaiting return: 0/:/受保护格数：1 · 已归还：1 · 待归还：0/);
+   assert.doesNotMatch(h.root.textContent,/colony\.(?:purpose|returned)/);assert.ok(h.calls.every(call=>call.id==="workspace_view"));
+  }finally{await h.close()}
  }
 });

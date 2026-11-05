@@ -7,6 +7,7 @@ import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
+from ...media import ImageInputConfig, MediaStore
 from ...message_contracts import AssistantTurn
 from ..context.context_pruning import ContextPruner
 from ..context.model_context import CONTEXT_TOOLS, make_pruner, validate_deployment
@@ -40,11 +41,19 @@ class AgentRunSession:
     model_receipt_unconfirmed: bool = False
     received_model_error: dict[str, Any] | None = field(default=None, repr=False)
     takeover_service: Any = field(default=None, repr=False)
+    colony_work_service: Any = field(default=None, repr=False)
+    colony_work_game: Any = field(default=None, repr=False)
     planner_terminal: bool = False
     frontdesk_update_only: bool = False
     result: dict[str, Any] | None = field(default=None, repr=False)
     model_calls: int = 0
     input_tokens_estimated: int = 0
+    image_tokens_reserved: int = 0
+    media_store: MediaStore | None = field(default=None, repr=False)
+    image_input: ImageInputConfig = field(default_factory=ImageInputConfig)
+    attachments: list[dict[str, Any]] = field(default_factory=list)
+    active_media: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    last_request_media: list[dict[str, Any]] = field(default_factory=list)
     tool_calls: int = 0
     observations: list[dict[str, Any]] = field(default_factory=list)
     write_outcomes: list[dict[str, Any]] = field(default_factory=list)
@@ -116,12 +125,35 @@ class AgentRunSession:
     def request_messages(self, advisory: str) -> list[dict[str, Any]]:
         return [
             *self.submission_repair_history(),
+            *self.media_messages(),
             {"role": "system", "content": advisory},
         ]
 
+    def attach_media(self, reference: dict[str, Any], *, caption: str = "", replace_active: bool = False, activate: bool = True) -> None:
+        """Add an explicit model input; saving an artifact alone never makes it visible."""
+        if self.media_store is None:
+            raise ValueError("Image attachments require a session media store.")
+        self.media_store.read(reference)
+        item = {"media": copy.deepcopy(reference), "caption": caption}
+        if item not in self.attachments:
+            self.attachments.append(item)
+        if replace_active:
+            self.active_media.clear()
+        if activate and item not in self.active_media:
+            self.active_media.append(item)
+
+    def media_messages(self) -> list[dict[str, Any]]:
+        if not self.active_media:
+            return []
+        parts = []
+        for item in self.active_media:
+            parts.extend([{"type": "text", "text": json.dumps({"caption": item["caption"], "media": item["media"]}, ensure_ascii=False)},
+                          {"type": "neko_image_ref", "media": copy.deepcopy(item["media"])}])
+        return [{"role": "user", "name": "retained_image_evidence", "content": parts}]
+
     def submission_repair_history(self):
         """Remove only superseded failed submissions, never research evidence."""
-        if not (self.submission.errors or self.submission.claims_blocked):
+        if not self.submission.errors:
             return self.messages
         pairs = []
         for i, message in enumerate(self.messages[:-1]):
@@ -174,7 +206,7 @@ class AgentRunSession:
         is unchanged by the existing length-only submission contract.
         """
         draft = self.submission
-        if draft.claims_blocked or set(draft.errors) != {"delivery"}:
+        if set(draft.errors) != {"delivery"}:
             return None
         if (
             draft.errors["delivery"].get("code") != "handoff_over_budget"
@@ -233,6 +265,9 @@ class AgentRunSession:
 
     def tool_message(self, result) -> dict[str, Any]:
         """Compile only the model-facing message; business/observation values stay intact."""
+        if result.ok:
+            for reference in result.media:
+                self.attach_media(reference)
         if result.model_content is not None:
             self.evidence_views.append({"call_id": result.call_id, "tool": result.name, **result.model_view_metrics})
             return result.as_message()

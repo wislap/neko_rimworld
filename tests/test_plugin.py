@@ -9,7 +9,7 @@ import socket
 from typing import Any
 
 import pytest
-from plugin.plugins.neko_rimworld import (
+from plugin.plugins.neko_rimworld.entry import (
     BridgeSettings,
     NekoRimworldPlugin,
     _agent_handoff,
@@ -729,7 +729,7 @@ async def test_consult_returns_only_independent_agent_result(tmp_path) -> None:
 
         async def execute(self, session, settings: AgentModelSettings) -> dict[str, Any]:
             self.calls.append((session.question, settings))
-            assert [tool.name for tool in session.capabilities] == ["frontdesk_board", "recall"]
+            assert [tool.name for tool in session.capabilities] == ["frontdesk_board", "recall", "policy_protection"]
             return {
                 "status": "ok",
                 "answer": "The colony is stable.",

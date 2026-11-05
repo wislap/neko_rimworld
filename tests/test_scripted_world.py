@@ -2,7 +2,7 @@
 
 import pytest
 
-from plugin.plugins.neko_rimworld.game.scripted_world import ScriptedGameWorld
+from plugin.plugins.neko_rimworld.tests.scripted_world import ScriptedGameWorld
 from plugin.plugins.neko_rimworld.tool_contracts import GameWritePort, ReceiptLost, ToolExecutionError
 
 EMPTY_POLICY = {"pause_on_letter_defs": [], "source": "frontdesk"}

@@ -12,11 +12,12 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 
 from ...game.state import redact_text
+from ...media import ImageInputConfig, MediaError, prepare_model_messages
 from ...message_contracts import AssistantTurn
 from ...tool_contracts import binding_is_current
 from ..runtime.audit import AgentRunState
 from .model_client import ModelClientError
-from .tokenization import tokenizer
+from .usage import input_reservation
 
 MAX_MODEL_ATTEMPTS = 3
 MODEL_RETRY_DELAYS_SECONDS = (0.5, 1.5)
@@ -103,11 +104,16 @@ async def request_model(
             messages = [*request_messages, {"role": "system", "content":
                 "Cumulative model budget (local estimates and reservations, not a provider bill): "
                 + json.dumps(state, ensure_ascii=False, sort_keys=True)}]
-        request_sha256 = _canonical_hash({"messages": messages, "tools": tool_schemas})
+        try:
+            wire_messages, attachments, image_tokens = prepare_model_messages(
+                messages, getattr(session, "media_store", None), getattr(session, "image_input", ImageInputConfig()))
+        except MediaError as error:
+            return ModelRequestResult(None, finalizing, ModelClientError(error.code, str(error)))
+        request_sha256 = _canonical_hash({"messages": wire_messages, "tools": tool_schemas})
         attempt_id = uuid.uuid4().hex
         encoded = json.dumps({"messages": messages, "tools": tool_schemas}, ensure_ascii=False, separators=(",", ":"), default=str)
-        encoding = tokenizer()
-        estimate = len(encoding.encode(encoded, disallowed_special=())) if encoding else len(encoded.encode("utf-8"))
+        allocation = input_reservation(encoded, image_tokens)
+        text_estimate, estimate = allocation["text_tokens"], allocation["tokens"]
         if session.input_tokens_estimated + estimate > settings.max_input_tokens:
             return ModelRequestResult(None, finalizing, ModelClientError("agent_input_budget", "The local cumulative input token estimate would exceed its limit."))
         request_timeout = min(
@@ -115,7 +121,7 @@ async def request_model(
             max(0.001, available),
         )
         request_event = {
-            "input_budget": {"tokens": estimate, "cumulative": session.input_tokens_estimated + estimate, "method": encoding.name if encoding else "utf8_bytes_upper_bound"},
+            "input_budget": {"tokens": estimate, "cumulative": session.input_tokens_estimated + estimate, "method": allocation["method"]},
             "model": settings.model,
             "base_url": settings.base_url,
             "timeout_seconds": request_timeout,
@@ -127,6 +133,12 @@ async def request_model(
             "attempt": attempt,
             "max_attempts": max_attempts,
         }
+        if attachments:
+            request_event["attachments"] = attachments
+            request_event["input_budget"].update(text_tokens=text_estimate, image_tokens_reserved=image_tokens,
+                                                  image_reservation_method="explicit_per_image")
+            # Pin the original bytes before the persisted request can refer to them.
+            session.media_store.retain("request:" + attempt_id, attachments)
         persist = getattr(session, "persist_progress", None)
         if persist is not None:
             # Preserve each actual attempt before dispatch, including retries.
@@ -142,7 +154,7 @@ async def request_model(
         budget = session.budget
         reservation = None
         if budget is not None:
-            reservation = await budget.reserve(session.role, max(estimate, len(encoded.encode("utf-8"))),
+            reservation = await budget.reserve(session.role, allocation["conservative_tokens"],
                 settings.max_output_tokens, scope=session.budget_scope, attempt_id=attempt_id,
                 metadata={"run_id": ledger.run_id, "cycle": cycle, "attempt": attempt,
                           "request_sha256": request_sha256})
@@ -184,9 +196,12 @@ async def request_model(
                     ledger.record("model_request_started", request_event)
                 session.input_tokens_estimated += estimate
                 session.model_calls += 1
+                if attachments:
+                    session.image_tokens_reserved += image_tokens
+                session.last_request_media = copy.deepcopy(attachments)
                 dispatched = True
                 async with asyncio.timeout(request_timeout):
-                    turn = await model.complete(messages, tool_schemas, timeout=request_timeout)
+                    turn = await model.complete(wire_messages, tool_schemas, timeout=request_timeout)
                     session.received_model_turn = turn
                     session.response_audit_pending = True
                     session.model_receipt_unconfirmed = True

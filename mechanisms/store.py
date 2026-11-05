@@ -8,7 +8,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-from .index import FORMAT
+FORMAT = "game_mechanisms.v1"
 
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _ALIASES = {"装备": "equip", "穿戴": "wear", "穿衣": "wear", "进食": "ingest", "食物": "food", "禁止": "forbid", "禁用": "forbid", "威胁": "threat", "敌对": "hostile", "休眠": "dormant", "攻击": "attack", "工作": "work", "路径": "reach", "预约": "reserve"}

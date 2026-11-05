@@ -16,7 +16,7 @@ def _schema(schema):
     if not isinstance(schema, dict):
         return False
     allowed = {'type', 'const', 'enum', 'properties', 'required', 'additionalProperties', 'items',
-               'minLength', 'minimum', 'maximum', 'minItems', 'maxItems', 'minProperties', 'description'}
+               'minLength', 'maxLength', 'minimum', 'maximum', 'minItems', 'maxItems', 'minProperties', 'uniqueItems', 'description'}
     if set(schema) - allowed:
         return False
     if 'description' in schema and not isinstance(schema['description'], str):
@@ -86,7 +86,16 @@ def validate_write_catalog(directory):
                     set(props) & {'expect', 'evidence', 'author', 'changeset_id', 'idempotency_key'}):
                 raise ValueError('Unsafe write operation schema.')
             read, extract = observation['read'], observation['extract']
-            if (read.get('tool') != 'look' or not isinstance(read.get('native_operation'), str) or
+            direct_reads = {'inspect_production', 'inspect_food_policies', 'preview_construction', 'inspect_areas', 'inspect_construction_intents'}
+            verification = item.get('verification_read')
+            if verification is not None and (not isinstance(verification, dict)
+                    or set(verification) != {'tool', 'native_operation', 'arguments'}
+                    or verification.get('tool') not in direct_reads
+                    or verification.get('native_operation') != verification.get('tool')
+                    or not isinstance(verification.get('arguments'), dict)
+                    or not _expression(verification['arguments'])):
+                raise ValueError('Invalid post-commit observation descriptor.')
+            if ((read.get('tool') != 'look' and not (read.get('tool') in direct_reads and read.get('tool') == read.get('native_operation'))) or not isinstance(read.get('native_operation'), str) or
                     not isinstance(read.get('arguments'), dict) or extract.get('kind') not in {'field', 'keyed_row', 'object_fields', 'ordered_ids'}):
                 raise ValueError('Invalid evidence descriptor.')
             for key in ('path', 'objects_path', 'identity_path', 'status_path'):
@@ -94,6 +103,10 @@ def validate_write_catalog(directory):
                     raise ValueError('Invalid evidence path.')
             if not extract['path']:
                 raise ValueError('Empty evidence path.')
+            if 'require' in extract and (not isinstance(extract['require'], list) or not extract['require']
+                    or any(not isinstance(rule, dict) or not _path(rule.get('path')) or 'value' not in rule
+                           or not _expression(rule['value']) for rule in extract['require'])):
+                raise ValueError('Invalid evidence prerequisite.')
             if extract['kind'] in {'keyed_row', 'object_fields'} and not all(k in extract for k in ('key', 'key_field')):
                 raise ValueError('Invalid evidence selector.')
             if extract['kind'] == 'keyed_row' and not isinstance(extract.get('value_field'), str):
@@ -105,17 +118,20 @@ def validate_write_catalog(directory):
                 available = extract.get('available')
                 if (not _path(extract.get('complete_path')) or extract.get('complete_value') is not True or
                         not _text(extract.get('id_field')) or not _text(extract.get('expect_field')) or
-                        not isinstance(required, list) or not required or
+                        (required is not None and (not isinstance(required, list) or not required)) or
                         any(not isinstance(rule, dict) or not _path(rule.get('path')) or 'value' not in rule or
                             not _expression(rule['value'])
-                            for rule in required) or
+                            for rule in (required or [])) or
                         not _expression(extract.get('object_id')) or not _expression(read['arguments']) or
-                        not isinstance(available, dict) or not _path(available.get('path')) or
+                        'expect_schema' not in item):
+                    raise ValueError('Invalid ordered collection evidence descriptor.')
+                if available is not None and (not isinstance(available, dict) or not _path(available.get('path')) or
                         not _text(available.get('key_field')) or not _text(available.get('value_field')) or
                         available.get('value') is not True or
                         not isinstance(available.get('key'), dict) or
-                        set(available['key']) != {'value_path'} or not _path(available['key']['value_path']) or
-                        'expect_schema' not in item):
-                    raise ValueError('Invalid ordered collection evidence descriptor.')
+                        set(available['key']) != {'value_path'} or not _path(available['key']['value_path'])):
+                    raise ValueError('Invalid recipe availability descriptor.')
+                if name != 'reorder_production_bills' and (not required or available is None):
+                    raise ValueError('Bill creation requires native recipe eligibility.')
     except (KeyError, TypeError, OverflowError) as exc:
         raise ValueError('Invalid write catalog.') from exc

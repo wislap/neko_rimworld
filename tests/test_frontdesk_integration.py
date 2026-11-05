@@ -112,7 +112,8 @@ async def test_old_open_intent_and_user_words_are_attached(tmp_path):
     runtime = Runtime()
     service = FrontdeskService(tmp_path / "events.sqlite", runtime, game_session=lambda: game)
     await service.consult(game, "Preserve my colony", object())
-    capability = service.capabilities(game, 1)[0]
+    words = await service.call("events_by_kind", game.colony_id, ("user.utterance",))
+    capability = service.capabilities(game, words[0]["seq"])[0]
     await capability.handler({"action": "write_intent", "entry": {"entry_id": "intent", "expected_revision": 0, "status": "open", "priority": 5, "review_at_tick": None, "body": "Preserve colony"}})
     game.game_tick = 200_000
     await service.consult(game, "What now?", object())

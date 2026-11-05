@@ -12,13 +12,14 @@ import time
 import uuid
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from .protocol import (
     ATTENTION_CAPABILITY,
     ATTENTION_KINDS,
     AUTHENTICATE,
+    FRAME_TOO_LARGE,
     GAME_EVENT,
     HEARTBEAT,
     HELLO,
@@ -42,6 +43,7 @@ from .protocol import (
     SessionDescriptor,
     compute_client_proof,
     compute_server_proof,
+    encode_frame,
     generate_nonce,
     make_challenge,
     make_envelope,
@@ -84,6 +86,10 @@ class BridgeQueryTimeout(BridgeError):
 
 class BridgeNotDispatched(BridgeError):
     code = "bridge_not_dispatched"
+
+
+class BridgePayloadTooLarge(BridgeNotDispatched):
+    code = "bridge_payload_too_large"
 
 
 class BridgeWriteUnconfirmed(BridgeError):
@@ -447,7 +453,7 @@ class BridgeServer:
                 self._state.set_last_query("not_connected", 0.0, error_code=BridgeNotConnected.code)
                 raise unavailable("No authenticated, active RimWorld session is available.")
             supported = (
-                "colony_pause.v1" in capabilities if policy else
+                ("colony_observation.v1" if arguments.get("source") == "planner" else "colony_pause.v1") in capabilities if policy else
                 ("colony_pause.policy.v1" in capabilities if arguments.get("role") == "policy" else
                  bool({"colony_pause.v1", "colony_write.v1"} & capabilities)) if operation == "set_paused" else
                 ("colony_write.v1" in capabilities or "colony_write.transactions.v1" in capabilities) if write else
@@ -464,6 +470,15 @@ class BridgeServer:
                 validated = make_envelope(WRITE_REQUEST, epoch, 0, Payload(mode=operation, arguments=arguments), session, request_id)
             else:
                 validated = make_query_request(epoch, 0, session, request_id, operation, arguments)
+            # New complete filters and cell sets can exceed the outbound frame
+            # even when every operation is valid. Reject before queueing, audit
+            # dispatch or a socket attempt; reserve the largest sequence width.
+            try:
+                encode_frame(replace(validated, seq=2**63 - 1))
+            except ProtocolError as exc:
+                if exc.error_code == FRAME_TOO_LARGE:
+                    raise BridgePayloadTooLarge("Request exceeds the outbound frame limit; use a smaller batch or cell set.") from exc
+                raise
             arguments = validated.payload.to_dict()["arguments"]
             pending = _PendingQuery(
                 epoch, session, threading.Event(), time.monotonic(),
@@ -949,7 +964,7 @@ class BridgeServer:
         if (
             envelope.type != pending.result_type
             or not self._write_result_matches_mode(envelope, pending.write_mode)
-            or (envelope.payload.status == "ok" and envelope.type == POLICY_RESULT and envelope.payload.data != pending.arguments)
+            or (envelope.payload.status == "ok" and envelope.type == POLICY_RESULT and not self._policy_result_matches(envelope.payload.data, pending.arguments))
             or (envelope.payload.status == "ok" and pending.write_mode == "set_paused" and envelope.payload.data != pending.arguments)
             or envelope.connection_epoch != pending.connection_epoch
             or not self._same_session(response_session, pending.session)
@@ -983,6 +998,26 @@ class BridgeServer:
         self._complete_pending(envelope.request_id, response=envelope)
         if update_session:
             self._state.set_session(**self._session_kwargs(response_session), stale=False)
+
+    @staticmethod
+    def _policy_result_matches(data, arguments) -> bool:
+        if arguments.get("source") != "planner":
+            return data == arguments
+        if not isinstance(data, dict) or data.get("source") != "planner":
+            return False
+        # Native may normalize the documented sampling default, but cannot ACK
+        # different targets, revisions, conditions or bounds under this request.
+        import copy
+
+        expected = copy.deepcopy(arguments.get("observations"))
+        actual = copy.deepcopy(data.get("observations"))
+        if not isinstance(expected, list) or not isinstance(actual, list):
+            return False
+        for rows in (expected, actual):
+            for row in rows:
+                for condition in row.get("conditions", ()):
+                    condition.setdefault("sample_interval_ticks", 250)
+        return actual == expected
 
     @staticmethod
     def _write_result_matches_mode(envelope: Envelope, mode: str | None) -> bool:

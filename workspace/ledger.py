@@ -17,10 +17,11 @@ SOURCES = frozenset({USER, FRONTDESK, PLANNER, "investigator", PLUGIN, "mod"})
 REVISION_EVENT = "board.revision"
 UTTERANCE_EVENT = "user.utterance"
 LOAD_EVENT = "colony.load"
+OBSERVED_EVENT = "colony.observed"
 TAKEOVER_EVENT = "user.takeover"
 RETURN_EVENT = "user.return"
 RUN_EVENT = "agent.run"
-RESERVED_EVENTS = frozenset({REVISION_EVENT, UTTERANCE_EVENT, LOAD_EVENT, TAKEOVER_EVENT, RETURN_EVENT, RUN_EVENT, "frontdesk.context_policy", "scheduler.policy", "scheduler.default_review", "wake.registered", "wake.cancelled", "wake.evaluated", "autoplay.activation"})
+RESERVED_EVENTS = frozenset({REVISION_EVENT, UTTERANCE_EVENT, LOAD_EVENT, OBSERVED_EVENT, TAKEOVER_EVENT, RETURN_EVENT, RUN_EVENT, "frontdesk.context_policy", "scheduler.policy", "scheduler.default_review", "wake.registered", "wake.cancelled", "wake.evaluated", "autoplay.activation", "user.policy_protection", "user.policy_protection_released", "construction.restarted", "area.manual", "area.manual_snapshot", "construction.purpose_assessed"})
 
 # SQLite INTEGER is a signed 64-bit value; larger Python integers cannot be stored.
 INTEGER_LIMIT = 2**63
@@ -266,8 +267,13 @@ class EventLedger:
         ).fetchone()
         return _event(row) if row else None
 
-    def latest_epoch(self, colony_id):
-        row = self.db.execute("SELECT load_epoch FROM events WHERE colony_id=? ORDER BY seq DESC LIMIT 1", (colony_id,)).fetchone()
+    def current_epoch(self, colony_id):
+        """Use confirmed load/activation/native facts, never role progress or outcomes."""
+        row = self.db.execute(
+            "SELECT load_epoch FROM events WHERE colony_id=? "
+            "AND kind IN ('colony.observed','colony.load','autoplay.activation','game.event') ORDER BY seq DESC LIMIT 1",
+            (colony_id,),
+        ).fetchone()
         return row[0] if row else None
 
     def retained_response(self, colony_id, load_epoch, question, request_id):
@@ -319,6 +325,14 @@ class EventLedger:
                               "AND json_extract(payload,'$.observation.observation_id')=? ORDER BY seq DESC LIMIT 1",
                               (colony_id, observation_id)).fetchone()
         return _event(row) if row else None
+
+    def native_work_evidence(self, colony_id, observation_ids):
+        rows = self.db.execute(
+            "SELECT * FROM events WHERE colony_id=? AND kind IN ('agent.progress','planner.progress') "
+            "AND json_extract(payload,'$.observation_source')='native' "
+            "AND json_extract(payload,'$.observation.observation_id') IN (SELECT value FROM json_each(?)) ORDER BY seq",
+            (colony_id, encode(list(observation_ids))))
+        return [_event(row) for row in rows]
 
     def interrupted_events(self, colony_id):
         # GROUP BY materializes completed anchors once, without re-parsing each

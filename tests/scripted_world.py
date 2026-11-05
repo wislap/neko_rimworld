@@ -1,4 +1,4 @@
-"""In-memory game port for write-transaction tests: field values, ledger, receipts and load epochs.
+"""Test-only in-memory game port: field values, ledger, receipts and load epochs.
 
 It models no game rules. It only knows which field holds which value, who wrote it last, and the
 transaction semantics of DESIGN 5.5: compare-then-write, ledger, undo, idempotency and epoch checks.
@@ -225,7 +225,7 @@ class ScriptedGameWorld:
         return copy.deepcopy([event for event in self._events if event["cursor"] > since])
 
     async def push_policy(self, policy: Mapping[str, Any]) -> dict[str, Any]:
-        from .protocol import POLICY_REQUEST, Payload, SessionDescriptor, make_envelope
+        from ..game.protocol import POLICY_REQUEST, Payload, SessionDescriptor, make_envelope
 
         make_envelope(POLICY_REQUEST, "0" * 32, 0, Payload(arguments=dict(policy)),
                       SessionDescriptor("1" * 32, "2" * 32, 0, 0), "3" * 32)
@@ -235,6 +235,9 @@ class ScriptedGameWorld:
                                             "pause_state": self.pause_state()})
         self._emit("policy_changed", dict(policy))
         return copy.deepcopy(dict(policy))
+
+    async def push_observations(self, policy: Mapping[str, Any]) -> dict[str, Any]:
+        raise ToolExecutionError("unsupported", "This legacy scripted fixture does not simulate native business observation.")
 
     async def set_paused(self, paused: bool, *, role: str, expected_owner: str | None = None) -> dict[str, Any]:
         if not isinstance(paused, bool) or role not in ("frontdesk", "planner", "policy") or (role in ("frontdesk", "policy") and not paused):

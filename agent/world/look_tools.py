@@ -102,6 +102,14 @@ def look_spec(directory):
                 ],
             }
     spec["parameters"]["required"] = ["object", "aspects"]
+    management = directory.get("colony_management", {})
+    preview = next((row for row in management.get("operations", []) if row.get("operation") == "preview_construction"), None)
+    if preview is not None:
+        props["object"]["oneOf"].append({"type": "object", "additionalProperties": False,
+            "properties": {"kind": {"const": "construction_site"}, "map": {"type": "string", "minLength": 1}},
+            "required": ["kind", "map"]})
+        props["elements"] = copy.deepcopy(preview["parameters"]["properties"]["elements"])
+        spec["description"] += " For one or more explicit construction elements use object.kind=construction_site, object.map, elements and aspects=['state']; this is native placement preview only."
     props["focus"] = {
         "type": "object",
         "additionalProperties": False,
@@ -143,6 +151,12 @@ async def read_look(interaction, args):
     if not isinstance(args, dict) or not isinstance(args.get("object"), dict):
         raise SurfaceError("look requires object")
     kind = colony_kind(args["object"].get("kind"))
+    if kind == "construction_site":
+        if set(args) - {"object", "elements", "aspects"} or set(args["object"]) != {"kind", "map"}:
+            raise SurfaceError("construction_site requires map and explicit elements")
+        if args.get("aspects", ["state"]) != ["state"] or not isinstance(args.get("elements"), list) or not args["elements"]:
+            raise SurfaceError("construction_site requires elements and state aspect")
+        return await interaction._world_read({"map": args["object"]["map"], "elements": copy.deepcopy(args["elements"])}, "preview_construction")
     if kind in DOMAINS:
         return await read_colony(interaction, args, kind)
     unknown = set(args) - {

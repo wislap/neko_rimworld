@@ -61,6 +61,8 @@ class AgentModelSettings:
     stream_idle_timeout_seconds: float = 20.0
     finalization_reserve_seconds: float = 15.0
     stream_include_usage: bool = True
+    image_input_enabled: bool = False
+    image_input_tokens_per_image: int = 0
 
     @property
     def configured(self) -> bool:
@@ -93,6 +95,8 @@ class AgentModelSettings:
             "stream_idle_timeout_seconds": self.stream_idle_timeout_seconds,
             "finalization_reserve_seconds": self.finalization_reserve_seconds,
             "stream_include_usage": self.stream_include_usage,
+            "image_input_enabled": self.image_input_enabled,
+            "image_input_tokens_per_image": self.image_input_tokens_per_image,
         }
 
 
@@ -132,6 +136,8 @@ def build_agent_model_settings(
     stream_idle_timeout_seconds: object = 20.0,
     finalization_reserve_seconds: object = 15.0,
     stream_include_usage: object = True,
+    image_input_enabled: object = False,
+    image_input_tokens_per_image: object = 0,
 ) -> AgentModelSettings:
     if not isinstance(api_key, str):
         raise AgentConfigurationError("Agent API key must be text.")
@@ -187,6 +193,12 @@ def build_agent_model_settings(
         extra[name] = float(value)
     if not isinstance(stream_include_usage, bool):
         raise AgentConfigurationError("stream_include_usage must be a boolean.")
+    if type(image_input_enabled) is not bool:
+        raise AgentConfigurationError("image_input_enabled must be a boolean.")
+    if type(image_input_tokens_per_image) is not int or not 0 <= image_input_tokens_per_image <= 1_000_000:
+        raise AgentConfigurationError("image_input_tokens_per_image must be an integer between 0 and 1000000.")
+    if image_input_enabled and image_input_tokens_per_image == 0:
+        raise AgentConfigurationError("Enabled image input requires an explicit positive image_input_tokens_per_image reservation.")
 
     return AgentModelSettings(
         base_url=normalized_base,
@@ -199,6 +211,8 @@ def build_agent_model_settings(
         max_output_tokens=max_output_tokens,
         temperature=normalized_temperature,
         stream_include_usage=stream_include_usage,
+        image_input_enabled=image_input_enabled,
+        image_input_tokens_per_image=image_input_tokens_per_image,
         **extra,
     )
 
@@ -236,6 +250,8 @@ def parse_agent_model_settings(config: object) -> tuple[AgentModelSettings, list
                 stream_idle_timeout_seconds=agent.get("stream_idle_timeout_seconds", 20.0),
                 finalization_reserve_seconds=agent.get("finalization_reserve_seconds", 15.0),
                 stream_include_usage=agent.get("stream_include_usage", True),
+                image_input_enabled=agent.get("image_input_enabled", False),
+                image_input_tokens_per_image=agent.get("image_input_tokens_per_image", 0),
             ),
             [],
         )
@@ -304,6 +320,16 @@ class OpenAICompatibleModelClient:
         *,
         timeout: float,
     ) -> AssistantTurn:
+        # Storage references belong to request preparation, never the wire protocol.
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, list) and any(
+                not isinstance(part, Mapping) or part.get("type") not in {"text", "image_url"}
+                for part in content
+            ):
+                raise ModelClientError("invalid_content_parts", "Model content parts must be prepared text or image_url objects.")
+            if isinstance(content, list) and any(part.get("type") == "image_url" for part in content) and not self._settings.image_input_enabled:
+                raise ModelClientError("image_input_disabled", "This endpoint has not been explicitly enabled for image input.")
         self.last_diagnostics = {}
         self.last_usage = {}
         started = time.monotonic()

@@ -8,10 +8,10 @@ import pytest
 from ..agent.runtime import execution_environment as environment
 from ..agent.runtime.audit import AgentAuditLedger
 from ..agent.runtime.session import AgentRunSession
-from ..game.scripted_world import ScriptedGameWorld
 from ..game.write_contract import validate_request
 from ..game.write_port import BridgeGameWritePort
 from ..tool_contracts import ToolExecutionError, ToolSetup
+from .scripted_world import ScriptedGameWorld
 
 
 @pytest.mark.asyncio

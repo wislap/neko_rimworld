@@ -15,7 +15,8 @@ def test_pause_policy_is_rebuilt_and_role_bound(tmp_path):
     journal = Journal(path)
     assert journal.wake_policy("colony")["pause_on_letter_defs"] == []
     assert "planner_review_ticks" not in journal.wake_policy("colony")
-    assert journal.wake_policy_authors("colony")["pause_on_letter_defs"]["source"] == "frontdesk"
+    event = journal.latest_event("colony", "scheduler.policy")
+    assert event["source"] == "frontdesk" and event["payload"] == {"pause_on_letter_defs": []}
     journal.close()
 
 
@@ -51,12 +52,11 @@ def test_historical_retired_policy_does_not_change_current_delivery(tmp_path):
     }
     seq = journal._ledger.append("c", "e", 0, "frontdesk", "scheduler.policy", old_policy)
     journal.record_autoplay_activation("c", "e", 0, CHOICES)
-    policy, authors = journal.wake_policy("c"), journal.wake_policy_authors("c")
+    policy = journal.wake_policy("c")
     assert policy["pause_on_letter_defs"] == ["ThreatBig"]
     assert policy["frontdesk_choice_letters"] is True and policy["frontdesk_paused_windows"] is True
     assert policy["frontdesk_letter_defs"] != ["Custom"] and "planner_review_ticks" not in policy
-    assert authors["pause_on_letter_defs"]["event_seq"] == seq
-    assert authors["frontdesk_choice_letters"]["source"] == "plugin"
+    assert journal.event("c", seq)["source"] == "frontdesk"
     journal.ingest_game_event("c", "e", 1, "conn", native(1, 1, "letter", {"def": "Custom", "is_choice_letter": False}))
     assert not any(event["kind"] == "frontdesk.wake" for event in journal.events("c"))
     journal.ingest_game_event(

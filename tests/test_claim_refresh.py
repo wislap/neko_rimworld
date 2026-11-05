@@ -102,7 +102,7 @@ def test_submission_refresh_updates_diagnostics_without_blocking_delivery():
     assert "incomplete_quantifier_claim" in [c["code"] for c in draft.claim_diagnostics]
     submitted = draft.apply({"answer": TEXT}, observations=readings)
     assert submitted["agent_text"] == TEXT
-    assert draft.claim_diagnostics == [] and draft.claims_blocked is False
+    assert draft.claim_diagnostics == []
 
 
 def test_complete_receipt_in_request_does_not_refresh():

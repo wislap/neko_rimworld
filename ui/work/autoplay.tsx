@@ -1,6 +1,7 @@
 import { Alert, Button, Field, InlineError, Input, NumberInput, Stack, TextBlock, useEffect, useI18n, useLocalState, useRef, useState } from "@neko/plugin-ui"
 import type { PanelServices } from "../services"
 import { actionPayload, normalizedError } from "../format"
+import { ColonyWork } from "./colony-work"
 
 export function Autoplay({ services }: { services: PanelServices; key?: string }) {
   const { t } = useI18n()
@@ -117,6 +118,7 @@ export function Autoplay({ services }: { services: PanelServices; key?: string }
     <Button disabled={busy || (!state.enabled && (!goal.trim() || !constraints.trim()))} onClick={() => action("autoplay_mode", state.enabled ? { enabled: false } : { enabled: true, goal, constraints, goal_edited: goalEdited, constraints_edited: constraintsEdited })}>{t(state.enabled ? "autoplay.stop" : "autoplay.enable")}</Button>
     {error ? <InlineError title={t("autoplay.error")} error={error} /> : null}
     {state.enabled ? <AttentionAndPause attention={state.attention} watchdog={state.pause_watchdog} /> : null}
+    <ColonyWork services={services} />
     {state.fault ? <Alert tone="warning">{`${t("autoplay.stopped")}: ${state.fault.kind} / ${state.fault.code}; ${t("autoplay.pause")}: ${state.fault.pause}`}</Alert> : null}
     {state.budget ? <TextBlock text={`${t("autoplay.requests")}: ${state.budget.requests}; ${t("autoplay.input")}: ${state.budget.input_tokens}; ${t("autoplay.cost")}: ${state.budget.known_cost ?? t("autoplay.unknown")}; ${t("autoplay.unknownUsage")}: ${state.budget.unknown_usage}; ${t("autoplay.unknownCost")}: ${state.budget.unknown_cost}`} /> : null}
     <Stack><TextBlock text={t("autoplay.budget")} />

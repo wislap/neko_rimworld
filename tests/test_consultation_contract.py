@@ -76,6 +76,6 @@ def test_claims_are_mandatory_diagnostics_and_cannot_be_disabled():
     result = draft.apply({"answer": "Bob是我们的殖民者。"})
     assert result["agent_text"] == "Bob是我们的殖民者。"
     assert draft.claim_diagnostics[0]["code"] == "identity_claim"
-    assert draft.claims_blocked is False and draft.snapshot()["complete"]
+    assert draft.snapshot()["complete"]
     with pytest.raises(TypeError):
         draft.apply({"answer": "Bob是我们的殖民者。"}, claims_supported=False)

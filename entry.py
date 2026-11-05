@@ -54,7 +54,7 @@ from .workspace.runtime import FrontdeskService
 from .workspace.session_view import anchor_seq
 from .workspace.views import WorkspaceViews
 
-PLUGIN_VERSION = "3.2.0"
+PLUGIN_VERSION = "3.4.0"
 DEFAULT_PORT = 48919
 DEFAULT_DIAGNOSTIC_CAPACITY = 200
 MIN_TOKEN_LENGTH = 32
@@ -326,6 +326,8 @@ class NekoRimworldPlugin(NekoPluginBase):
                 "agent_api_key_configured": self._agent_settings.api_key_configured,
                 "agent_base_url": self._agent_settings.base_url,
                 "agent_model": self._agent_settings.model,
+                "image_input_enabled": self._agent_settings.image_input_enabled,
+                "image_input_tokens_per_image": self._agent_settings.image_input_tokens_per_image,
                 "agent_budgets": {
                     key: getattr(self._agent_settings, key)
                     for key in (
@@ -415,6 +417,11 @@ class NekoRimworldPlugin(NekoPluginBase):
                     views = WorkspaceViews(self.data_path("workspaces") / "events.sqlite")
                     activation = await asyncio.to_thread(views.latest_activation, view_colony)
                 safe["autoplay"]["activation"] = activation
+                if work is not None and not work.closed:
+                    safe["autoplay"]["colony_work"] = await work.call("colony_work", view_colony, view_epoch, connection)
+                else:
+                    safe["autoplay"]["colony_work"] = await asyncio.to_thread(
+                        views.colony_work, view_colony, view_epoch, connection)
             if work := getattr(self, "_workspace_service", None):
                 if current is not None:
                     events = await work.call("action_events", view_colony)
@@ -437,6 +444,7 @@ class NekoRimworldPlugin(NekoPluginBase):
             if scope_changed():
                 safe["autoplay"]["attention"] = attention_unknown
                 safe["autoplay"]["pause_watchdog"] = watchdog_unknown
+                safe["autoplay"].pop("colony_work", None)
             self._last_dashboard = copy.deepcopy(safe)
             return safe
         except Exception:
@@ -450,6 +458,7 @@ class NekoRimworldPlugin(NekoPluginBase):
             if "scope_changed" in locals() and scope_changed():
                 fallback.setdefault("autoplay", {})["attention"] = attention_unknown
                 fallback["autoplay"]["pause_watchdog"] = watchdog_unknown
+                fallback["autoplay"].pop("colony_work", None)
             fallback.setdefault("status", BridgeStatus.ERROR)
             fallback["panel_error"] = {
                 "incident_id": incident,
@@ -585,6 +594,8 @@ class NekoRimworldPlugin(NekoPluginBase):
                 "model": {"type": "string", "maxLength": 256},
                 "api_key": {"type": "string", "writeOnly": True, "maxLength": 4096},
                 "budgets": {"type": "object"},
+                "image_input_enabled": {"type": "boolean"},
+                "image_input_tokens_per_image": {"type": "integer", "minimum": 0, "maximum": 1000000},
             }},
     )
     async def begin_settings_save(self, operation_id="", kind="", ui_nonce="", _ctx=None, **values):
@@ -594,7 +605,7 @@ class NekoRimworldPlugin(NekoPluginBase):
                 or any(c not in "0123456789abcdef" for c in operation_id) or kind not in {"bridge", "agent", "autoplay"}):
             return Err(SdkError("Invalid settings operation.", code="invalid_settings_operation"))
         allowed = ({"port", "pairing_token"} if kind == "bridge" else
-                   {"budgets"} if kind == "autoplay" else {"base_url", "model", "api_key", "budgets"})
+                   {"budgets"} if kind == "autoplay" else {"base_url", "model", "api_key", "budgets", "image_input_enabled", "image_input_tokens_per_image"})
         if set(values) - allowed:
             return Err(SdkError("Unsupported settings fields.", code="invalid_settings_operation"))
         # Freeze validated invocation input; the existing business save owns all
@@ -888,6 +899,8 @@ class NekoRimworldPlugin(NekoPluginBase):
                     "description": "Leave empty to retain the currently configured API key.",
                 },
                 "ui_nonce": {"type": "string", "writeOnly": True, "minLength": 1},
+                "image_input_enabled": {"type": "boolean"},
+                "image_input_tokens_per_image": {"type": "integer", "minimum": 0, "maximum": 1000000},
                 "budgets": {
                     "type": "object",
                     "additionalProperties": False,
@@ -918,6 +931,8 @@ class NekoRimworldPlugin(NekoPluginBase):
         api_key: str = "",
         ui_nonce: str = "",
         budgets: dict[str, Any] | None = None,
+        image_input_enabled: bool | None = None,
+        image_input_tokens_per_image: int | None = None,
         **_: object,
     ):
         if not self._valid_settings_ui_nonce(ui_nonce):
@@ -963,6 +978,8 @@ class NekoRimworldPlugin(NekoPluginBase):
                 stream_idle_timeout_seconds=selected_budgets["stream_idle_timeout_seconds"],
                 finalization_reserve_seconds=selected_budgets["finalization_reserve_seconds"],
                 stream_include_usage=self._agent_settings.stream_include_usage,
+                image_input_enabled=(self._agent_settings.image_input_enabled if image_input_enabled is None else image_input_enabled),
+                image_input_tokens_per_image=(self._agent_settings.image_input_tokens_per_image if image_input_tokens_per_image is None else image_input_tokens_per_image),
             )
         except AgentConfigurationError as exception:
             return Err(SdkError(str(exception), code="invalid_agent_settings"))
@@ -986,6 +1003,8 @@ class NekoRimworldPlugin(NekoPluginBase):
                             "stream_idle_timeout_seconds": next_settings.stream_idle_timeout_seconds,
                             "finalization_reserve_seconds": next_settings.finalization_reserve_seconds,
                             "stream_include_usage": next_settings.stream_include_usage,
+                            "image_input_enabled": next_settings.image_input_enabled,
+                            "image_input_tokens_per_image": next_settings.image_input_tokens_per_image,
                         }
                     }
                 },
@@ -1083,6 +1102,7 @@ class NekoRimworldPlugin(NekoPluginBase):
             service = FrontdeskService(self.data_path("workspaces") / "events.sqlite", self._agent_runtime,
                                        game_session=lambda: getattr(self._bridge, "session", None))
             self._workspace_service = service
+        service.media_store = self._reports.media_store
         def event_binding():
             bridge = self._bridge
             current = getattr(bridge, "session", None)
@@ -1334,6 +1354,7 @@ class NekoRimworldPlugin(NekoPluginBase):
                     game_session=lambda: getattr(self._bridge, "session", None),
                 )
                 self._workspace_service = service
+            service.media_store = self._reports.media_store
             await service.settle_pending(game.colony_id)
             request_id = _ctx.get("run_id") if isinstance(_ctx, Mapping) else None
             request_id = request_id if isinstance(request_id, str) and request_id else None
@@ -1517,9 +1538,12 @@ class NekoRimworldPlugin(NekoPluginBase):
             require_binding()
             if setup.write_identity is None or setup.write_identity() != expected:
                 raise ToolExecutionError("world_changed", "The undo tool is bound to another connection.", recoverable=False)
+            authorization_revision = getattr(work, "authorization_revision", 0)
             def identity():
-                return expected if check_binding() and setup.write_identity() == expected else None
-            guard = TakeoverControl(work, setup.ledger_query, identity, setup.write_fields_query)
+                return expected if (check_binding() and setup.write_identity() == expected
+                                    and getattr(work, "authorization_revision", 0) == authorization_revision) else None
+            guard = TakeoverControl(work, setup.ledger_query, identity, setup.write_fields_query,
+                                    scoped_provider=getattr(setup, "scoped_ledger_query", None))
             async def record(event_data):
                 await work.call("record", game.colony_id, game.load_epoch, game.game_tick,
                                 "plugin", "autoplay.undo", {"source_seq": seq, "write": event_data})
@@ -1773,19 +1797,6 @@ class NekoRimworldPlugin(NekoPluginBase):
         self._autoplay_fault["notification"] = outcome
         await record("result", outcome)
 
-    def _notify_endpoint_failure(self, role, code, pause_text):
-        try:
-            self.ctx.push_message(source="neko_rimworld", visibility=["chat"], ai_behavior="blind",
-                parts=[{"type": "text", "text": f"RimWorld autoplay: {role} model endpoint failed ({code}); {pause_text}."}])
-        except Exception:
-            pass
-
-    def _notify_autoplay_stop(self, role, code):
-        try:
-            self.ctx.push_message(source="neko_rimworld", visibility=["chat"], ai_behavior="blind",
-                parts=[{"type": "text", "text": f"RimWorld autoplay stopped: {role}, {code}. Game pause state is unknown."}])
-        except Exception:
-            pass
 
     async def _load_agent_tools(self) -> ToolSetup:
         setup = await self._catalog_tools.load()
@@ -1809,14 +1820,16 @@ class NekoRimworldPlugin(NekoPluginBase):
             return {"status": "unavailable", "reason": "export_failed", "report_retained": None,
                     "diagnostic": {"stage": "report_read", "kind": "error"}}
         try:
+            bundled = bool(record.get("attachments"))
+            export_content = ({"export_type": "binary", "binary_data": await asyncio.to_thread(self._reports.export_bundle, report_id),
+                               "mime": "application/zip"} if bundled else
+                              {"export_type": "text", "text": ReportStore.markdown(record), "mime": "text/markdown"})
             outcome = await asyncio.wait_for(
                 self.export_push(
-                    export_type="text",
+                    **export_content,
                     run_id=run_id,
-                    text=ReportStore.markdown(record),
                     label="RimWorld report " + report_id,
                     description="Full historical report (" + record["state"] + ")",
-                    mime="text/markdown",
                     delivery="silent",
                     timeout=2.0,
                 ),

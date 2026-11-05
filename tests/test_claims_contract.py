@@ -65,7 +65,6 @@ def assert_contract(entry, text, readings, code=None):
         assert diagnostics == []
     assert result["agent_text"] == text
     assert draft.snapshot()["complete"] is True
-    assert draft.claims_blocked is False
 
 
 def mixed_subject_readings():

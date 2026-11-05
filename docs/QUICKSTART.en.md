@@ -10,7 +10,7 @@ Install two separate parts: the Bridge Mod goes into RimWorld; the companion plu
 
 - N.E.K.O: the desktop companion where you chat and manage plugins. Install it on the same computer as RimWorld.
 
-- Bridge Mod + N.E.K.O RimWorld plugin: the Mod reads the game; the plugin connects to it and prepares advice. Use matching versions; this guide uses Mod v3.2.0.
+- Bridge Mod + N.E.K.O RimWorld plugin: ordinary consultation is read-only; explicit autoplay permits guarded configuration writes. Use matching versions; this guide uses Mod v3.3.0.
 
 - A model service: you need its service URL, model name, and an API key if required. The RimWorld consultation model is configured separately from your character’s model.
 
@@ -20,23 +20,23 @@ Install two separate parts: the Bridge Mod goes into RimWorld; the companion plu
 
 - [Get Harmony on Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=2009463077)
 
-- [Download Bridge Mod v3.2.0 (.zip)](https://github.com/wislap/NekoRimWorld/releases/download/v3.2.0/NekoRimWorld-3.2.0.zip)
+- [Download Bridge Mod v3.3.0 (.zip)](https://github.com/wislap/NekoRimWorld/releases)
 
-- [Mod release notes and checksums](https://github.com/wislap/NekoRimWorld/releases/tag/v3.2.0)
+- [Mod release notes and checksums](https://github.com/wislap/NekoRimWorld/releases)
 
 - [Get the plugin package (.neko-plugin)](https://github.com/wislap/n.e.k.o_plugin_neko_rimworld/releases)
 
 - [Plugin source repository](https://github.com/wislap/n.e.k.o_plugin_neko_rimworld)
 
-The Mod v3.2.0 ZIP is available now. On the plugin releases page, look for a .neko-plugin attachment under Assets. If none is present, the package is not available yet: wait for it or use the optional source-build instructions below. GitHub’s Source code ZIP is not an installable plugin package.
+Look for the matching Mod v3.3.0 ZIP on the release page; an absent asset has not been published. On the plugin releases page, look for a .neko-plugin attachment under Assets. If none is present, the package is not available yet: wait for it or use the optional source-build instructions below. GitHub’s Source code ZIP is not an installable plugin package.
 
 For a first N.E.K.O installation, choose the official download for your system. On Windows, extract the whole archive, then run N.E.K.O.exe inside it. Complete N.E.K.O’s first-run and chat-model setup, and check that ordinary conversation works before adding this plugin. Use the official instructions above for other systems or source installations.
 
-These instructions cover a local desktop setup. The bridge uses 127.0.0.1 (this computer); remote machines and container networking need a different setup. You do not need bench or a .NET SDK. The plugin reads information and offers advice; it does not issue game orders.
+These instructions cover a local desktop setup. The bridge uses 127.0.0.1 (this computer); remote machines and container networking need a different setup. You do not need bench or a .NET SDK. Default consultation reads information and offers advice; explicitly enabling autoplay in the panel permits guarded native operations.
 
 ## 2. Install the game Mod
 
-1. Exit RimWorld. Download NekoRimWorld-3.2.0.zip from the link above. Choose this named Mod ZIP rather than Source code.
+1. Exit RimWorld. Download NekoRimWorld-3.3.0.zip from the link above. Choose this named Mod ZIP rather than Source code.
 
 2. In Steam, right-click RimWorld in your Library and choose Manage → Browse local files to find its installation folder. For another edition, open its installation folder.
 
@@ -64,7 +64,7 @@ Download the .neko-plugin file from the plugin release’s Assets section. Keep 
 
 3. Find N.E.K.O RimWorld in the list, open its details and choose Start. Installing does not start it; auto-start is off by default.
 
-4. In the plugin details, use Guide for these instructions and Panel for the working interface. The panel has four pages: Latest advice, History, Troubleshooting and Settings.
+4. In the plugin details, use Guide for these instructions and Panel for the working interface. The panel has five pages: Latest advice, History, Autoplay, Troubleshooting and Settings.
 
 You can return to Guide whenever you need the instructions. If Import is missing or the panel cannot be displayed, check your N.E.K.O version and follow its official update instructions. Importing successfully does not yet verify the game connection or model service.
 
@@ -155,6 +155,42 @@ Continue in the same character’s conversation by mentioning the original quest
 An unavailable export does not always mean the answer is lost. Read or copy retained text before asking again. Remove keys, pairing codes and private information before sharing screenshots or logs.
 
 Next time, start N.E.K.O and this plugin, keep the saved settings, then load your colony. You can enable auto-start in Plugin Center. Before upgrading, stop the plugin and back up settings/history, then import the matching package.
+
+### v3.4 in the working source: construction, production and living
+
+These additions describe the development source and require a matching rebuilt plugin and game Mod. The installation steps above retain their named release packages. This section does not announce a published v3.4 package or a completed live-game, provider or ordinary-package validation of these additions. Updating plugin source alone does not replace the game DLL.
+
+Continue in the existing character conversation. You do not need another console or a furniture approval page. Start with a discussion request, for example:
+
+> Inspect the actual terrain and obstacles east of the base. Propose a small house with a bedroom, a place to eat and a clear entrance. Explain material shortfalls and anything the observations cannot establish yet.
+
+Discussion candidates and adopted plans are shown separately. **Panel → Autoplay** contains **Construction**, **Production and living**, **Observation coverage** and **Decision history**, which remain readable while autoplay is off. To permit continued execution, review the goal and constraints on that page, explicitly enable autoplay, and tell the character which project to advance. Enabling does not adopt an earlier candidate. There is no new per-furniture approval step.
+
+**How a house becomes real.** The model uses the connected game's loaded definitions, sampled cells and native placement checks to propose a plan, records an adopted revision, then submits accepted native operations through the existing guarded path. A plan's overall footprint is at most **62 × 62 cells**; its surrounding observation ring fits inside a **64 × 64-cell** native sample. Supported blueprint, floor, roof and area changes still enter ordinary game work. Colonists need materials, access, skills and time; placing a plan does not generate a finished house.
+
+Construction distinguishes placement, native completion and purpose assessment. Blueprints still require construction and later observation; an unevaluated purpose is displayed explicitly. Arbitrary modded furniture, special construction processes and every room purpose still need specific verification. Player cancellation, replacement and takeover retain stopped intent. A missing old object requires reconciliation rather than automatically authorizing a replacement. Ask for revisions or takeover in the same conversation.
+
+**How resources are allocated.** You can ask, “Satisfy housing first and defer the kitchen; show the joint wood deficit and what remains after allocation.” With 80 wood, a 60-wood house and a 50-wood kitchen are each affordable independently, while their joint demand is short by 30. Production and living shows independent requirements, joint demand and the selected shares separately, with the selection-time sample, map and source categories. Ground stock, player-held goods, other held goods and trader goods stay distinct. A quantity alone does not establish ownership, access or usability. Allocations express intent without locking inventory; changed stock or demand needs reassessment.
+
+**How to request production and food policies.** Continue asking for supported production-order and living changes in conversation, such as “Prioritize reliable cooking before nonurgent processing; check the worktable, recipes and ingredients first.” Food-policy work reads and manages supported native policies and assignments. Editing shared content can affect everyone using the same policy. For a fixed scope, say “Change only A and B; preserve everyone else's effective rules.” To change a shared policy for its current and future users, explicitly request that dynamic shared scope. The view shows selection-time impact, additional members and takeover protection; actual membership is checked again when a change is applied.
+
+State the takeover scope too: taking over A's policy assignment protects the reference, while taking over A's effective food rules also concerns changes to shared content affecting A. Existing authorization, takeover and return paths remain in place, without a new product approval workflow. A policy assessment or sufficient ingredients alone does not establish successful production or eating.
+
+**How observation coverage works.** The planner can register supported construction, production and food-policy conditions for selected targets, with sampling intervals, expiry and sample limits. Observation coverage distinguishes pending registration, covered, partial and uncovered conditions, and shows native receipts and pending conditions. A request alone does not establish coverage. Expiry, exhausted samples, disconnection and load changes need reconciliation and registration against the current binding. Older facts remain marked historical. This does not automatically monitor every event across the map.
+
+### Construction images, attachments and visual input
+
+The construction view renders deterministic SVG from native sampled cells and the plan overlay, including unknown cells, issues, bounds, sample interval and source hashes. It is a derived diagram rather than a game-camera screenshot. Archived PNG references show dimensions, byte hashes and provenance; retaining an image does not establish that a model received it.
+
+The existing host report export produces a ZIP when a report has image attachments, containing `report.json`, `report.md`, `manifest.json` and original PNG bytes under `media/`. Reports without images retain Markdown export. SVG is currently the panel preview, without a separate SVG download button. File delivery depends on the actual host export receipt; read or copy retained text if export fails.
+
+Visual input is **off by default**. A real model endpoint will be chosen separately; this guide assumes no provider already supports images. After confirming image support, open **Panel → Settings → Model service → Advanced: run and model limits**:
+
+1. Turn on **Enable visual input**.
+2. Set **Input token reservation per image** to a positive integer no larger than 1,000,000, then choose **Save model settings**. The default reservation with visual input off is 0.
+3. Check the receipt for that save before making a real image-assisted request. The reservation controls input budget; it is not a provider bill or proof the endpoint accepted an image.
+
+Local previews and export of retained images remain available with visual input off. Whether an image was actually sent is established by real model-request records, rather than a generated diagram, stored attachment, enabled switch or a model's statement that it saw the image. Software and fixed-state UI checks cover these paths; house fulfillment, model choices and real endpoint behavior need their actual run results.
 
 ## 8. If a step does not work
 

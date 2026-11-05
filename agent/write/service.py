@@ -61,8 +61,10 @@ def _schema_check(value, schema):
             return False
         return all(_schema_check(v, props[k]) for k, v in value.items() if k in props)
     if isinstance(value, list):
-        return len(value) >= schema.get('minItems', 0) and len(value) <= schema.get('maxItems', 100000) and all(_schema_check(v, schema.get('items', {})) for v in value)
-    if isinstance(value, str) and len(value) < schema.get('minLength', 0):
+        return (len(value) >= schema.get('minItems', 0) and len(value) <= schema.get('maxItems', 100000)
+                and (not schema.get('uniqueItems') or all(item not in value[:index] for index, item in enumerate(value)))
+                and all(_schema_check(v, schema.get('items', {})) for v in value))
+    if isinstance(value, str) and not schema.get('minLength', 0) <= len(value) <= schema.get('maxLength', float('inf')):
         return False
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         if value < schema.get('minimum', float('-inf')) or value > schema.get('maximum', float('inf')):
@@ -168,7 +170,7 @@ class WriteService:
             path = extract['path']
             status_path = extract.get('status_path', [])
             if status_path:
-                if _safe_path(row, status_path) != 'observed':
+                if _safe_path(row, status_path) != extract.get('status_value', 'observed'):
                     return None
                 facet = _path(row, status_path[:-1])
             else:
@@ -180,6 +182,9 @@ class WriteService:
                 return None
             value = _safe_path(row, path)
             if value is _MISSING:
+                return None
+            if any(_safe_path(row, rule['path']) != _substitute(rule['value'], op)
+                   for rule in extract.get('require', [])):
                 return None
             kind = extract['kind']
             if kind in ('keyed_row', 'object_fields'):
@@ -211,22 +216,23 @@ class WriteService:
                 if (not isinstance(value, list) or
                         _safe_path(row, extract['complete_path']) is not extract['complete_value'] or
                         any(_safe_path(row, rule['path']) != _substitute(rule['value'], op)
-                            for rule in extract['require'])):
+                            for rule in extract.get('require', []))):
                     return None
                 identifiers = [item.get(extract['id_field']) if isinstance(item, dict) and not _unsafe(item)
                                else None for item in value]
                 if (any(not isinstance(item, str) or not item.strip() for item in identifiers) or
                         len(set(identifiers)) != len(identifiers)):
                     return None
-                availability = extract['available']
-                recipes = _safe_path(row, availability['path'])
-                if not isinstance(recipes, list):
-                    return None
-                matching = [item for item in recipes if isinstance(item, dict) and
-                            item.get(availability['key_field']) == _substitute(availability['key'], op)]
-                if (len(matching) != 1 or _unsafe(matching[0]) or
-                        matching[0].get(availability['value_field']) is not availability['value']):
-                    return None
+                availability = extract.get('available')
+                if availability is not None:
+                    recipes = _safe_path(row, availability['path'])
+                    if not isinstance(recipes, list):
+                        return None
+                    matching = [item for item in recipes if isinstance(item, dict) and
+                                item.get(availability['key_field']) == _substitute(availability['key'], op)]
+                    if (len(matching) != 1 or _unsafe(matching[0]) or
+                            matching[0].get(availability['value_field']) is not availability['value']):
+                        return None
                 value = {extract['expect_field']: identifiers}
             elif kind != 'field':
                 return None
@@ -307,6 +313,9 @@ class WriteService:
             not_sent = {'outcome': 'not_sent', **context}
             await self._record({'stage': 'result', **event, **context, 'error': exc.code,
                                 'outcome': 'not_sent', 'transport_state': 'queued_not_sent'})
+            if exc.code == 'bridge_payload_too_large':
+                raise ToolExecutionError('write_payload_too_large', 'The write was not sent; split the operations into smaller batches or narrow the cell edit.',
+                                         details=not_sent) from exc
             raise ToolExecutionError('write_not_dispatched', 'The write was not sent; refresh authority before another action.',
                                      recoverable=False, details=not_sent) from exc
         except BridgeWriteUnconfirmed as exc:

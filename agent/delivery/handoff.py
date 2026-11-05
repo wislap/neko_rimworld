@@ -93,9 +93,6 @@ class SubmissionDraft:
     rendered_revision: int | None = None
     agent_revision: int | None = None
     claim_diagnostics: list[dict[str, Any]] = field(default_factory=list)
-    # Kept for callers reading the existing draft state. NLP checks no longer
-    # block submission or force another model call.
-    claims_blocked: bool = False
     detail_references: dict[str, Any] | None = None
 
     def snapshot(self) -> dict[str, Any]:
@@ -143,7 +140,6 @@ class SubmissionDraft:
         if changed:
             self.revision += 1
         self.errors.pop("delivery", None)
-        self.claims_blocked = False
         if not self.errors:
             from .claims import check_claims
 
@@ -202,7 +198,6 @@ class SubmissionDraft:
                     " do not clear detail that is needed to answer the question."
                 )
             raise SubmissionPatchError(first["code"], " ".join(item["message"] for item in self.errors.values()) + repair, details)
-        self.claims_blocked = False
         result = validate_submission(self.full_text, self.agent_text)
         result["delivery"]["claim_warning_count"] = len(self.claim_diagnostics)
         return result

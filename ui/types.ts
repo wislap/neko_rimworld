@@ -1,3 +1,5 @@
+import type { ColonyWorkState } from "./work/colony-work-types"
+
 export type ConnectionState = {
   connection_epoch?: string
   mod_version?: string
@@ -123,7 +125,7 @@ type PauseWatchdogStatus = {
 }
 
 export type DashboardState = {
-  autoplay?: { enabled?: boolean; attention?: AttentionStatus; pause_watchdog?: PauseWatchdogStatus; fault?: any; budget?: any; settings?: Record<string, number | "">; activation?: { seq: number; source: string; load_epoch: string; payload: { goal: string; constraints: string; goal_edited: boolean; constraints_edited: boolean } } | null; board?: any[]; takeovers?: any[]; actions?: any[] }
+  autoplay?: { colony_work?: ColonyWorkState; enabled?: boolean; attention?: AttentionStatus; pause_watchdog?: PauseWatchdogStatus; fault?: any; budget?: any; settings?: Record<string, number | "">; activation?: { seq: number; source: string; load_epoch: string; payload: { goal: string; constraints: string; goal_edited: boolean; constraints_edited: boolean } } | null; board?: any[]; takeovers?: any[]; actions?: any[] }
   settings_saves?: SettingsReceipt[]
   consultations_in_progress?: number
   workspaces?: { revision?: number; active_count?: number }
@@ -139,6 +141,8 @@ export type DashboardState = {
     agent_api_key_configured?: boolean
     agent_base_url?: string
     agent_model?: string
+    image_input_enabled?: boolean
+    image_input_tokens_per_image?: number
     agent_budgets?: Record<string, number>
   }
   agent?: AgentRuntimeState

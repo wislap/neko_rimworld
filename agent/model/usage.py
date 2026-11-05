@@ -5,7 +5,23 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from .tokenization import tokenizer
+
 TOKEN_FIELDS = ("prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens", "reasoning_tokens", "cache_miss_tokens")
+
+
+def input_reservation(encoded_text: str, image_tokens: int = 0) -> dict[str, Any]:
+    """Meter text and explicit image reservations; inline base64 is never tokenized.
+
+    Provider prompt usage remains the authoritative combined measurement when
+    present. The image allocation here is admission accounting, not a bill.
+    """
+    encoding = tokenizer()
+    byte_count = len(encoded_text.encode("utf-8"))
+    text_tokens = len(encoding.encode(encoded_text, disallowed_special=())) if encoding else byte_count
+    return {"text_tokens": text_tokens, "image_tokens_reserved": image_tokens,
+            "tokens": text_tokens + image_tokens, "conservative_tokens": max(text_tokens, byte_count) + image_tokens,
+            "method": encoding.name if encoding else "utf8_bytes_upper_bound"}
 
 
 def summarize_usage(request_count: int, usages: Iterable[object]) -> dict[str, Any]:

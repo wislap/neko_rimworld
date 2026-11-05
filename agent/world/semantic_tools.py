@@ -18,7 +18,7 @@ from dataclasses import replace
 from typing import Any
 
 from ...tool_contracts import PUBLIC_QUERY_VERSION, ToolExecutionError, ToolSpec
-from ..delivery.research_surface import ReadOnlyResearchSurface
+from ..delivery.handoff import make_submission_tool
 from .activity import make_activity_tool
 from .colony_tools import computation_tools
 from .count_tools import count_spec
@@ -58,11 +58,12 @@ def _compile_supported_surface(setup):
     return surface
 
 
-class SemanticInteraction(ReadOnlyResearchSurface):
+class SemanticInteraction:
     """Expose look/count and project native results as ordinary JSON."""
 
     def __init__(self, setup: Any, session: Any, update: Any) -> None:
-        super().__init__(setup, session, update)
+        self.setup, self.session, self.update = setup, session, update
+        self.finalizing = False
         self.original = {tool.name: tool for tool in setup.tools}
         self.surface = _compile_supported_surface(setup)
         self.sample_identity: tuple[Any, Any, Any] | None = None
@@ -70,6 +71,17 @@ class SemanticInteraction(ReadOnlyResearchSurface):
         self.query_readings = QueryReadings(self)
 
     # -- runtime contract -------------------------------------------------
+
+    def submission(self, *, answer_only=False):
+        return make_submission_tool(
+            self.session.submission, self.session.observations, self.update,
+            answer_only=answer_only,
+            reference_session=self.session if getattr(self.session, "frontdesk_update_only", False) else None,
+        )
+
+    def tools(self):
+        submit = self.submission()
+        return (submit,) if self.finalizing else (*self.read_tools(), submit)
 
     def read_tools(self) -> tuple[Any, ...]:
         async def survey(args):
@@ -97,6 +109,19 @@ class SemanticInteraction(ReadOnlyResearchSurface):
         passthrough = tuple(self.original[name] for name in sorted(PASSTHROUGH_TOOLS) if name in self.original)
         specs.append(make_activity_tool(self))
         specs.extend(computation_tools(self))
+        # Additive management reads use the same identity, observation and audit
+        # owner. They do not change the frozen colony_state operation set.
+        management = self.setup.directory.get("colony_management", {})
+        for row in management.get("operations", []):
+            operation = row["operation"]
+            if operation not in self.original:
+                continue
+
+            async def read_management(args, operation=operation):
+                return await self._world_read(args, operation)
+
+            original = self.original[operation]
+            specs.append(ToolSpec(operation, original.description, original.parameters, read_management))
         if self.setup.observation_source != "native":
             async def with_origin(handler, args):
                 try:
@@ -161,7 +186,10 @@ class SemanticInteraction(ReadOnlyResearchSurface):
         for key in ("colony_id", "load_epoch", "connection_epoch"):
             if native.get(key) is not None:
                 ordered[key] = native[key]
-        if ordered.get("format") == "colony_state.v1":
+        if ordered.get("format") == "colony_state.v1" or operation in {
+            "inspect_production", "inspect_food_policies", "construction_catalog",
+            "inspect_construction", "preview_construction", "inspect_construction_intents", "inspect_areas",
+        }:
             # A successfully read quote may itself be unavailable/incomplete.
             # Keep the native business result distinct from transport success.
             ordered["read_status"] = native.get("status", "ok")
@@ -200,7 +228,8 @@ class SemanticInteraction(ReadOnlyResearchSurface):
                 recoverable=False,
             )
         self.sample_identity = identity
-        self.session.observations.append(value)
+        from ..runtime.observation_record import record_observation
+        await record_observation(self.session, value, source=self.setup.observation_source)
         if payload["status"] not in {"ok", "partial"}:
             raise ToolExecutionError(
                 payload.get("error_code") or "query_failed",

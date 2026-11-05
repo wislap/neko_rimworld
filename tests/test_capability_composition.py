@@ -105,8 +105,9 @@ async def test_default_game_surface_reads_and_workspace_ability_coexist():
 
     )
     result = await runtime.run("Read current quantities and reopen previous work.", settings(), capabilities=capabilities)
-    assert result["status"] == "ok" and len(reads) == len(history_reads) == 1
-    assert len(result["observations"]) == 1
+    # A things count issues its main read plus one forbidden-only read to split availability.
+    assert result["status"] == "ok" and len(reads) == 2 and len(history_reads) == 1
+    assert len(result["observations"]) == 2
     for request in model.requests:
         names = {t["function"]["name"] for t in request["tools"]}
         assert {"look", "count", "workspace_history", "submit_response"} <= names

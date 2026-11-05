@@ -110,3 +110,15 @@ class BridgeGameWritePort:
         result = await self._call("push_policy", copy.deepcopy(dict(policy)))
         self._events_subscribed = True
         return result
+
+    async def push_observations(self, policy: Mapping[str, Any]) -> Mapping[str, Any]:
+        """Replace this load's selected native observations and return coverage ACKs."""
+        if "colony_observation.v1" not in self._capabilities:
+            raise ToolExecutionError("unsupported", "Native business observation is not available.")
+        body = copy.deepcopy(dict(policy))
+        from .observation_contract import validate_observation_request
+
+        validate_observation_request(body)
+        result = await self._call("push_policy", body)
+        self._events_subscribed = True
+        return result

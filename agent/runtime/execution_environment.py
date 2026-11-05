@@ -24,6 +24,8 @@ class ExecutionEnvironment:
         self.session = session
         session.interaction = semantic_interaction_factory(setup, session, update)
         self.write_tools = ()
+        from .colony_work import work_tools
+        self.business_tools = work_tools(setup, session)
         port = setup.write_port
         if (session.explicit_scheduler and setup.observation_source == "native" and port is not None
                 and "colony_pause.v1" in getattr(port, "capabilities", ())):
@@ -85,17 +87,26 @@ class ExecutionEnvironment:
                 and setup.observation_source == "native" and setup.write_identity() is not None):
             from ..write.service import WriteService
 
+            authorization_revision = (getattr(session.takeover_service, "authorization_revision", 0)
+                                      if session.takeover_service is not None else None)
+
             def authorized_identity():
-                return setup.write_identity() if binding_is_current(session.binding_check) else None
+                unchanged = (session.takeover_service is None
+                             or getattr(session.takeover_service, "authorization_revision", 0) == authorization_revision)
+                return setup.write_identity() if unchanged and binding_is_current(session.binding_check) else None
 
             async def record_write(event):
                 stage = event["stage"]
+                if stage == "queued" and authorized_identity() is None:
+                    raise ToolExecutionError("world_changed", "User control changed before write dispatch", recoverable=False)
                 if stage == "result":
                     session.write_outcomes.append(copy.deepcopy(event))
                 try:
                     session.ledger.record("write_" + stage, event)
                     if session.persist_progress is not None:
                         await session.persist_progress({"write": copy.deepcopy(event)})
+                    if stage == "queued" and authorized_identity() is None:
+                        raise ToolExecutionError("world_changed", "User control changed during write dispatch preparation", recoverable=False)
                 except BaseException:
                     session.write_record_issue = stage
                     session.write_record_context = {key: event[key] for key in ("mode", "outcome", "attempt") if key in event}
@@ -107,7 +118,7 @@ class ExecutionEnvironment:
             if session.takeover_service is not None:
                 from ...workspace.takeovers import TakeoverControl
                 guard = TakeoverControl(session.takeover_service, setup.ledger_query, authorized_identity,
-                                        setup.write_fields_query)
+                                        setup.write_fields_query, scoped_provider=getattr(setup, "scoped_ledger_query", None))
             service = WriteService(setup.write_catalog, session.observations, setup.write_port,
                                    authorized_identity, source_kind=setup.observation_source,
                                    record=record_write, guard=guard)
@@ -123,7 +134,9 @@ class ExecutionEnvironment:
     def registry(self):
         session = self.session
         registry = ToolRegistry(context_pruner=session.context_pruner)
-        work = (() if session.interaction.finalizing else session.capabilities + self.write_tools)
+        capabilities = (session.capabilities if self.business_tools else
+                        tuple(spec for spec in session.capabilities if spec.name != "policy_protection"))
+        work = (() if session.interaction.finalizing else capabilities + self.business_tools + self.write_tools)
         if (session.planner_terminal or session.frontdesk_update_only) and session.interaction.finalizing:
             work = tuple(spec for spec in session.capabilities if spec.terminal)
         base = session.interaction.tools()

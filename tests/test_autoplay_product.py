@@ -7,8 +7,8 @@ import pytest
 
 from ..entry import NekoRimworldPlugin
 from ..game.protocol import ValidationError, decode_envelope
-from ..game.scripted_world import ScriptedGameWorld
 from ..tool_contracts import ToolExecutionError
+from .scripted_world import ScriptedGameWorld
 
 
 @pytest.mark.asyncio

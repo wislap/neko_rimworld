@@ -3,11 +3,11 @@
 import copy
 import hashlib
 import json
+import sqlite3
 
 import pytest
 from plugin.plugins.neko_rimworld.agent.reference.mechanism_tools import compose_implementation_knowledge
 from plugin.plugins.neko_rimworld.game.query_tools import make_game_tools
-from plugin.plugins.neko_rimworld.mechanisms.index import build_index
 from plugin.plugins.neko_rimworld.mechanisms.store import MechanismStore
 
 from .test_agent import FakeLogger, settings, submission_call, turn
@@ -16,15 +16,25 @@ from .test_semantic_tools import public_source
 
 
 def library(tmp_path):
-    assembly = tmp_path / "Assembly-CSharp.dll"
-    assembly.write_bytes(b"test-game-implementation")
-    sources = tmp_path / "source"
-    sources.mkdir()
-    (sources / "Equip.cs").write_text(
-        "namespace RimWorld;\npublic class Equip {\n public bool CanEquip() {\n  return true;\n }\n public void OrderedEquip() {\n  target.SetForbidden(false);\n }\n}\n", encoding="utf-8"
-    )
+    assembly_hash = hashlib.sha256(b"test-game-implementation").hexdigest()
+    code = "namespace RimWorld;\npublic class Equip {\n public bool CanEquip() {\n  return true;\n }\n public void OrderedEquip() {\n  target.SetForbidden(false);\n }\n}\n"
     target = tmp_path / "generation"
-    metadata = build_index(sources, assembly, target)
+    target.mkdir()
+    database = target / "sources.sqlite"
+    symbol = "RimWorld.Equip"
+    reference = assembly_hash + "/" + symbol
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            "CREATE TABLE sources(ref TEXT PRIMARY KEY,symbol TEXT NOT NULL,sha256 TEXT NOT NULL,code TEXT NOT NULL);"
+            "CREATE VIRTUAL TABLE search USING fts5(ref UNINDEXED,symbol,code);"
+        )
+        connection.execute("INSERT INTO sources VALUES(?,?,?,?)",
+                           (reference, symbol, hashlib.sha256(code.encode()).hexdigest(), code))
+        connection.execute("INSERT INTO search VALUES(?,?,?)", (reference, symbol, code))
+    metadata = {"format": "game_mechanisms.v1", "assembly_sha256": assembly_hash,
+                "database": database.name, "database_sha256": hashlib.sha256(database.read_bytes()).hexdigest(),
+                "source_count": 1, "source_kind": "decompiled_local_implementation"}
+    (target / "ready.json").write_text(json.dumps(metadata), encoding="utf-8")
     implementation = {"format": "game_implementation.v1", "assembly_sha256": metadata["assembly_sha256"], "patched_methods": [], "patch_coverage": ["RimWorld.Equip"]}
     return target, metadata, implementation
 

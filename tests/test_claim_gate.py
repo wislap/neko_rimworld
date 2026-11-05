@@ -32,7 +32,7 @@ def test_first_claim_warning_retains_full_report_and_short_callback():
     result = draft.apply({"answer": text, "detail": "作者补充报告。"}, observations=[observation_without_identity()])
     assert result["agent_text"] == text and result["full_text"] == text + "\n\n作者补充报告。"
     snapshot = draft.snapshot()
-    assert snapshot["complete"] and not draft.claims_blocked
+    assert snapshot["complete"]
     assert snapshot["claim_diagnostics"][0]["code"] == "identity_claim"
     assert snapshot["rendered_revision"] == snapshot["agent_revision"] == snapshot["revision"]
 

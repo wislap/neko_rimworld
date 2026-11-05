@@ -65,6 +65,10 @@ class GameWritePort(Protocol):
 
     async def push_policy(self, policy: Mapping[str, Any]) -> Mapping[str, Any]: ...
 
+    async def push_observations(self, policy: Mapping[str, Any]) -> Mapping[str, Any]:
+        """Replace load-scoped native observations; return native registration coverage."""
+        ...
+
     async def set_paused(self, paused: bool, *, role: str) -> Mapping[str, Any]: ...
 
 
@@ -109,6 +113,7 @@ class ToolSetup:
     write_identity: Callable[[], tuple[str, str, str] | None] | None = None
     idle_query: Any = None
     ledger_query: Any = None
+    scoped_ledger_query: Any = None
     write_fields_query: Any = None
 
     def __post_init__(self):

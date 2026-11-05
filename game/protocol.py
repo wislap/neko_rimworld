@@ -705,6 +705,14 @@ def _parse_payload(message_type: str, value: Any, game_tick: int, snapshot_seque
     if message_type == POLICY_REQUEST:
         _require_present(raw, {"arguments"}, "Payload")
         args = _require_object(raw["arguments"], "arguments")
+        if args.get("source") == "planner":
+            from .observation_contract import validate_observation_request
+
+            try:
+                validate_observation_request(args)
+            except (ValueError, TypeError) as exc:
+                raise ValidationError(INVALID_PAYLOAD, "Invalid observation request.") from exc
+            return Payload(**raw)
         if set(args) != {"pause_on_letter_defs", "source"} or args["source"] != "frontdesk" or not isinstance(args["pause_on_letter_defs"], list) or len(args["pause_on_letter_defs"]) > 128 or any(not isinstance(v, str) or not v.strip() or len(v.encode("utf-16-le")) // 2 > 128 for v in args["pause_on_letter_defs"]) or len(set(args["pause_on_letter_defs"])) != len(args["pause_on_letter_defs"]):
             raise ValidationError(INVALID_PAYLOAD, "Invalid policy request.")
         return Payload(**raw)
@@ -738,6 +746,14 @@ def _parse_payload(message_type: str, value: Any, game_tick: int, snapshot_seque
 def _parse_policy_result(raw: Mapping[str, Any], game_tick: int, snapshot_sequence: int) -> Payload:
     result = _parse_query_result(raw, game_tick, snapshot_sequence)
     if result.status == OK:
+        if isinstance(result.data, dict) and result.data.get("source") == "planner":
+            from .observation_contract import validate_observation_result
+
+            try:
+                validate_observation_result(result.data)
+            except (ValueError, TypeError) as exc:
+                raise ValidationError(INVALID_PAYLOAD, "Invalid observation acknowledgement.") from exc
+            return result
         _parse_payload(POLICY_REQUEST, {"arguments": result.data}, game_tick, snapshot_sequence)
     return result
 

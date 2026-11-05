@@ -23,6 +23,7 @@ DOMAINS = {
     "research": ("inspect_research", ("progress", "requirements", "unlocks")),
     "resources": ("inspect_resources", ("quantity", "distribution")),
     "storage": ("inspect_storage", ("priority", "allows")),
+    "food_policy": ("inspect_food_policies", ("content", "users")),
 }
 ALIASES = {"world_object": "world_objects", "caravan": "caravans", "faction": "factions", "quest": "quests", "trader": "traders"}
 DEFAULTS = {"world": ["places"], "caravans": ["identity", "location", "route"], "factions": ["identity", "relations"], "research": ["progress"], "resources": ["quantity", "distribution"]}
@@ -31,16 +32,18 @@ OPERATIONS = frozenset({*(operation for operation, _ in DOMAINS.values()), "eval
 
 def available_operations(directory):
     contract = directory.get("colony_state") if isinstance(directory, dict) else None
-    if not isinstance(contract, dict) or contract.get("version") != VERSION:
-        return frozenset()
-    return frozenset(row["operation"] for row in contract.get("operations", []) if isinstance(row, dict) and row.get("operation") in OPERATIONS)
+    operations = {row["operation"] for row in contract.get("operations", []) if isinstance(row, dict) and row.get("operation") in OPERATIONS} if isinstance(contract, dict) and contract.get("version") == VERSION else set()
+    management = directory.get("colony_management") if isinstance(directory, dict) else None
+    if isinstance(management, dict) and management.get("version") == "colony_management.v1":
+        operations.update(row["operation"] for row in management.get("operations", []) if isinstance(row, dict) and row.get("operation") in OPERATIONS)
+    return frozenset(operations)
 
 
 def operation_properties(directory, operation):
     """Additive parameters follow the connected catalog, not a version guess."""
     if operation not in available_operations(directory):
         return frozenset()
-    for row in directory["colony_state"]["operations"]:
+    for row in [*directory.get("colony_state", {}).get("operations", []), *directory.get("colony_management", {}).get("operations", [])]:
         if row.get("operation") == operation:
             return frozenset(row.get("parameters", {}).get("properties", {}))
     return frozenset()
@@ -84,6 +87,7 @@ def extend_look_spec(spec, directory):
         ("inspect_research", "research progress/prerequisites"),
         ("inspect_resources", "resource quantities by source"),
         ("inspect_storage", "storage priority and item permissions"),
+        ("inspect_food_policies", "complete native food policies and their users"),
     ) if operation in operations]
     spec["description"] += " Also read " + "; ".join(domains) + ". Non-storage colony-domain detail is accepted for compatibility but does not control returned content; select aspects and focus instead."
     if "inspect_trade" in operations:
@@ -166,6 +170,23 @@ async def read_colony(interaction, args, kind):
     if set(args) - {"object", "aspects", "detail", "offset", "limit", "focus"}:
         raise SurfaceError("Colony look accepts object, aspects, detail, offset, limit and focus.items")
     obj = args["object"]
+    if kind == "food_policy":
+        if set(obj) - {"kind", "id", "ids"} or ("id" in obj and "ids" in obj):
+            raise SurfaceError("food_policy accepts id or ids")
+        aspects = args.get("aspects", ["content", "users"])
+        if not isinstance(aspects, list) or not aspects or any(item not in supported for item in aspects):
+            raise SurfaceError("food_policy aspects: content, users")
+        if args.get("focus") or args.get("detail", 0) != 0:
+            raise SurfaceError("food_policy returns complete native content without focus or detail")
+        request = {}
+        if "id" in obj or "ids" in obj:
+            request["ids"] = _list([obj["id"]] if "id" in obj else obj["ids"], "ids")
+        for key, low, high in (("offset", 0, 8192), ("limit", 1, 100)):
+            if key in args:
+                if type(args[key]) is not int or not low <= args[key] <= high:
+                    raise SurfaceError("Invalid food_policy " + key)
+                request[key] = args[key]
+        return await interaction._world_read(request, operation)
     if kind == "storage":
         if set(obj) - {"kind", "id", "ids", "map"} or ("id" in obj) == ("ids" in obj):
             raise SurfaceError("storage requires id or ids and map")

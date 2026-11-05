@@ -16,6 +16,13 @@ CONTEXT_TOOLS = frozenset(
         "evaluate_activity",
         "evaluate_journey",
         "evaluate_trade",
+        "inspect_production",
+        "inspect_food_policies",
+        "construction_catalog",
+        "inspect_construction",
+        "preview_construction",
+        "inspect_construction_intents",
+        "inspect_areas",
     }
 )
 RETIRED_ENVIRONMENT_KEYS = (

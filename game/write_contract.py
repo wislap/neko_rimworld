@@ -40,7 +40,7 @@ def validate_request(mode, args):
             _text(op["evidence"])
             # The Mod's JObject null check treats JSON null as an existing token.
             targets = {k: v for k, v in op.items() if k not in {"op", "evidence", "expect", "value"}}
-            if not targets.keys() & {"pawn", "bill", "thing", "worktable", "storage", "research", "map"}:
+            if not targets.keys() & {"pawn", "bill", "thing", "worktable", "storage", "research", "map", "policy", "bed", "zone", "area"}:
                 _bad()
             if any(not isinstance(v, str) or not v.strip() for v in targets.values()):
                 _bad()
@@ -49,7 +49,10 @@ def validate_request(mode, args):
                 _fields(op, ("op", "worktable", "value", "expect", "evidence"))
                 _text(op['worktable'])
                 _fields(expected, ("bill_ids",))
-                _fields(value, ("recipe",))
+                if not isinstance(value, dict) or "recipe" not in value or set(value) - {"recipe", "settings"}:
+                    _bad()
+                if "settings" in value and not isinstance(value["settings"], dict):
+                    _bad()
                 _text(value["recipe"])
                 identifiers = expected["bill_ids"]
                 if not isinstance(identifiers, list):
@@ -58,6 +61,8 @@ def validate_request(mode, args):
                     _text(identifier)
                 if len(set(identifiers)) != len(identifiers):
                     _bad()
+            elif op["op"] in {"place_blueprint", "restart_blueprint", "cancel_blueprint", "create_food_policy", "copy_food_policy", "set_food_policy_content", "delete_food_policy", "remove_production_bill", "copy_production_bill", "create_zone", "create_allowed_area", "remove_zone", "remove_allowed_area", "set_zone_cells", "set_area_cells", "set_area_cell_flags"}:
+                _validate_management_operation(op)
             elif isinstance(expected, dict) or isinstance(value, dict):
                 if not isinstance(expected, dict) or not isinstance(value, dict) or not expected or expected.keys() != value.keys():
                     _bad()
@@ -76,6 +81,84 @@ def validate_request(mode, args):
             _bad()
     else:
         _bad()
+
+
+def _validate_management_operation(op):
+    """Distinct intent and observed CAS shapes for supported structural writes.
+
+The native catalog supplies field-level business validation; the wire contract
+keeps each operation's target and envelope exact instead of weakening old ops.
+"""
+    name, value, expected = op["op"], op["value"], op["expect"]
+    target = "map" if name in {"place_blueprint", "restart_blueprint", "cancel_blueprint", "create_zone", "create_allowed_area"} else "bill" if name in {"remove_production_bill", "copy_production_bill"} else "zone" if name in {"set_zone_cells", "remove_zone"} else "area" if name in {"set_area_cells", "set_area_cell_flags", "remove_allowed_area"} else "policy"
+    names = {"op", target, "value", "expect", "evidence"}
+    if name in {"remove_production_bill", "copy_production_bill"}:
+        names.update(("worktable", "map"))
+    if name in {"set_zone_cells", "set_area_cells", "set_area_cell_flags", "remove_zone", "remove_allowed_area"}:
+        names.add("map")
+    if name == "cancel_blueprint":
+        names.update(("plan_id", "element_id"))
+    _fields(op, names)
+    if not isinstance(expected, dict) or not expected:
+        _bad()
+    if name == "cancel_blueprint":
+        if value is not False:
+            _bad()
+        _text(op["plan_id"], 128)
+        _text(op["element_id"], 128)
+        return
+    if name in {"remove_zone", "remove_allowed_area"}:
+        if value is not False:
+            _bad()
+        return
+    if name in {"remove_production_bill", "copy_production_bill"}:
+        if value is not (name == "copy_production_bill"):
+            _bad()
+        return
+    if not isinstance(value, dict) or not value:
+        _bad()
+    if name in {"create_zone", "create_allowed_area", "set_zone_cells", "set_area_cells", "set_area_cell_flags"}:
+        required = {"cells", "kind"} if name == "create_zone" else {"cells"}
+        if not required <= value.keys() or value.keys() - required - ({"label"} if name in {"create_zone", "create_allowed_area"} else set()):
+            _bad()
+        cells = value["cells"]
+        if not isinstance(cells, list) or len(cells) > (64 if name == "set_area_cell_flags" else 1024):
+            _bad()
+        for cell in cells:
+            _fields(cell, ("x", "z", "enabled") if name == "set_area_cell_flags" else ("x", "z"))
+            if any(type(cell[k]) is not int for k in ("x", "z")):
+                _bad()
+            if name == "set_area_cell_flags" and type(cell["enabled"]) is not bool:
+                _bad()
+        if name == "create_zone" and (value["kind"] not in {"stockpile", "growing"} or not cells):
+            _bad()
+        if "label" in value:
+            _text(value["label"], 128)
+    elif name in {"create_food_policy", "copy_food_policy"}:
+        _fields(value, ("label",))
+        _text(value["label"], 128)
+        if name == "create_food_policy" and op["policy"] != "new":
+            _bad()
+    elif name == "set_food_policy_content":
+        _fields(value, ("label", "filter", "impact"))
+        _text(value["label"], 128)
+        if not isinstance(value["filter"], dict) or not isinstance(value["impact"], dict):
+            _bad()
+    elif name == "delete_food_policy":
+        _fields(value, ("impact",))
+        if not isinstance(value["impact"], dict):
+            _bad()
+    else:
+        required = {"plan_id", "element_id", "definition", "x", "z", "rotation", "kind"}
+        if not required <= value.keys() or value.keys() - required - {"stuff"}:
+            _bad()
+        _text(value["element_id"], 128)
+        _text(value["plan_id"], 128)
+        _text(value["definition"])
+        if any(type(value[k]) is not int for k in ("x", "z", "rotation")) or not 0 <= value["rotation"] <= 3 or value["kind"] not in {"building", "floor"}:
+            _bad()
+        if value.get("stuff") is not None:
+            _text(value["stuff"])
 
 
 def validate_result(raw):

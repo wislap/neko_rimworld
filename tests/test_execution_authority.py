@@ -75,8 +75,11 @@ async def test_halt_during_takeover_guard_prevents_commit_send(monkeypatch):
     from .test_write_service import IDENTITY, Port, catalog, observation, op
     entered, release = asyncio.Event(), asyncio.Event()
     active = {'value': True}
+    guards = []
     class Guard:
-        def __init__(self, service, ledger_query, identity, fields_query): self.identity = identity
+        def __init__(self, service, ledger_query, identity, fields_query, *, scoped_provider=None):
+            self.identity, self.scoped_provider = identity, scoped_provider
+            guards.append(self)
         async def guard_changeset(self, changeset):
             assert self.identity() == IDENTITY
             entered.set()
@@ -91,6 +94,7 @@ async def test_halt_during_takeover_guard_prevents_commit_send(monkeypatch):
     session.observations = [observation()]
     setup = ToolSetup((), write_catalog=catalog(), write_port=port, write_identity=lambda: IDENTITY)
     tool = next(item for item in environment.ExecutionEnvironment(setup, session, None).write_tools if item.name == 'commit')
+    assert guards[0].scoped_provider is setup.scoped_ledger_query
     task = asyncio.create_task(tool.handler({'entry_id': 'task', 'ops': [op()]}))
     await asyncio.wait_for(entered.wait(), 1)
     active['value'] = False

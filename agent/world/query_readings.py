@@ -16,6 +16,7 @@ from .semantic_surface import (
     lookup_spec,
     normalize_object,
     plan_count,
+    plan_forbidden_count,
     plan_look,
     render,
     render_blocked,
@@ -166,4 +167,7 @@ class QueryReadings:
             return blocked_reading("count", original, resolution, lookup_native)
         plan = plan_count(self.surface, obj, metric, by, detail)
         native = await self.execute_native(plan.request)
-        return render(plan, native, resolution)
+        forbidden = None
+        if not plan.grouping and self.surface.path_type(plan.root, "") == "Thing":
+            forbidden = await self.execute_native(plan_forbidden_count(self.surface, obj, metric).request)
+        return render(plan, native, resolution, forbidden)

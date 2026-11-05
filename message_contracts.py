@@ -78,6 +78,7 @@ class ToolResult:
     terminal: bool = False
     model_content: str | None = field(default=None, repr=False)
     model_view_metrics: dict[str, Any] = field(default_factory=dict)
+    media: tuple[dict[str, Any], ...] = ()
 
     def as_message(self, *, content: str | None = None) -> dict[str, Any]:
         import json

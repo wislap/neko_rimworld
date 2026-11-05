@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import copy
+import io
 import json
 import os
 import re
 import tempfile
 import threading
+import zipfile
 from pathlib import Path
 from typing import Any, Mapping
 
 from .agent.delivery.handoff import validate_full_text
 from .agent.runtime.audit import audit_safe
 from .game.state import utc_now
+from .media import MediaStore
 
 MAX_REPORT_BYTES = 1024 * 1024
 
@@ -35,7 +38,7 @@ def plain(value: Any) -> Any:
 
 
 class ReportStore:
-    def __init__(self, root: Path | None = None, capacity: int = 100):
+    def __init__(self, root: Path | None = None, capacity: int = 100, *, media_store: MediaStore | None = None):
         if not 1 <= capacity <= 1000:
             raise ValueError("invalid report capacity")
         self.root = root.resolve() if root is not None else None
@@ -43,6 +46,7 @@ class ReportStore:
         self._lock = threading.RLock()
         self._index: dict[str, dict[str, Any]] | None = {} if root is None else None
         self._memory: dict[str, dict[str, Any]] = {}
+        self.media_store = media_store if media_store is not None else MediaStore(self.root.parent / "media" if self.root is not None else None)
 
     def _path(self, report_id: str) -> Path:
         if not isinstance(report_id, str) or not re.fullmatch(r"[0-9a-f]{32}", report_id):
@@ -55,7 +59,7 @@ class ReportStore:
 
     @staticmethod
     def metadata(record: Mapping[str, Any]) -> dict[str, Any]:
-        return {
+        result = {
             key: copy.deepcopy(record.get(key))
             for key in (
                 "report_id",
@@ -69,6 +73,9 @@ class ReportStore:
                 "samples",
             )
         }
+        if record.get("attachments"):
+            result["attachments"] = copy.deepcopy(record["attachments"])
+        return result
 
     def _load_index(self) -> None:
         if self._index is not None:
@@ -120,6 +127,13 @@ class ReportStore:
             for obs in safe.get("observations", [])
         ]
         safe["evidence_status"] = "retained"
+        attachments = safe.get("attachments", [])
+        if not isinstance(attachments, list):
+            raise ReportError("invalid_report_media", "Report attachments must be immutable media references.")
+        for reference in attachments:
+            if not isinstance(reference, dict):
+                raise ReportError("invalid_report_media", "Invalid report attachment reference.")
+            self.media_store.read(reference)
         encoded = json.dumps(safe, ensure_ascii=False, allow_nan=False).encode("utf-8")
         if len(encoded) > MAX_REPORT_BYTES:
             all_observations = safe.get("observations", [])
@@ -135,6 +149,8 @@ class ReportStore:
             # Report IDs identify immutable terminal artifacts, not a mutable latest-answer slot.
             if report_id in self._index:
                 return self.metadata(self.read(report_id))
+            if attachments:
+                self.media_store.retain("report:" + report_id, attachments)
             if self.root is None:
                 self._memory[report_id] = copy.deepcopy(safe)
             else:
@@ -158,6 +174,7 @@ class ReportStore:
                 else:
                     self._path(old_id).unlink(missing_ok=True)
                 self._index.pop(old_id, None)
+                self.media_store.release("report:" + old_id)
             return self.metadata(safe)
 
     def read(self, report_id: str) -> dict[str, Any]:
@@ -205,7 +222,7 @@ class ReportStore:
 
     @staticmethod
     def markdown(record: Mapping[str, Any]) -> str:
-        return (
+        text = (
             "# RimWorld report\n\n"
             + f"Report ID: {record['report_id']}\n\nState: {record['state']}\n\nCreated: {record['created_at']}\n\n"
             + "## Question\n\n"
@@ -214,3 +231,28 @@ class ReportStore:
             + str(record["full_text"])
             + "\n\n---\nThis is a saved historical report, not a new game observation.\n"
         )
+        if record.get("attachments"):
+            text += "\n## Image attachments\n\nOriginal bytes and provenance are bound in manifest.json.\n"
+            for reference in record["attachments"]:
+                digest = reference["sha256"]
+                text += f"\n![Image evidence {digest}](media/{digest}.png)\n\nSHA256: {digest}\n"
+        return text
+
+    def export_bundle(self, report_id: str) -> bytes:
+        """Full historical artifact, with verified original bytes and portable paths."""
+        record = self.read(report_id)
+        manifest = []
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("report.json", json.dumps(record, ensure_ascii=False, allow_nan=False, indent=2))
+            archive.writestr("report.md", self.markdown(record))
+            written = set()
+            for reference in record.get("attachments", []):
+                data = self.media_store.read(reference)
+                path = "media/" + reference["sha256"] + ".png"
+                manifest.append({**copy.deepcopy(reference), "path": path})
+                if path not in written:
+                    archive.writestr(path, data)
+                    written.add(path)
+            archive.writestr("manifest.json", json.dumps({"format": "neko-report-bundle-v1", "report_id": report_id, "attachments": manifest}, ensure_ascii=False, indent=2))
+        return output.getvalue()

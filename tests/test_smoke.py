@@ -26,7 +26,7 @@ def test_plugin_manifest_exists() -> None:
     assert "config:read" not in parsed["plugin"]["ui"]["panel"][0]["permissions"]
 
     pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    from plugin.plugins.neko_rimworld import PLUGIN_VERSION
+    from plugin.plugins.neko_rimworld.entry import PLUGIN_VERSION
 
     assert pyproject["project"]["version"] == parsed["plugin"]["version"] == PLUGIN_VERSION
     assert "httpx>=0.28.1,<0.29" in pyproject["project"]["dependencies"]

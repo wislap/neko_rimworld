@@ -132,6 +132,25 @@ AUTOPLAY_EFFICIENCY = (
     "Do not substitute a past observation for a required fresh read or omit material uncertainty. "
 )
 
+COLONY_WORK = (
+    "Construction proposals are read-only attachments until the single colony planner explicitly adopts one "
+    "for an open task under the current user intent. Use colony_work to compile, inspect and revise a house; "
+    "read its returned spatial_read bounds including the exterior margin before drawing or judging access. "
+    "Use orders to derive native world-coordinate elements from the adopted revision, then preview and execute "
+    "through the existing write service. Geometry checks do not establish native placement eligibility. "
+    "Keep the current element intent separate from native stage: a blueprint is an order, a frame is work in "
+    "progress, and built requires exact native lifecycle evidence. Missing or damaged elements require reconciliation "
+    "and do not authorize rebuilding. Respect explicit cancellation and user takeover across revisions. "
+    "For resources, keep each demand's independent feasibility, simultaneous competition and the explicitly selected "
+    "allocation separate; allocations are soft planning decisions, not reserved stock. Preserve observed source "
+    "scope and freshness. For shared food rules, distinguish policy assignment, policy content and the rules a person "
+    "actually uses; a planner impact assessment does not grant permission or release a user protection. "
+    "Register only selected bounded native observations for an open task. A saved request is pending until native "
+    "coverage acknowledges its current revision; unsupported, expired, unknown and exhausted coverage stay explicit. "
+    "An image attachment is a sampled spatial view, not current native write permission or proof the model received "
+    "image input. Judge purpose and livability separately from successful placement and completed construction.\n"
+)
+
 
 AUTOPLAY_PAUSE_WINDOWS = (
     "For a force pause, report the sampled pause_windows types, IDs, sample tick and source status when available. "
@@ -196,7 +215,7 @@ def build_system_prompt(*, persistent_work=False, role="frontdesk", planner_loop
     """One fixed system prompt per session; finalization is signalled in the advisory instead."""
     if autoplay or planner_loop:
         return "".join((AUTOPLAY_PLANNER if role == "planner" else AUTOPLAY_FRONTDESK, AUTOPLAY_PAUSE_WINDOWS,
-                        AUTOPLAY_EFFICIENCY, EVIDENCE, SAMPLE_IDENTITY, SCOPE_SEMANTICS, PLANNER_COMPLETION,
+                        AUTOPLAY_EFFICIENCY, COLONY_WORK, EVIDENCE, SAMPLE_IDENTITY, SCOPE_SEMANTICS, PLANNER_COMPLETION,
                         STYLE, "\n\n", PLANNER_QUERY_GUIDE, "\n", GUIDE))
     if role == "planner":
         return "".join((PLANNER_IDENTITY, PLANNER_TASK, EVIDENCE, PLANNER_READ_POLICY,

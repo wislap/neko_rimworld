@@ -26,6 +26,8 @@ from .write_catalog import validate_write_catalog
 from .write_port import BridgeGameWritePort
 
 COLONY_STATE_VERSION = "colony_state.v1"
+COLONY_MANAGEMENT_VERSION = "colony_management.v1"
+MANAGEMENT_OPERATIONS = frozenset({"inspect_production", "inspect_food_policies", "construction_catalog", "inspect_construction", "preview_construction", "inspect_construction_intents", "inspect_areas"})
 COLONY_OPERATIONS = frozenset({"inspect_planet", "inspect_factions", "inspect_quests", "inspect_trade", "inspect_research", "evaluate_journey", "evaluate_trade", "inspect_resources", "inspect_storage"})
 
 
@@ -117,6 +119,29 @@ def _public_tools(catalog: dict[str, Any], public: dict[str, Any], query: ToolHa
 
             world_tools.append(ToolSpec(name, "Internal colony state read.", copy.deepcopy(spec["parameters"]), inspect_colony))
         directory["colony_state"] = copy.deepcopy(colony)
+    management = catalog.get("colony_management")
+    if management is not None:
+        if not isinstance(management, dict) or management.get("version") != COLONY_MANAGEMENT_VERSION or not isinstance(management.get("operations"), list):
+            raise ToolExecutionError("invalid_catalog", "Invalid colony management contract.")
+        seen = set()
+        for spec in management["operations"]:
+            if not isinstance(spec, dict):
+                raise ToolExecutionError("invalid_catalog", "Invalid colony management operation.")
+            name = spec.get("operation")
+            if not isinstance(name, str) or name in seen or name not in MANAGEMENT_OPERATIONS or not isinstance(spec.get("parameters"), dict) or spec["parameters"].get("type") != "object":
+                raise ToolExecutionError("invalid_catalog", "Invalid colony management operation.")
+            seen.add(name)
+
+            async def inspect_management(arguments, operation=name):
+                return await query({"operation": operation, "arguments": copy.deepcopy(arguments)})
+
+            world_tools.append(ToolSpec(name, spec.get("description", "Read current native colony management facts; no mutation."), schema_contract(spec["parameters"]), inspect_management))
+        directory["colony_management"] = copy.deepcopy(management)
+    observation = catalog.get("colony_observation")
+    if observation is not None:
+        if not isinstance(observation, dict) or observation.get("version") != "colony_observation.v1":
+            raise ToolExecutionError("invalid_catalog", "Invalid colony observation contract.")
+        directory["colony_observation"] = copy.deepcopy(observation)
     if isinstance(catalog.get("game_implementation"), dict):
         directory["game_implementation"] = copy.deepcopy(catalog["game_implementation"])
     return ToolSetup(
@@ -219,6 +244,12 @@ class CatalogTools:
                         return await scoped_query({"operation": "write_ledger_snapshot", "arguments": {}})
 
                     setup = replace(setup, ledger_query=ledger_query)
+                    if "colony_write.ledger_snapshot.selection.v1" in getattr(bridge, "capabilities", ()):
+                        async def scoped_ledger_query(fields):
+                            return await scoped_query({"operation": "write_ledger_snapshot", "arguments": {
+                                "fields": copy.deepcopy(fields)}})
+
+                        setup = replace(setup, scoped_ledger_query=scoped_ledger_query)
                     async def write_fields_query(operation, arguments):
                         return await scoped_query({"operation": operation, "arguments": copy.deepcopy(arguments)})
 
@@ -230,7 +261,7 @@ class CatalogTools:
                     and write.get("capability") in {"colony_write.v1", "colony_write.transactions.v1"}
                     and (write.get("capability") in capabilities
                          or "colony_write.v1" in capabilities))
-            if session is not None and (valid_write or {"colony_events.v1", "colony_pause.v1"} & capabilities):
+            if session is not None and (valid_write or {"colony_events.v1", "colony_pause.v1", "colony_observation.v1"} & capabilities):
                 bound = (epoch, session.colony_id, session.load_epoch)
 
                 def identity():

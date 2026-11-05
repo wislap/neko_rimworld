@@ -2,8 +2,8 @@ export const GUIDE_LINKS = {
   host: "https://github.com/Project-N-E-K-O/N.E.K.O/releases",
   hostHelp: "https://github.com/Project-N-E-K-O/N.E.K.O#readme",
   harmony: "https://steamcommunity.com/sharedfiles/filedetails/?id=2009463077",
-  mod: "https://github.com/wislap/NekoRimWorld/releases/download/v3.2.0/NekoRimWorld-3.2.0.zip",
-  modRelease: "https://github.com/wislap/NekoRimWorld/releases/tag/v3.2.0",
+  mod: "https://github.com/wislap/NekoRimWorld/releases",
+  modRelease: "https://github.com/wislap/NekoRimWorld/releases",
   plugin: "https://github.com/wislap/n.e.k.o_plugin_neko_rimworld/releases",
   pluginSource: "https://github.com/wislap/n.e.k.o_plugin_neko_rimworld",
 }

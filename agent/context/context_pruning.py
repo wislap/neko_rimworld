@@ -7,6 +7,7 @@ Raw tool results remain in the audit. Never merge observations or infer facts.
 from __future__ import annotations
 
 import copy
+import json
 from dataclasses import dataclass
 
 from ...serialization import canonical, digest
@@ -657,6 +658,54 @@ def prune(value, arguments=None, *, seen_notes=None):
     geometry = "geometry" in included
     body_parts = "body_parts" in included
     seen = set() if seen_notes is None else set(seen_notes)
+    if (isinstance(value, dict) and isinstance(value.get("data"), dict)
+            and (value.get("tool") == "inspect_food_policies"
+                 or value.get("tool") == "look" and arguments.get("object", {}).get("kind") == "food_policy")):
+        projected = copy.deepcopy(value)
+        data = projected["data"]
+        removed = []
+        policy_ids = data.get("structure", {}).get("policy_ids")
+        for index, row in enumerate(data.get("objects", [])):
+            if not isinstance(row, dict) or row.get("status") != "observed":
+                continue
+            content_keys = {"native_instance", "label", "filter", "users", "users_complete"}
+            if not content_keys <= row.keys():
+                continue
+            content = {key: row[key] for key in content_keys}
+            aliases = {"write_content": content}
+            if policy_ids is not None and row.get("policy_id") is not None:
+                aliases["copy_expect"] = {"policy_ids": policy_ids, "source_id": row["policy_id"], "source": content}
+                aliases["delete_expect"] = {"policy_ids": policy_ids, "policy_id": row["policy_id"], "policy": content}
+            for key, retained in aliases.items():
+                if key in row and json.dumps(row[key], sort_keys=True, ensure_ascii=False, allow_nan=False) == json.dumps(retained, sort_keys=True, ensure_ascii=False, allow_nan=False):
+                    row.pop(key)
+                    removed.append(["data", "objects", index, key, "equal_same_sample_policy_guard"])
+        return projected, seen, removed
+    if (isinstance(value, dict) and value.get("tool") == "inspect_construction"
+            and isinstance(value.get("data"), dict) and value["data"].get("format") == "construction_observation.v1"):
+        # Keep every observed cell fact and coordinate from this one sample.
+        # Equal cell properties share one ordinary JSON row, with explicit WORLD
+        # coordinates; no dictionary IDs, external decoder or cross-read state.
+        projected = copy.deepcopy(value)
+        data = projected["data"]
+        cells = data.get("cells")
+        if (isinstance(cells, list) and cells and "cell_groups" not in data and "cell_groups_meaning" not in data
+                and all(isinstance(cell, dict) and type(cell.get("x")) is int and type(cell.get("z")) is int
+                        and "_xz" not in cell for cell in cells)):
+            groups = {}
+            for cell in cells:
+                properties = {key: child for key, child in cell.items() if key not in {"x", "z"}}
+                key = canonical(properties)
+                if key not in groups:
+                    groups[key] = {**properties, "_xz": []}
+                groups[key]["_xz"].append([cell["x"], cell["z"]])
+            candidate = {key: child for key, child in data.items() if key != "cells"}
+            candidate["cell_groups"] = list(groups.values())
+            candidate["cell_groups_meaning"] = "Each row's observed properties apply exactly to its listed WORLD [x,z] coordinates in this sample; no other cells are implied."
+            if len(canonical(candidate)) < len(canonical(data)):
+                projected["data"] = candidate
+                return projected, seen, ["same_sample_equal_cell_properties_grouped"]
+        return projected, seen, []
     if isinstance(value, dict) and isinstance(value.get("data"), dict) and value["data"].get("format") == "colony_state.v1":
         # Business readers already select requested aspects/items natively.
         # Physical identity projection would discard caravan route/supplies

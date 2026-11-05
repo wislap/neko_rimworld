@@ -1,13 +1,13 @@
-# N.E.K.O RimWorld v3.2
+# N.E.K.O RimWorld v3.3
 
-Read-only colony consultation through the local RimWorld Mod and an independent model.
+Read-only consultation and explicitly enabled colony configuration management through the local RimWorld Mod and an independent model.
 
 Start here: [中文使用指南](docs/QUICKSTART.zh-CN.md) · [English quick start](docs/QUICKSTART.en.md).
 
 The plugin detail page's dedicated **教程 / Guide** tab walks through downloads,
 separate Mod and plugin installation, pairing, model configuration and the first
 question. The source working panel also has an explicit Autoplay page. Download the released
-[Bridge Mod v3.2.0 ZIP](https://github.com/wislap/NekoRimWorld/releases/download/v3.2.0/NekoRimWorld-3.2.0.zip)
+[matching Bridge Mod package](https://github.com/wislap/NekoRimWorld/releases)
 for RimWorld; get the separate `.neko-plugin` package from the
 [plugin releases page](https://github.com/wislap/n.e.k.o_plugin_neko_rimworld/releases) when available.
 If no package is listed yet, the guides include optional source-build instructions.
@@ -18,15 +18,94 @@ does not silently repeat a write after a lost reply. Model limits are under
 advanced settings. English and Simplified Chinese follow the host language, with
 English as the fallback. These local changes are not a published release.
 
-## Current source: unreleased v3.3 work
+## v3.4 capabilities in the working source
 
-The product version is `3.2.0` (displayed as **v3.2**), aligned with the Mod and
+The working source adds persistent construction plans, resource allocations,
+shared food-policy impact records and bounded observation coverage to the existing
+consultation/autoplay path. This section describes the implementation in this
+checkout. It does not announce a published v3.4 package, change the version
+metadata or claim a completed live-game/provider run for these additions. Use a
+matching rebuilt Mod and plugin; updating plugin source alone does not replace
+the game DLL. The installation links below still identify their named releases.
+
+Start in the existing character conversation. For example, ask to inspect a site
+and propose a small house with a bedroom, dining space and a clear entrance, or
+ask how to divide the observed wood between housing and kitchen production.
+Ordinary consultation can save a candidate for discussion. To permit ongoing
+native changes, open **Panel → Autoplay**, edit the colony goal and constraints,
+then explicitly enable it. Enabling does not adopt an old candidate. The planner
+records an adopted plan and revisions through the existing journal and submits
+accepted native operations through the existing guarded write path. There is no
+new per-furniture approval workflow.
+
+The Autoplay page has **Construction**, **Production and living**, **Observation
+coverage** and **Decision history** views. They remain readable with autoplay
+off. They distinguish a discussion candidate from an adopted revision; placement
+from native construction completion and purpose assessment; and current evidence
+from records needing reconciliation. Player cancellation, replacement and
+takeover remain visible as continuing intent, rather than permission to recreate
+an absent object automatically.
+
+House plans use the connected game's loaded definitions, native material and
+placement checks, explicit footprints and interaction cells. A plan footprint is
+at most **62 × 62 cells**, leaving an exterior observation ring inside a
+**64 × 64-cell** native sample. Supported blueprint, floor, roof and area changes
+enter ordinary native work: colonists still need materials, access, skills and
+work time. Placement creates a blueprint or designation where appropriate; it
+does not generate a finished house. Coverage of arbitrary modded furniture,
+special construction workflows and every room purpose has not been established.
+
+Resource records keep independent demand, joint competition and selected shares
+separate. They retain the map, sample and selected sources: ground stock,
+player-held goods, other held goods and trader goods. A soft allocation does not
+lock inventory or make seller goods owned or usable. Food-policy work can read
+and manage the supported native policies and assignments. Editing a shared rule
+records affected members and the chosen member/shared scope; its real membership
+and user takeover protection are checked again when applying a change. Protecting
+a person's policy reference and protecting their effective rules have different
+effects. See the bilingual quick starts for concrete requests and boundaries.
+
+Bounded observations cover explicitly selected construction, production and
+food-policy conditions. The panel shows targets, expiry, sampling limits,
+covered/uncovered conditions and native receipts. A request alone is pending;
+expired, exhausted or disconnected coverage is not continuous coverage. The
+planner must reconcile registration after a load or connection change. This does
+not install whole-map monitoring of every possible condition.
+
+Construction previews are deterministic SVG views of native sampled cells and
+the plan overlay, with unknown cells, issues, sample interval and source hashes.
+They are derived diagrams, not camera screenshots. When a PNG is created and
+retained, the panel also shows its archived reference and byte hash. Existing host
+report export produces a ZIP for reports with image attachments, containing
+`report.json`, `report.md`, `manifest.json` and the original PNG bytes under
+`media/`; reports without images retain Markdown export. SVG is the panel preview,
+not a separate download button. Export availability still depends on the host
+run and export receipt.
+
+**Visual input is off by default.** Under **Settings → Model service → Advanced:
+run and model limits**, enable it only after choosing a real endpoint that supports
+image input and set a positive **Input token reservation per image** (up to
+1,000,000). No endpoint or image price is assumed by this guide. Save and check the
+existing settings receipt. Local previews and retained image export remain
+available with visual input off. A stored PNG, a text statement that a diagram was
+generated, or the enabled switch alone does not establish that a model received
+an image; actual request records carry that evidence. Image reservations and
+provider-reported usage remain separate.
+
+These additions have software and fixed-state UI checks. Live house fulfillment,
+model decisions, endpoint image acceptance and ordinary package behavior must be
+reported from their actual runs. Source implementation and a rendered fixture do
+not establish those gameplay outcomes.
+
+## v3.3 source and release background
+
+The source version is `3.3.0` (displayed as **v3.3**), aligned with the Mod and
 bench. It includes the selected situation background, world/faction/quest/trade/
 research consultation, exact definition reads, resource-source separation and
-loaded-journey comparisons. Metadata remains at 3.2.0 during v3.3 development; this is not a claim that
-a plugin v3.2 package has been published. The Mod is distributed separately at
-[v3.2.0](https://github.com/wislap/NekoRimWorld/releases/tag/v3.2.0). Protocol versions and
+loaded-journey comparisons. Package publication and deployment are separate from this source version. Download a matching Mod/plugin pair from the release pages only when the named assets are available. Protocol versions and
 SDK support ranges are independent.
+
+The current defaults, study differences and remaining acceptance scope are recorded in [RUNTIME-DEFAULTS.md](docs/RUNTIME-DEFAULTS.md). S7 completed execution with a daily-review gap; the current source fixes its load identity and retains the S6 completion protections. Real seven-day and ordinary-package revalidation of this source remain separate work.
 
 The default consultation remains read-only. **Autoplay** is an explicit Hosted
 panel action for the connected colony; starting or restarting the plugin never

@@ -768,6 +768,17 @@ def plan_count(surface, obj, metric, by, detail):
     return _assemble(surface, "count", obj, aspects, detail, entries, metrics, grouping, detail > 0)
 
 
+# Native CompForbiddable.Forbidden only; things without the component are never forbidden.
+FORBIDDEN_THINGS = {"all_comps": {"some": {"on": {"CompForbiddable": {"forbidden": {"eq": True}}}}}}
+
+
+def plan_forbidden_count(surface, obj, metric):
+    """Measure the same Thing selection restricted to forbidden stacks."""
+    entries = [_entry("quantity", "", "quantity", LISTING_FIELDS.get(obj["kind"]), listing=True)]
+    return _assemble(surface, "count", obj, ("quantity",), 0, entries, _measures_for(obj["kind"], metric), (), False,
+                     extra_where=FORBIDDEN_THINGS)
+
+
 def _measures_for(kind, metric="units"):
     measures = {"records": {"op": "count"}}
     if kind == "things" and metric == "units":
@@ -813,8 +824,10 @@ def _compose_blocks(blocks):
     return list(merged.values())
 
 
-def _assemble(surface, tool, obj, aspects, detail, entries, metrics, grouping, needs_rows):
+def _assemble(surface, tool, obj, aspects, detail, entries, metrics, grouping, needs_rows, extra_where=None):
     root, args, where = route_object(obj)
+    if extra_where is not None:
+        where = extra_where if where is None else {"all": [where, extra_where]}
     plan = Plan(
         tool=tool,
         kind=obj["kind"],
@@ -1402,8 +1415,46 @@ def _scope(plan, surface, result):
     }
 
 
-def render(plan, native, resolution=None):
-    """把一次原生读数渲染成明文结果。"""
+def _units_or_zero(measure):
+    """An exact measure's value; an empty complete measure (no matched stacks) is zero."""
+    if isinstance(measure, (int, float)):
+        return measure
+    if measure.get("state") == "exact":
+        return measure["value"]
+    if measure.get("state") == "empty":
+        return 0
+    return None
+
+
+def _forbidden_availability(totals, forbidden):
+    """Split the counted totals by the native forbidden flag of the same selection."""
+    result = forbidden["data"]["results"][0]
+    parts = result.get("aggregates") or {}
+    split = {}
+    for name, total in totals.items():
+        part = parts.get(name, {})
+        whole, forbidden_value = _units_or_zero(total), _units_or_zero(part)
+        unit = total.get("unit") if isinstance(total, dict) else None
+        if whole is None or forbidden_value is None:
+            not_forbidden = {"state": "unavailable", "reason": "total or forbidden measure is not exact"}
+        else:
+            not_forbidden = {"state": "exact", "value": whole - forbidden_value, "operation": "total_minus_forbidden",
+                             "unit": unit}
+        split[name] = {"forbidden": copy.deepcopy(part), "not_forbidden": not_forbidden}
+    return {
+        "forbidden_flag": split,
+        "basis": "Native CompForbiddable.Forbidden of the same selection. Not forbidden does not establish "
+                 "reachability, allowed area, food policy or reservation.",
+        "forbidden_read": {"observation_id": forbidden.get("observation_id"), "status": forbidden["status"],
+                           "coverage": coverage_of(result)},
+    }
+
+
+def render(plan, native, resolution=None, forbidden=None):
+    """把一次原生读数渲染成明文结果。
+
+    forbidden is the same selection's forbidden-only native read, when one was made.
+    """
     if plan.blocked is not None:
         return plan.blocked
     surface = plan.surface
@@ -1442,7 +1493,8 @@ def render(plan, native, resolution=None):
                 "population": "physical_objects",
                 "include_held": resolved.get("include_held", plan.object.get("include_held", True)),
                 "include_fogged": resolved.get("include_fogged", plan.object.get("include_fogged", True)),
-                "availability": "not_established_by_this_read",
+                "availability": ("not_established_by_this_read" if forbidden is None
+                                 else _forbidden_availability(result.get("aggregates") or {}, forbidden)),
             }
         out["measures"] = dict(result.get("aggregates") or {})
     if plan.grouping:

@@ -5,7 +5,7 @@ import json
 from ..context.model_context import CONTEXT_TOOLS
 
 
-def visible_references(messages, observations, colony, epoch, run_start):
+def visible_references(messages, observations, colony, epoch, run_start, *, media_manifest=()):
     board, evidence = set(), {}
     calls = {}
     current_ids = {o.get("observation_id") for o in observations
@@ -106,6 +106,25 @@ def visible_references(messages, observations, colony, epoch, run_start):
                     (source_colony == colony and isinstance(source_epoch, str)))):
                 evidence[identifier] = {"colony_id": source_colony, "load_epoch": source_epoch,
                                         "historical": True, "current_observation": False}
+    # A stored file or a tool's textual image reference is not proof of visibility.
+    # The caller supplies only the manifest admitted by the actual request path.
+    for reference in media_manifest:
+        if not isinstance(reference, dict):
+            continue
+        metadata = reference.get("metadata", {})
+        if not isinstance(metadata, dict) or metadata.get("colony_id") != colony:
+            continue
+        source_epoch = metadata.get("load_epoch")
+        if not isinstance(source_epoch, str):
+            continue
+        source_id = metadata.get("observation_id")
+        current = source_epoch == epoch and source_id in current_ids
+        identifier = reference.get("evidence_id")
+        if not isinstance(identifier, str) or identifier != "image:" + str(reference.get("reference_id", "")) or len(identifier) != 70:
+            continue
+        evidence[identifier] = {"colony_id": colony, "load_epoch": source_epoch, "historical": not current,
+                                "current_observation": current, "media_id": reference.get("media_id"),
+                                "source_observation_id": source_id, "map_id": metadata.get("map_id")}
     return board, evidence
 
 

@@ -1,18 +1,10 @@
 """Lazy SDK entry; importing the domain package does not load its host facade."""
 
-_EXPORTS = {
-    "NekoRimworldPlugin",
-    "BridgeSettings",
-    "PLUGIN_VERSION",
-    "_parse_settings",
-    "_agent_handoff",
-    "_query_summary",
-}
 __all__ = ["NekoRimworldPlugin"]
 
 
 def __getattr__(name):
-    if name not in _EXPORTS:
+    if name not in __all__:
         raise AttributeError(name)
     from . import entry
 
@@ -20,4 +12,4 @@ def __getattr__(name):
 
 
 def __dir__():
-    return sorted(set(globals()) | _EXPORTS)
+    return sorted(set(globals()) | set(__all__))

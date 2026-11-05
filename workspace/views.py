@@ -15,6 +15,18 @@ class WorkspaceViews:
     def __init__(self, path):
         self.path = path
 
+    def colony_work(self, colony_id, load_epoch, connection_epoch=None):
+        from .work_state import KINDS, project
+
+        with self.database() as db:
+            events = []
+            if db is not None:
+                marks = ",".join("?" for _ in KINDS)
+                rows = db.execute(f"SELECT * FROM events WHERE colony_id=? AND kind IN ({marks}) ORDER BY seq",
+                                  (colony_id, *KINDS))
+                events = [{**dict(row), "payload": json.loads(row["payload"])} for row in rows]
+            return project(events, colony_id=colony_id, load_epoch=load_epoch, connection_epoch=connection_epoch)
+
     def latest_activation(self, colony_id):
         """Read this colony's latest explicit choices without creating a journal."""
         with self.database() as db:
@@ -197,6 +209,11 @@ def planner_run_input(*, run_type, board, activation, attention, signals, wake_r
                "pending_verification": pending_verification, "changes_since_last_run": changes}
     if run_type in {"startup", "daily"}:
         context["board"] = board
+        # The full board is the single source of entry bodies for these runs.
+        # Categories retain ordered references, not second copies of every task.
+        for name in ("strategy", "tasks", "intents"):
+            context[name] = [{"entry_id": entry["entry_id"]} for entry in context[name]]
+        context["board_entry_source"] = "Resolve category entry_id references in board; each full entry is retained there."
     if run_type == "daily":
         context["cadence_history"] = [event for event in daily_history if event["kind"] == "cadence.changed"]
         context["daily_signals"] = [event for event in daily_history if event["kind"] == "attention.signal"]

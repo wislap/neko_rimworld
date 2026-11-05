@@ -178,7 +178,9 @@ async def test_terminal_batch_cannot_submit_before_observation_is_seen():
     )
     result = await runtime.run("Inspect", settings())
     assert result["answer"] == "Observed" and result["audit"]["model_calls"] == 2
-    assert len(result["observations"]) == 1
+    # A things count now also issues one forbidden-only read to split availability,
+    # so one count tool call records two native observations.
+    assert len(result["observations"]) == 2
 
 
 

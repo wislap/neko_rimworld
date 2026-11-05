@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Field, Grid, InlineError, Input, NumberInput, PasswordInput, Stack, TextBlock, useI18n } from "@neko/plugin-ui"
+import { Alert, Button, Card, Field, Grid, InlineError, Input, NumberInput, PasswordInput, Stack, Switch, TextBlock, useI18n } from "@neko/plugin-ui"
 import type { SettingsController } from "./useSettings"
 import { BUDGET_FIELDS } from "../types"
 import { budgetError } from "../format"
@@ -41,6 +41,8 @@ export function SettingsPage({ c }: { c: SettingsController }) {
           <NumberInput value={c.budgets[field.key]} min={field.min} max={field.max} step={1} disabled={busy} onChange={value => c.changeBudget(field.key, value === "" ? "" : Number(value))} />
         </Field>)}</Grid>
         {invalidBudget ? <Alert tone="warning">{invalidBudget}</Alert> : null}
+        <Field label={t("settings.imageInputEnabled")} help={t("settings.imageInputHelp")}><Switch checked={c.imageInputEnabled} disabled={busy} onChange={c.changeImageInputEnabled} /></Field>
+        <Field label={t("settings.imageInputTokens")} help={t("settings.imageInputTokensHelp")}><NumberInput value={c.imageInputTokens} min={0} max={1000000} step={1} disabled={busy} onChange={value => c.changeImageInputTokens(value === "" ? "" : Number(value))} /></Field>
       </Stack></details>
     </Stack></Card>
     <TextBlock text={t("settings.draftHelp")} />

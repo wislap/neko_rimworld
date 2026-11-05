@@ -3,7 +3,7 @@
 import copy
 
 import pytest
-from plugin.plugins.neko_rimworld.agent.delivery.claims import check_claims, describe
+from plugin.plugins.neko_rimworld.agent.delivery.claims import check_claims
 
 
 def mixed():
@@ -134,7 +134,6 @@ def test_every_unsupported_occurrence_is_located_in_its_own_field():
     assert len(rejected) == 2
     assert all(r["field"] == "detail" and r["path"] == "detail" for r in rejected)
     assert all(detail[r["start"] : r["end"]] == r["quote"] for r in rejected)
-    assert "detail[" in describe(rejected)
 
 
 def test_answer_location_and_quote_do_not_hide_next_occurrence():

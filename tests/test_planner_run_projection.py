@@ -37,7 +37,15 @@ def test_run_input_preserves_required_context_and_signal_identity(run_type):
     assert context["run_type"] == run_type
     assert context["intent_utterances"] == data["intent_utterances"]
     assert context["takeovers"] == data["takeovers"]
-    assert context["strategy"] == [data["board"][0]]
+    if run_type in {"startup", "daily"}:
+        assert context["strategy"] == [{"entry_id": "strategy"}]
+        by_id = {row["entry_id"]: row for row in context["board"]}
+        assert [by_id[row["entry_id"]] for row in context["strategy"]] == [data["board"][0]]
+        assert [by_id[row["entry_id"]] for row in context["tasks"]] == [data["board"][2]]
+        assert [by_id[row["entry_id"]] for row in context["intents"]] == [data["board"][1]]
+        assert context["board"] == data["board"]
+    else:
+        assert context["strategy"] == [data["board"][0]]
     assert context["wake_reasons"] == data["wake_reasons"]
     assert context["pending_verification"] == [{"entry_id": "task", "changesets": [{"changeset_id": "change", "commit_tick": 12}]}]
     assert ("board" in context) == (run_type in {"startup", "daily"})

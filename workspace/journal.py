@@ -2,6 +2,7 @@
 
 import copy
 import json
+from contextlib import nullcontext
 from dataclasses import dataclass
 
 from .attention_policy import load_policy, normalize_attention_event
@@ -12,6 +13,7 @@ from .cadence_events import BUSINESS_KINDS
 from .ledger import (
     FRONTDESK,
     LOAD_EVENT,
+    OBSERVED_EVENT,
     PLUGIN,
     RESERVED_EVENTS,
     RETURN_EVENT,
@@ -43,6 +45,7 @@ class NativeEventIngestion:
     event_seq: int | None = None
     planner_wake: bool = False
     frontdesk_wake: bool = False
+    authorization_changed: bool = False
 
     def __bool__(self):
         return self.changed
@@ -138,9 +141,13 @@ class Journal:
 
     def observe_epoch(self, colony_id, load_epoch, game_tick):
         """Record a load once when the observed epoch changes; never rewrite history."""
-        load = self._ledger.latest_event(colony_id, LOAD_EVENT)
-        previous = load["load_epoch"] if load else self._ledger.latest_epoch(colony_id)
-        if previous is not None and previous != load_epoch:
+        previous = self._ledger.current_epoch(colony_id)
+        if previous is None and not self._ledger.event_highwater(colony_id):
+            # Establish a read-only colony's first confirmed identity without
+            # warning that its empty history changed. Retained legacy history
+            # without a confirmed identity requires the ordinary load review.
+            self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, OBSERVED_EVENT, {})
+        elif previous != load_epoch:
             return self.record_load(colony_id, load_epoch, game_tick)
         return None
 
@@ -158,12 +165,6 @@ class Journal:
                 policy["pause_on_letter_defs"] = event["payload"]["pause_on_letter_defs"]
         return policy
 
-    def wake_policy_authors(self, colony_id):
-        authors = {key: {"source": PLUGIN, "event_seq": None} for key in WAKE_POLICY_DEFAULTS}
-        for event in self._ledger.events_by_kind(colony_id, ("scheduler.policy",)):
-            if "pause_on_letter_defs" in event["payload"]:
-                authors["pause_on_letter_defs"] = {"source": event["source"], "event_seq": event["seq"]}
-        return authors
 
     def set_wake_policy(self, colony_id, load_epoch, game_tick, actor, changes):
         if actor != "frontdesk" or not isinstance(changes, dict) or set(changes) != {"pause_on_letter_defs"}:
@@ -274,6 +275,15 @@ class Journal:
         """Append an event kind that no typed writer owns; board, load, takeover and return have their own."""
         if kind in RESERVED_EVENTS:
             raise ValueError(f"{kind} events are written by their own operation")
+        write = payload.get("write", {}) if isinstance(payload, dict) else {}
+        if (kind == "planner.progress" and source == "planner" and write.get("stage") == "result"
+                and write.get("mode") == "commit" and write.get("origin") == "native"
+                and any(op.get("op") in {"place_blueprint", "cancel_blueprint", "restart_blueprint"}
+                        for op in write.get("changeset", {}).get("ops", []))):
+            with self._ledger.transaction():
+                seq = self._ledger.append(colony_id, load_epoch, game_tick, source, kind, payload)
+                self._record_construction_batch(colony_id, load_epoch, game_tick, write, seq)
+                return seq
         if kind in BUSINESS_KINDS:
             with self._ledger.transaction():
                 game_tick = self._ledger.recording_tick(colony_id, load_epoch, game_tick)
@@ -282,6 +292,66 @@ class Journal:
                     self._append_cadence(colony_id, load_epoch, game_tick)
                 return seq
         return self._ledger.append(colony_id, load_epoch, game_tick, source, kind, payload)
+
+    def _record_construction_batch(self, colony_id, load_epoch, game_tick, write, source_seq):
+        envelope = write.get("envelope") or {}
+        receipt = write.get("receipt") or {}
+        confirmed = (write.get("transport_state") == "confirmed_receipt" and write.get("outcome") == "known"
+                     and envelope.get("colony_id") == colony_id and envelope.get("load_epoch") == load_epoch
+                     and envelope.get("payload", {}).get("status") == "ok")
+        status = ("committed" if confirmed and receipt.get("status") == "committed" else
+                  "rejected" if confirmed or write.get("outcome") in {"known_failure", "not_sent"} else "unknown")
+        if status == "committed":
+            self._record_construction_receipts(colony_id, load_epoch, game_tick, write, source_seq)
+        plans = self.colony_work(colony_id, load_epoch)["construction"]["plans"]
+        for plan in plans:
+            elements = [op["value"]["element_id"] for op in write["changeset"]["ops"]
+                        if op.get("op") in {"place_blueprint", "restart_blueprint"} and op.get("value", {}).get("plan_id") == plan["plan_id"]]
+            if elements:
+                self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "construction.batch", {
+                    "plan_id": plan["plan_id"], "revision": plan["revision"], "element_ids": elements,
+                    "changeset_id": write.get("changeset_id"), "status": status, "source_seq": source_seq})
+
+    def _record_construction_receipts(self, colony_id, load_epoch, game_tick, write, source_seq):
+        from . import construction
+        from .construction_evidence import facts
+        from .work_state import KINDS
+
+        events = self._ledger.events_by_kind(colony_id, KINDS)
+        for op in write["changeset"]["ops"]:
+            operation = op.get("op")
+            if operation not in {"place_blueprint", "cancel_blueprint", "restart_blueprint"}:
+                continue
+            key = op if operation == "cancel_blueprint" else op.get("value", {})
+            rows = [row for row in write["receipt"].get("readback", []) if isinstance(row.get("value"), dict)
+                    and row["value"].get("plan_id") == key.get("plan_id")
+                    and row["value"].get("element_id") == key.get("element_id")
+                    and row["value"].get("field_identity") == {"object": row.get("object"), "field": row.get("field")}]
+            if len(rows) != 1 or op.get("map") != rows[0]["value"].get("map_id"):
+                continue
+            native = rows[0]["value"]
+            evidence_id = "native-commit:" + str(source_seq)
+            state = construction.project(events, load_epoch=load_epoch)
+            if operation == "restart_blueprint":
+                plan = next((row for row in state["plans"] if row["plan_id"] == key.get("plan_id")), None)
+                current = next((row for row in plan["elements"] if row["id"] == key.get("element_id")), None) if plan else None
+                previous = current.get("binding", {}).get("object_id") if current else None
+                original = op.get("expect", {}).get("intent", {})
+                target = native.get("target") or {}
+                if (previous is None or previous not in original.get("lineage", []) or native.get("stage") != "blueprint"
+                        or native.get("source_id") != target.get("id") or native.get("element") != key):
+                    continue
+                spec = construction.prepare_restart(events, plan_id=key["plan_id"], element_id=key["element_id"],
+                    load_epoch=load_epoch, previous_object_id=previous, object_id=target["id"], observation_id=evidence_id,
+                    field_identity=native["field_identity"])
+                prepared = [spec]
+            else:
+                data = {"format": "construction_intents.v1", "map_id": op["map"], "objects": [native]}
+                prepared = [construction.prepare_fact(events, **arguments) for arguments in facts(state, data,
+                    observation_id=evidence_id, load_epoch=load_epoch)]
+            for spec in prepared:
+                seq = self._ledger.append(colony_id, load_epoch, game_tick, spec["source"], spec["kind"], spec["payload"])
+                events.append({"seq": seq, "load_epoch": load_epoch, **spec})
 
     def record_autoplay_activation(self, colony_id, load_epoch, game_tick, choices):
         required = {"goal", "constraints", "goal_edited", "constraints_edited"}
@@ -365,8 +435,7 @@ class Journal:
             previous_tick = self._ledger.latest_observed_tick(colony_id, load_epoch)
             game_tick = max(sampled_tick, observed_tick if observed_tick is not None else sampled_tick,
                             previous_tick if previous_tick is not None else sampled_tick)
-            latest_load = self._ledger.latest_event(colony_id, LOAD_EVENT)
-            latest_epoch = latest_load["load_epoch"] if latest_load else self._ledger.latest_epoch(colony_id)
+            latest_epoch = self._ledger.current_epoch(colony_id)
             previous_native = self._ledger.latest_event(colony_id, "game.event")
             previous_epoch = previous_native["load_epoch"] if previous_native else latest_epoch
             epoch_changed = previous_epoch is not None and previous_epoch != load_epoch
@@ -390,6 +459,19 @@ class Journal:
                                      "def": data.get("def"), "native_event_seq": seq, "native_game_tick": sampled_tick, "ordinal": 0})
             cadence = self._append_cadence(colony_id, load_epoch, game_tick)
             planner_wake = any(item["kind"] == "cadence.review_due" for item in cadence["items"])
+            if kind == "observation":
+                planner_wake = self._ingest_observation(colony_id, load_epoch, game_tick, connection, data, seq) or planner_wake
+            authorization_changed = False
+            if kind == "area_manual_changed":
+                try:
+                    if data.get("source") != "user_designator" or not isinstance(data.get("changes"), list):
+                        raise ValueError("Manual area events require a native user-designator source")
+                    manual = self._ingest_area_manual_changes(colony_id, load_epoch, game_tick, data["changes"], seq)
+                    authorization_changed = manual["changed"]
+                    planner_wake = manual["planner_wake"] or planner_wake
+                except ValueError as error:
+                    self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "area.manual_ignored",
+                                        {"native_event_seq": seq, "reason": str(error)})
             frontdesk_wake = False
             kind = event.get("kind")
             data = event.get("data", {})
@@ -418,15 +500,165 @@ class Journal:
                 self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "planner.wake",
                                     {"source": "game", "text": "World loaded", "event_seq": seq})
                 planner_wake = True
-            return NativeEventIngestion(True, seq, planner_wake, frontdesk_wake)
+            return NativeEventIngestion(True, seq, planner_wake, frontdesk_wake, authorization_changed)
+
+    def ingest_area_manual_snapshot(self, colony_id, load_epoch, game_tick, connection, observation):
+        """Consume save-backed exact manual provenance before the write guard runs."""
+        from .area_takeovers import validate_change
+
+        response = observation.get("response", {})
+        payload = response.get("payload", {})
+        data = payload.get("data", {})
+        if (observation.get("request", {}).get("operation") != "write_ledger_snapshot"
+                or tuple(response.get(key) for key in ("connection_epoch", "colony_id", "load_epoch")) != (connection, colony_id, load_epoch)
+                or payload.get("status") != "ok" or payload.get("issues") or data.get("ledger_status") != "valid"
+                or data.get("complete") is not True or not isinstance(data.get("entries"), list)
+                or data.get("entry_count") != len(data["entries"])
+                or ("manual_sources" in data and not isinstance(data["manual_sources"], list))
+                or ("manual_sources_complete" in data and type(data["manual_sources_complete"]) is not bool)):
+            raise ValueError("Manual area sources require the original complete native ledger snapshot")
+        changes = []
+        for row in data["entries"]:
+            if row.get("manual_source") is None:
+                continue
+            change = validate_change(row["manual_source"], game_tick=game_tick)
+            if (change["object"], change["field"]) != (row.get("object"), row.get("field")):
+                raise ValueError("Native manual source does not match its ledger field")
+            changes.append(change)
+        for raw_source in data.get("manual_sources", []):
+            changes.append(validate_change(raw_source, game_tick=game_tick))
+        with self._ledger.transaction():
+            seen = {(event["payload"]["manual_id"], event["payload"]["object"], event["payload"]["field"])
+                    for event in self._ledger.events_by_kind(colony_id, ("area.manual",))}
+            if not any((change["manual_id"], change["object"], change["field"]) not in seen for change in changes):
+                return {"changed": False, "planner_wake": False}
+            tick = self._ledger.recording_tick(colony_id, load_epoch, game_tick)
+            source = self._ledger.append(colony_id, load_epoch, tick, "mod", "area.manual_snapshot", {"observation": observation})
+            return self._ingest_area_manual_changes(colony_id, load_epoch, tick, changes, source)
+
+    def _ingest_area_manual_changes(self, colony_id, load_epoch, game_tick, changes, source_seq):
+        from . import construction
+        from .area_takeovers import plan_stops, validate_change
+        from .work_state import KINDS
+
+        changes = [validate_change(change, game_tick=game_tick) for change in changes]
+        manual_events = self._ledger.events_by_kind(colony_id, ("area.manual",))
+        seen = {(event["payload"]["manual_id"], event["payload"]["object"], event["payload"]["field"]) for event in manual_events}
+        watermarks = {}
+        for event in manual_events:
+            data = event["payload"]
+            scope = (data["origin_load_epoch"], data["object"], data["field"], data["new_value"]["native_instance"])
+            watermarks[scope] = max(watermarks.get(scope, 0), data["manual_order"])
+        changed, wake_tasks = False, set()
+        for change in changes:
+            key = (change["manual_id"], change["object"], change["field"])
+            if key in seen:
+                continue
+            scope = (change["origin_load_epoch"], change["object"], change["field"], change["new_value"]["native_instance"])
+            if change["manual_order"] <= watermarks.get(scope, 0):
+                self._ledger.append(colony_id, load_epoch, game_tick, "mod", "area.manual", {
+                    **change, "takeover_seq": None, "source_event_seq": source_seq, "disposition": "superseded"})
+                seen.add(key)
+                continue
+            opened = self.takeovers(colony_id)
+            takeover = next((event for event in opened if (event["payload"]["object"], event["payload"]["field"])
+                             == (change["object"], change["field"])), None)
+            takeover_seq = takeover["seq"] if takeover else self.record_takeover(colony_id, load_epoch, game_tick, {
+                "object": change["object"], "field": change["field"], "value_read": change["new_value"],
+                "ai_value": change["ownership"]["value"] if change["ownership"] is not None else None,
+                "changeset_id": change["ownership"]["changeset_id"] if change["ownership"] is not None else None})
+            event_payload = {**change, "takeover_seq": takeover_seq, "source_event_seq": source_seq, "disposition": "applied"}
+            seq = self._ledger.append(colony_id, load_epoch, game_tick, "mod", "area.manual", event_payload)
+            manual_events.append({"seq": seq, "kind": "area.manual", "payload": event_payload})
+            events = self._ledger.events_by_kind(colony_id, KINDS)
+            state = construction.project(events, load_epoch=load_epoch)
+            for arguments in plan_stops(state, change=change, manual_events=manual_events, open_takeovers=self.takeovers(colony_id)):
+                spec = construction.prepare_fact(events, **arguments, observation_id="native-manual:" + str(seq), load_epoch=load_epoch)
+                self._ledger.append(colony_id, load_epoch, game_tick, spec["source"], spec["kind"], spec["payload"])
+                project = next(row for row in state["plans"] if row["plan_id"] == arguments["plan_id"])
+                wake_tasks.add(project["task_id"])
+            changed = True
+            seen.add(key)
+            watermarks[scope] = change["manual_order"]
+        planner_wake = False
+        starts = self._ledger.events_by_kind(colony_id, ("planner.started",), load_epoch=load_epoch)
+        last_start = starts[-1]["seq"] if starts else 0
+        pending = self._ledger.events_by_kind(colony_id, ("planner.wake",), after_seq=last_start, load_epoch=load_epoch)
+        planner_wake = any(event["payload"].get("review_type") == "manual_area" for event in pending)
+        for task_id in wake_tasks:
+            task = self._ledger.revision(task_id)
+            work_id = "manual-area:" + task_id
+            if task is None or task["status"] == "closed" or any(event["payload"].get("work_id") == work_id for event in pending):
+                continue
+            self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "planner.wake", {
+                "source": "game", "text": "The player changed a planned area cell; preserve the exact taken-over fields.",
+                "task_id": task_id, "work_id": work_id, "event_seq": source_seq, "review_type": "manual_area"})
+            planner_wake = True
+        return {"changed": changed, "planner_wake": planner_wake}
+
+    def _ingest_observation(self, colony_id, load_epoch, game_tick, connection, data, native_seq):
+        """Only native ACK-bound samples become business facts; coalesce pending work."""
+        from .observations import prepare_fact
+        from .work_state import KINDS
+
+        binding = {"colony_id": colony_id, "load_epoch": load_epoch, "connection_epoch": connection}
+        events = self._ledger.events_by_kind(colony_id, KINDS)
+        fact_data = {key: data[key] for key in ("observation_id", "revision", "condition_id", "receipt_id", "status",
+                                               "sample_tick", "observation", "coverage") if key in data}
+        try:
+            spec = prepare_fact(events, binding=binding, **fact_data)
+        except (ValueError, KeyError, TypeError) as error:
+            self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "observation.ignored",
+                                {"native_event_seq": native_seq, "reason": str(error)})
+            return False
+        self._ledger.append(colony_id, load_epoch, game_tick, spec["source"], spec["kind"],
+                            {**spec["payload"], "native_event_seq": native_seq})
+        native_observation = data.get("observation", {})
+        if data["status"] == "changed" and native_observation.get("format") == "construction_intents.v1":
+            self.reconcile_construction(colony_id, load_epoch, game_tick, connection, {
+                "observation_id": "native-event:" + str(native_seq), "request": {"operation": "inspect_construction_intents"},
+                "response": {"connection_epoch": connection, "colony_id": colony_id, "load_epoch": load_epoch,
+                             "game_tick": data["sample_tick"], "payload": {"status": "ok", "data": native_observation}}})
+        request = next(e for e in reversed(events) if e["kind"] == "observation.requested"
+                       and e["payload"]["observation_id"] == data["observation_id"])
+        task_id = request["payload"]["task_id"]
+        condition = next(row for row in request["payload"]["conditions"] if row["id"] == data["condition_id"])
+        if data["status"] in {"changed", "unknown"} and condition["kind"] == "resources":
+            from .resource_allocation import prepare_observation
+            from .resource_allocation import project as resource_project
+            from .resource_evidence import observed_snapshot
+
+            for decision in resource_project(events)["decisions"]:
+                if decision["task_id"] != task_id:
+                    continue
+                resource_data = native_observation if data["status"] == "changed" else {"map_id": condition.get("map_id"), "objects": []}
+                snapshot = observed_snapshot(resource_data, decision, observation_id="native-event:" + str(native_seq),
+                    load_epoch=load_epoch, game_tick=data["sample_tick"], target_ids=condition["target_ids"])
+                if snapshot is not None:
+                    observed = prepare_observation(events, allocation_id=decision["allocation_id"],
+                        expected_revision=decision["revision"], snapshot=snapshot)
+                    self._ledger.append(colony_id, load_epoch, game_tick, observed["source"], observed["kind"], observed["payload"])
+        task = self._ledger.revision(task_id)
+        if task is None or task["status"] == "closed":
+            return False
+        starts = self._ledger.events_by_kind(colony_id, ("planner.started",), load_epoch=load_epoch)
+        last_start = starts[-1]["seq"] if starts else 0
+        key = "observation:" + task_id
+        pending = self._ledger.events_by_kind(colony_id, ("planner.wake",), after_seq=last_start, load_epoch=load_epoch)
+        if any(e["payload"].get("work_id") == key for e in pending):
+            return False
+        self._ledger.append(colony_id, load_epoch, game_tick, PLUGIN, "planner.wake",
+                            {"source": "game", "text": "Registered observation changed; read colony_work for merged current facts.",
+                             "work_id": key, "task_id": task_id, "event_seq": native_seq,
+                             "review_type": "observation"})
+        return True
 
     def _append_cadence(self, colony_id, load_epoch, game_tick):
         """Append deterministic cadence work while the caller owns the transaction."""
         game_tick = self._ledger.recording_tick(colony_id, load_epoch, game_tick)
         events = self._ledger.cadence_events(colony_id)
-        identity = next((event for event in reversed(events)
-                         if event["kind"] in {LOAD_EVENT, "autoplay.activation"}), None)
-        if identity is not None and identity["load_epoch"] != load_epoch:
+        current_epoch = self._ledger.current_epoch(colony_id)
+        if current_epoch is not None and current_epoch != load_epoch:
             return {"active":False, "items":[]}
         policy, _ = load_policy()
         state = cadence_project(events, epoch=load_epoch, now_tick=game_tick, policy=policy)
@@ -612,6 +844,35 @@ class Journal:
                 payload["accepted_baseline"] = accepted_baseline
             return self._ledger.append(colony_id, load_epoch, game_tick, FRONTDESK, RETURN_EVENT, payload)
 
+    def record_policy_protection(self, colony_id, load_epoch, game_tick, *, utterance_seq, protection, release_seq=None):
+        """Save a protection requested in original user words, or explicitly release it."""
+        if not isinstance(protection, dict):
+            raise ValueError("A policy protection must be an object")
+        kind = protection.get("kind")
+        required = {"reference": {"kind", "pawn_id"}, "policy_content": {"kind", "policy_id"},
+                    "effective_rules": {"kind", "pawn_id"}}.get(kind)
+        allowed = required | ({"policy_id"} if kind == "effective_rules" else set()) if required else set()
+        if (required is None or not required <= protection.keys() or protection.keys() - allowed
+                or any(not isinstance(value, str) or not value.strip() for value in protection.values())):
+            raise ValueError("Invalid policy protection kind or identity")
+        with self._ledger.transaction():
+            if not self._ledger.has_event(colony_id, UTTERANCE_EVENT, utterance_seq):
+                raise ValueError("A protection must cite original user words in this colony")
+            tick = self._ledger.recording_tick(colony_id, load_epoch, game_tick)
+            payload = {"utterance_seq": utterance_seq, "protection": copy.deepcopy(protection)}
+            event_kind = "user.policy_protection"
+            if release_seq is not None:
+                original = self._ledger.event(colony_id, release_seq)
+                released = self._ledger.events_by_kind(colony_id, ("user.policy_protection_released",))
+                if (original is None or original["kind"] != "user.policy_protection" or original["source"] != FRONTDESK
+                        or original["payload"]["protection"] != protection
+                        or utterance_seq <= original["seq"]
+                        or any(e["payload"].get("protection_seq") == release_seq for e in released)):
+                    raise ValueError("Release must cite a matching active protection")
+                payload["protection_seq"] = release_seq
+                event_kind = "user.policy_protection_released"
+            return self._ledger.append(colony_id, load_epoch, tick, FRONTDESK, event_kind, payload)
+
     def record_run(self, colony_id, load_epoch, game_tick, role, utterance_seq, messages, *, result=None, audit=None):
         """Append the assistant and tool messages one frontdesk run added, answering a user utterance."""
         if role != FRONTDESK:
@@ -699,6 +960,11 @@ class Journal:
                 raise BoardError("Entry ids are unique across colonies; this id belongs to another colony")
             row = check_revision(current, actor, submission)
             self._check_references(colony_id, row)
+            if row["kind"] == "task" and row["status"] == "verified":
+                plans = [plan for plan in self.colony_work(colony_id, load_epoch)["construction"]["plans"]
+                         if plan["task_id"] == row["entry_id"]]
+                if plans and not all(plan["construction_complete"] for plan in plans):
+                    raise BoardError("Construction is verified only from current native completion of every effective adopted element")
             seq = self._ledger.append(
                 colony_id,
                 load_epoch,
@@ -710,6 +976,18 @@ class Journal:
             self._ledger.add_revision(colony_id, seq, row)
             if row["kind"] == "task" and row["status"] == "closed":
                 self._ledger.append(colony_id, load_epoch, game_tick, actor, "task.closed", {"reference": row["entry_id"]})
+                from .observations import KINDS as OBSERVATION_KINDS
+                from .observations import prepare_revoke
+                from .observations import project as observation_project
+                observation_events = self._ledger.events_by_kind(colony_id, OBSERVATION_KINDS)
+                requests = [e for e in observation_events if e["kind"] == "observation.requested"]
+                if requests:
+                    binding = requests[-1]["payload"]["binding"]
+                    for intent in observation_project(observation_events, binding=binding)["intents"]:
+                        if intent["active"] and intent["task_id"] == row["entry_id"]:
+                            revoke = prepare_revoke(observation_events, observation_id=intent["observation_id"],
+                                expected_revision=intent["revision"], reason="planner_task_closed")
+                            self._ledger.append(colony_id, load_epoch, game_tick, revoke["source"], revoke["kind"], revoke["payload"])
                 self._append_cadence(colony_id, load_epoch, game_tick)
             return seq
 
@@ -724,6 +1002,231 @@ class Journal:
 
     def board(self, colony_id):
         return current_board(self._ledger.revisions(colony_id))
+
+    def colony_work(self, colony_id, load_epoch, connection_epoch=None):
+        from .work_state import KINDS, project
+
+        return project(self._ledger.events_by_kind(colony_id, KINDS), load_epoch=load_epoch,
+                       connection_epoch=connection_epoch, colony_id=colony_id)
+
+    def construction_dispatch_authority(self, colony_id, load_epoch, plan_id, element_ids):
+        from .construction import assert_dispatch_authority
+        from .work_state import KINDS
+
+        return assert_dispatch_authority(self._ledger.events_by_kind(colony_id, KINDS), plan_id=plan_id,
+                                         element_ids=element_ids, load_epoch=load_epoch)
+
+    def colony_work_command(self, colony_id, load_epoch, game_tick, actor, command, arguments,
+                            *, connection_epoch=None, supported_kinds=()):
+        """Apply a domain decision under the current board task in one transaction.
+
+        Native facts and coverage use separate internal writers. A model can
+        request observation, but cannot report that it was installed or built.
+        """
+        from . import construction, observations, policy_scope, resource_allocation
+        from .work_state import KINDS
+
+        if not isinstance(arguments, dict):
+            raise ValueError("Colony work arguments must be an object")
+        args = copy.deepcopy(arguments)
+        render_spec = args.pop("render_spec", None)
+        attachments = args.pop("attachments", [])
+        with self._ledger.transaction():
+            game_tick = self._ledger.recording_tick(colony_id, load_epoch, game_tick)
+            events = self._ledger.events_by_kind(colony_id, KINDS)
+            if command == "suggest":
+                if actor not in {"frontdesk", "planner", "investigator"}:
+                    raise ValueError("A suggestion requires an agent source")
+                args["attachments"] = attachments
+                if set(args) != {"suggestion_id", "plan", "reason", "attachments"}:
+                    raise ValueError("A suggestion requires its ID, plan, reason and attachments")
+                if (not isinstance(args["suggestion_id"], str) or not args["suggestion_id"].strip()
+                        or not isinstance(args["plan"], dict) or not isinstance(args["reason"], str)
+                        or not args["reason"].strip() or not isinstance(args["attachments"], list)):
+                    raise ValueError("Invalid construction suggestion")
+                spec = {"kind": "construction.suggestion", "source": actor, "payload": {**args, "render_spec": render_spec}}
+            else:
+                if actor != "planner":
+                    raise ValueError("Only the colony planner adopts or changes colony work")
+                task_id = args.get("task_id")
+                task = self._ledger.revision(task_id) if isinstance(task_id, str) else None
+                if (task is None or task["colony_id"] != colony_id or task["kind"] != "task"
+                        or (task["status"] == "closed" and command != "revoke")
+                        or (task["status"] == "verified" and command not in {"revoke", "assess_purpose"})):
+                    raise ValueError("Colony work requires a current open planner task")
+                if command == "adopt":
+                    if args.get("source", {}).get("event_seq") is not None:
+                        source = self._ledger.event(colony_id, args["source"]["event_seq"])
+                        if source is None:
+                            raise ValueError("The adoption source is not retained in this colony")
+                    spec = construction.prepare_adoption(events, load_epoch=load_epoch, **args)
+                elif command == "revise":
+                    plan = next((row for row in construction.project(events, load_epoch=load_epoch)["plans"]
+                                 if row["plan_id"] == args.get("plan_id")), None)
+                    if plan is None or plan["task_id"] != task_id:
+                        raise ValueError("A construction revision must use its adopted planner task")
+                    args.pop("task_id")
+                    spec = construction.prepare_revision(events, load_epoch=load_epoch, **args)
+                elif command == "intent":
+                    plan = next((row for row in construction.project(events, load_epoch=load_epoch)["plans"]
+                                 if row["plan_id"] == args.get("plan_id")), None)
+                    if plan is None or plan["task_id"] != task_id:
+                        raise ValueError("An element intent must use its adopted planner task")
+                    release = self._ledger.event(colony_id, args.get("source_seq")) if type(args.get("source_seq")) is int else None
+                    takeover = (self._ledger.event(colony_id, release["payload"].get("takeover_seq"))
+                                if release and release["kind"] == RETURN_EVENT else None)
+                    selected = [row for row in plan["elements"] if row["id"] in args.get("element_ids", [])
+                                and row["intent"] in construction.STOPPED and (row.get("stop") or {}).get("source") != "planner"]
+                    args["validated_release"] = bool(takeover and takeover["kind"] == TAKEOVER_EVENT and selected
+                        and all((row.get("stop") or {}).get("scope") == {
+                            "object": takeover["payload"]["object"], "field": takeover["payload"]["field"]} for row in selected))
+                    args.pop("task_id")
+                    spec = construction.prepare_intent(events, load_epoch=load_epoch, **args)
+                elif command == "resources":
+                    existing = next((row for row in resource_allocation.project(events)["decisions"]
+                                     if row["allocation_id"] == args.get("allocation_id")), None)
+                    if existing is not None and existing["task_id"] != task_id:
+                        raise ValueError("A resource allocation remains attached to its planner task")
+                    spec = resource_allocation.prepare_selection(events, **args)
+                elif command == "policy":
+                    existing = next((row for row in policy_scope.project(events)["impacts"]
+                                     if row["impact_id"] == args.get("impact_id")), None)
+                    if existing is not None and existing["task_id"] != task_id:
+                        raise ValueError("A policy impact remains attached to its planner task")
+                    spec = policy_scope.prepare_impact(events, **args)
+                elif command == "assess_purpose":
+                    from .purpose_evidence import evidence_ref
+
+                    plan = next((row for row in construction.project(events, load_epoch=load_epoch)["plans"]
+                                 if row["plan_id"] == args.get("plan_id")), None)
+                    if plan is None or plan["task_id"] != task_id:
+                        raise ValueError("Purpose assessment requires its adopted planner task")
+                    spec = construction.prepare_purpose_assessment(events, load_epoch=load_epoch, **args)
+                    evidence = self._ledger.native_work_evidence(colony_id, args["evidence_ids"])
+                    originals = {}
+                    for event in evidence:
+                        original = event["payload"]["observation"]
+                        identifier = original["observation_id"]
+                        if identifier in originals and originals[identifier]["payload"]["observation"] != original:
+                            raise ValueError("Purpose evidence has conflicting original observations")
+                        if event["source"] not in {"planner", "frontdesk"} or event["load_epoch"] != load_epoch:
+                            raise ValueError("Purpose evidence must be retained native work from this epoch")
+                        originals[identifier] = event
+                    if set(originals) != set(args["evidence_ids"]):
+                        raise ValueError("Purpose evidence must cite retained original native observations")
+                    minimum_tick = max((event["game_tick"] for event in events if event["load_epoch"] == load_epoch
+                        and (event["kind"] in {"colony.observed", "colony.load"}
+                             or event["kind"] in {"construction.adopted", "construction.revised", "construction.fact", "construction.restarted"}
+                             and event["payload"].get("plan_id") == plan["plan_id"]
+                             and event["payload"].get("revision") == plan["revision"])), default=0)
+                    refs = []
+                    for identifier in args["evidence_ids"]:
+                        original = originals[identifier]
+                        ref = evidence_ref(original["payload"]["observation"], identity=(connection_epoch, colony_id, load_epoch),
+                            map_id=plan["plan"]["map_id"], minimum_tick=minimum_tick, allow_failed=args["judgment"] == "unknown")
+                        refs.append({**ref, "source_event_seq": original["seq"]})
+                    spec["payload"]["evidence_refs"] = refs
+                elif command == "observe":
+                    binding = {"colony_id": colony_id, "load_epoch": load_epoch,
+                               "connection_epoch": connection_epoch}
+                    existing = next((row for row in observations.project(events, binding=binding)["intents"]
+                                     if row["observation_id"] == args.get("observation_id")), None)
+                    if existing is not None and existing["task_id"] != task_id:
+                        raise ValueError("An observation remains attached to its planner task")
+                    plans = construction.project(events, load_epoch=load_epoch)["plans"]
+                    for condition in args.get("conditions", []):
+                        if condition.get("kind") == "construction":
+                            plan = next((row for row in plans if row["plan_id"] == condition.get("plan_id")), None)
+                            if (plan is None or plan["task_id"] != task_id or plan["plan"]["map_id"] != condition.get("map_id")
+                                    or not set(condition.get("target_ids", [])).issubset({row["id"] for row in plan["elements"]})):
+                                raise ValueError("Construction observation must name this task's adopted plan and current elements")
+                    spec = observations.prepare_request(events, supported_kinds=supported_kinds,
+                                                        binding=binding, now_tick=game_tick, **args)
+                elif command == "revoke":
+                    binding = {"colony_id": colony_id, "load_epoch": load_epoch, "connection_epoch": connection_epoch}
+                    existing = next((row for row in observations.project(events, binding=binding)["intents"]
+                                     if row["observation_id"] == args.get("observation_id")), None)
+                    if existing is None or existing["task_id"] != task_id:
+                        raise ValueError("Revoke the observation from its own planner task")
+                    args.pop("task_id")
+                    spec = observations.prepare_revoke(events, **args)
+                else:
+                    raise ValueError("Unknown colony work command")
+            seq = self._ledger.append(colony_id, load_epoch, game_tick, spec["source"],
+                                      spec["kind"], spec["payload"])
+            if command == "revise":
+                binding = {"colony_id": colony_id, "load_epoch": load_epoch, "connection_epoch": connection_epoch or "unavailable"}
+                for intent in observations.project(events, binding=binding)["intents"]:
+                    if intent["active"] and any(condition.get("kind") == "construction"
+                            and condition.get("plan_id") == spec["payload"]["plan_id"] for condition in intent["conditions"]):
+                        revoke = observations.prepare_revoke(events, observation_id=intent["observation_id"],
+                            expected_revision=intent["revision"], reason="construction_plan_revised")
+                        self._ledger.append(colony_id, load_epoch, game_tick, revoke["source"], revoke["kind"], revoke["payload"])
+            if command in {"adopt", "revise"} and render_spec is not None:
+                self._ledger.append(colony_id, load_epoch, game_tick, actor, "construction.preview",
+                                    {"plan_id": spec["payload"]["plan_id"], "revision": spec["payload"]["revision"],
+                                     "render_spec": render_spec, "attachments": attachments})
+            return {"event_seq": seq, "colony_work": self.colony_work(colony_id, load_epoch, connection_epoch)}
+
+    def observation_coverage(self, colony_id, load_epoch, game_tick, connection_epoch, **receipt):
+        from .observations import prepare_coverage, project
+        from .work_state import KINDS
+
+        with self._ledger.transaction():
+            tick = self._ledger.recording_tick(colony_id, load_epoch, game_tick)
+            binding = {"colony_id": colony_id, "load_epoch": load_epoch, "connection_epoch": connection_epoch}
+            events = self._ledger.events_by_kind(colony_id, KINDS)
+            current = next((row for row in project(events, binding=binding)["intents"]
+                            if row["observation_id"] == receipt.get("observation_id")), None)
+            if current is None or not current["active"] or current["revision"] != receipt.get("revision"):
+                return None
+            spec = prepare_coverage(events, binding=binding, **receipt)
+            return self._ledger.append(colony_id, load_epoch, tick, spec["source"], spec["kind"], spec["payload"])
+
+    def record_resource_observation(self, colony_id, load_epoch, game_tick, **arguments):
+        from .resource_allocation import KINDS, prepare_observation
+
+        with self._ledger.transaction():
+            tick = self._ledger.recording_tick(colony_id, load_epoch, game_tick)
+            if arguments.get("snapshot", {}).get("load_epoch") != load_epoch:
+                raise ValueError("Resource snapshot must belong to the current epoch")
+            spec = prepare_observation(self._ledger.events_by_kind(colony_id, KINDS), **arguments)
+            return self._ledger.append(colony_id, load_epoch, tick, spec["source"], spec["kind"], spec["payload"])
+
+    def reconcile_construction(self, colony_id, load_epoch, game_tick, connection_epoch, observation):
+        """Project native registered intent identity; never adopt a same-position object."""
+        from . import construction
+        from .construction_evidence import facts
+        from .work_state import KINDS
+
+        response = observation.get("response", {})
+        if tuple(response.get(k) for k in ("connection_epoch", "colony_id", "load_epoch")) != (connection_epoch, colony_id, load_epoch):
+            raise ValueError("Construction facts must belong to the active world")
+        operation = observation.get("request", {}).get("operation")
+        if operation not in {"inspect_construction_intents", "inspect_construction", "inspect_areas"}:
+            return []
+        payload = response.get("payload", {})
+        if payload.get("status") not in {"ok", "partial"}:
+            return []
+        if operation == "inspect_construction_intents" and (payload.get("status") != "ok" or payload.get("issues")):
+            return []
+        with (nullcontext() if self._ledger.db.in_transaction else self._ledger.transaction()):
+            tick = self._ledger.recording_tick(colony_id, load_epoch, game_tick)
+            events = self._ledger.events_by_kind(colony_id, KINDS)
+            state = construction.project(events, load_epoch=load_epoch)
+            if operation == "inspect_construction_intents":
+                prepared = facts(state, payload.get("data", {}), observation_id=observation["observation_id"], load_epoch=load_epoch)
+            else:
+                from .area_evidence import facts as area_facts
+                prepared = area_facts(state, payload.get("data", {}), operation=operation,
+                                      observation_id=observation["observation_id"], load_epoch=load_epoch)
+            seqs = []
+            for arguments in prepared:
+                spec = construction.prepare_fact(events, **arguments)
+                seq = self._ledger.append(colony_id, load_epoch, tick, spec["source"], spec["kind"], spec["payload"])
+                events.append({"seq": seq, "load_epoch": load_epoch, **spec})
+                seqs.append(seq)
+            return seqs
 
     def takeovers(self, colony_id):
         return open_takeovers(self._ledger.events_by_kind(colony_id, (TAKEOVER_EVENT, RETURN_EVENT)))

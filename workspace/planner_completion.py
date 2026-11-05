@@ -104,6 +104,10 @@ async def validate_planner_completion(service, entry, colony_id, load_epoch, set
         receipts.append(matches[-1])
     if entry["status"] != "verified":
         return
+    work = await service.call("colony_work", colony_id, load_epoch, bound[0])
+    plans = [plan for plan in work["construction"]["plans"] if plan["task_id"] == entry.get("entry_id")]
+    if plans and not all(plan["construction_complete"] for plan in plans):
+        raise ValueError("Construction verification requires current native completion for every effective element of the adopted plan revision")
     cited = entry.get("evidence")
     if not isinstance(cited, list) or not cited:
         raise ValueError("Cite later original observations for every committed operation")

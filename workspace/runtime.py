@@ -28,12 +28,14 @@ class FrontdeskService:
         self._recovered = set()
         self.runtime = runtime
         self.game_session = game_session
+        self.media_store = None
         self._locks = {}
         self._role_lock = asyncio.Lock()
         self._tasks = set()
         self.active = {}
         self.pending = {}
         self.revision = 0
+        self.authorization_revision = 0
         self.closed = False
         self._journal_timing_lock = threading.Lock()
         self._journal_timing = {}
@@ -144,7 +146,9 @@ class FrontdeskService:
             # single journal worker executes them, not merely when queued.
             guarded = {"observe_epoch", "submit", "set_wake_policy", "set_context_policy", "record_autoplay_activation",
                        "record_utterance", "record_frontdesk_wake", "record_takeover", "record_return",
-                       "ingest_game_event", "attention_state", "attention_declare", "attention_revoke", "pause_watchdog_wake", "pause_watchdog_notify"}
+                       "ingest_game_event", "attention_state", "attention_declare", "attention_revoke", "pause_watchdog_wake", "pause_watchdog_notify",
+                       "colony_work_command", "observation_coverage", "record_policy_protection", "reconcile_construction", "record_resource_observation",
+                       "ingest_area_manual_snapshot"}
             event_kind = (args[4] if len(args) > 4 else kwargs.get("kind")) if method == "record" else None
             if (method in guarded or event_kind in {"planner.wake", "frontdesk.wake", "planner.received", "autoplay.startup_pause"}
                     or (event_kind == "planner.started" and command_binding_check is not None)):
@@ -162,7 +166,13 @@ class FrontdeskService:
                 if method not in {"observe_epoch", "ingest_game_event", "attention_state", "attention_declare", "attention_revoke", "pause_watchdog_wake", "pause_watchdog_notify"} and load and load["load_epoch"] != epoch:
                     raise ToolExecutionError("world_changed", "The recorded colony load changed before the command executed", recoverable=False)
             stage = "journal_ingest" if method == "ingest_game_event" else "journal_call"
-            return getattr(self.journal, method)(*args, **kwargs)
+            result = getattr(self.journal, method)(*args, **kwargs)
+            if method in {"record_policy_protection", "record_takeover", "record_return"}:
+                self.authorization_revision += 1
+            if ((method == "ingest_area_manual_snapshot" and result.get("changed"))
+                    or (method == "ingest_game_event" and result.authorization_changed)):
+                self.authorization_revision += 1
+            return result
         try:
             return await asyncio.get_running_loop().run_in_executor(self._executor, invoke)
         except asyncio.CancelledError:
@@ -185,6 +195,8 @@ class FrontdeskService:
         self._recovered.add(colony)
 
     def capabilities(self, game, utterance_seq, intent_sources=None, *, explicit=False, binding_check=None):
+        from .takeovers import policy_protection_capability
+
         connection = getattr(game, "connection_epoch", None)
         if binding_check is None and connection is not None:
             def binding_check():
@@ -239,6 +251,8 @@ class FrontdeskService:
                     "required": ["entry_id", "expected_revision", "status", "priority", "review_at_tick", "body"], "additionalProperties": False}}, "required": ["action"], "additionalProperties": False}, board),
             ToolSpec("recall", ("Read original historical user words, source-labelled wake triggers or native game events by event_seq, or evidence/tool calls by their IDs. Historical facts are not current observations." if explicit else "Read original historical evidence by evidence_id, or user text or a tool result by event_seq and tool_call_id. Historical facts are not current observations."), {
                 "type": "object", "properties": {"event_seq": {"type": "integer"}, "tool_call_id": {"type": "string"}, "evidence_id": {"type": "string"}, "part": {"type": "string", "enum": ["arguments", "result"]}}, "additionalProperties": False}, read_original),
+            policy_protection_capability(self, game, intent_sources if intent_sources is not None else {utterance_seq},
+                                         binding_check=binding_check),
         )
 
     async def settle_pending(self, colony_id):
@@ -320,6 +334,12 @@ class FrontdeskService:
                 ledger = AgentAuditLedger(question, workspace_id=workspace_id, turn_id=turn_id)
                 session = AgentRunSession.create(ledger=ledger, question=question, history=tuple(history), workspace_id=workspace_id, colony_id=game.colony_id, capabilities=self.capabilities(game, seq, intent_sources, explicit=explicit_update_only, binding_check=binding_check), autoplay=explicit_update_only)
                 session.binding_check = binding_check
+                session.colony_work_service = self
+                session.colony_work_game = game
+                session.media_store = self.media_store
+                from ..media import ImageInputConfig
+                session.image_input = ImageInputConfig(enabled=getattr(settings, "image_input_enabled", False),
+                                                       tokens_per_image=getattr(settings, "image_input_tokens_per_image", 0))
                 session.budget = budget
                 session.budget_scope = (game.colony_id, game.load_epoch, game.game_tick)
                 if trigger_seq is not None:

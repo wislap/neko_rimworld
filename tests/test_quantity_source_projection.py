@@ -6,7 +6,12 @@ import json
 import pytest
 from plugin.plugins.neko_rimworld.agent.context.model_context import make_pruner
 from plugin.plugins.neko_rimworld.agent.world.query_surface import Surface
-from plugin.plugins.neko_rimworld.agent.world.semantic_surface import normalize_object, plan_count, render
+from plugin.plugins.neko_rimworld.agent.world.semantic_surface import (
+    normalize_object,
+    plan_count,
+    plan_forbidden_count,
+    render,
+)
 
 from .test_colony_tools import facts, interaction
 from .test_semantic_tools import catalog
@@ -94,3 +99,48 @@ def test_pawn_count_does_not_receive_item_stock_header():
          "scope": {}, "aggregates": {"records": 3}, "rows": [], "page": {"has_more": False}}]}}
     output = render(plan, native)
     assert output["measures"] == {"records": 3} and "quantity_basis" not in output
+
+
+def _measure(value, *, op="sum", unit="stack_units", field="stack_count"):
+    return {"state": "exact", "value": value, "operation": op, "unit": unit, "field": field}
+
+
+def test_forbidden_split_separates_edible_from_locked_stock_without_claiming_reach():
+    surface = Surface(catalog()["public_query"])
+    obj = normalize_object({"kind": "things", "definition": "MealSurvivalPack"})
+    plan = plan_count(surface, obj, "units", None, 0)
+    totals = {"records": _measure(12, op="count", unit="records", field=None),
+              "units": _measure(59)}
+    forbidden_parts = {"records": _measure(10, op="count", unit="records", field=None),
+                       "units": _measure(47)}
+    native = {"status": "ok", "observation_id": "all", "issues": [], "data": {
+        "sample": {"load_epoch": "load", "game_tick": 420, "sequence": 5},
+        "results": [{"from": "things", "type": "Thing", "state": "complete", "fields": "complete",
+                     "listing": "complete", "scope": {"args": {"include_held": True, "visible_only": False}},
+                     "matched": 12, "aggregates": totals, "rows": [], "page": {"has_more": False}}]}}
+    forbidden = {"status": "ok", "observation_id": "forbidden", "issues": [], "data": {
+        "sample": {"load_epoch": "load", "game_tick": 420, "sequence": 6},
+        "results": [{"from": "things", "type": "Thing", "state": "complete", "fields": "complete",
+                     "listing": "complete", "matched": 10, "aggregates": forbidden_parts, "rows": [],
+                     "page": {"has_more": False}}]}}
+    before = copy.deepcopy((native, forbidden))
+    output = render(plan, native, forbidden=forbidden)
+    availability = output["quantity_basis"]["availability"]
+    units = availability["forbidden_flag"]["units"]
+    assert units["forbidden"]["value"] == 47
+    assert units["not_forbidden"] == {"state": "exact", "value": 12, "operation": "total_minus_forbidden",
+                                      "unit": "stack_units"}
+    assert availability["forbidden_read"]["observation_id"] == "forbidden"
+    assert "does not establish" in availability["basis"] or "not forbidden" in availability["basis"].lower()
+    view = json.loads(make_pruner().compile({"tool": "count", "ok": True, "data": output}).content)["data"]
+    assert view["quantity_basis"]["availability"]["forbidden_flag"]["units"]["not_forbidden"]["value"] == 12
+    assert (native, forbidden) == before
+
+
+def test_forbidden_plan_restricts_the_same_selection_to_the_native_flag():
+    surface = Surface(catalog()["public_query"])
+    obj = normalize_object({"kind": "things", "definition": "MealSurvivalPack"})
+    request = plan_forbidden_count(surface, obj, "units").request
+    assert request["where"] == {"all_comps": {"some": {"on": {"CompForbiddable": {"forbidden": {"eq": True}}}}}}
+    assert request["args"]["def_names"] == ["MealSurvivalPack"]
+    assert request["aggregate"]["units"] == {"op": "sum", "field": "stack_count"}

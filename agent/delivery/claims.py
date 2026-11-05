@@ -388,8 +388,6 @@ def _hit_is_negated(text: str, hit: re.Match[str], index: Mapping[str, Any] | No
     return bool(NEGATED_VERB_PREFIX.search(stripped))
 
 
-
-
 # ---------------------------------------------------------------------------
 # 证据索引（v2：绑定到主语与集合，而不是整轮一个布尔袋）
 # ---------------------------------------------------------------------------
@@ -438,7 +436,6 @@ def _population_signature(node: Mapping[str, Any], total: int | None) -> str | N
         )
     except (TypeError, ValueError):
         return None
-
 
 
 def build_read_index(observations: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
@@ -1125,13 +1122,4 @@ def check_claims(answer: str, detail=None, *, observations=(), index: Mapping[st
     return rejected
 
 
-def describe(rejected: Iterable[Mapping[str, Any]]) -> str:
-    """Render local diagnostics without claiming they prove an unsupported fact."""
-    lines = []
-    for item in rejected:
-        location = f"{item.get('path', item.get('field', 'answer'))}[{item.get('start', 0)}:{item.get('end', 0)}]"
-        lines.append(f"{location} {item['label']}（“{item['quote']}”）。{item['hint']}")
-    return " ".join(lines)
-
-
-__all__ = ["CLAIM_CLASSES", "build_read_index", "check_claims", "describe"]
+__all__ = ["CLAIM_CLASSES", "build_read_index", "check_claims"]

@@ -29,6 +29,8 @@ export function useSettings(services: PanelServices) {
   const [baseUrl, setBaseUrl] = useState(state.configuration?.agent_base_url || "")
   const [model, setModel] = useState(state.configuration?.agent_model || "")
   const [apiKey, setApiKey] = useState("")
+  const [imageInputEnabled, setImageInputEnabled] = useState(state.configuration?.image_input_enabled === true)
+  const [imageInputTokens, setImageInputTokens] = useState<number | "">(state.configuration?.image_input_tokens_per_image ?? 0)
   const [budgets, setBudgets] = useState<BudgetValues>(initialBudgets(state))
   const [agentDirty, setAgentDirty] = useState(false)
   const [bridgeId, setBridgeId] = useLocalState("rimworld:bridge-save", latestReceipt(state, "bridge")?.operation_id || "")
@@ -48,10 +50,10 @@ export function useSettings(services: PanelServices) {
   runtimeNonce.current = state.action_nonce || ""
   const checkingGate = useRef<string | null>(null)
   const [submitting, setSubmitting] = useState<Kind | null>(null)
-  const savedAgentKey = JSON.stringify([state.configuration?.agent_base_url, state.configuration?.agent_model, state.configuration?.agent_budgets])
+  const savedAgentKey = JSON.stringify([state.configuration?.agent_base_url, state.configuration?.agent_model, state.configuration?.agent_budgets, state.configuration?.image_input_enabled, state.configuration?.image_input_tokens_per_image])
   useEffect(() => { if (!bridgeDirty) setPort(state.port ?? 48919) }, [state.port])
   useEffect(() => {
-    if (!agentDirty) { setBaseUrl(state.configuration?.agent_base_url || ""); setModel(state.configuration?.agent_model || ""); setBudgets(initialBudgets(state)) }
+    if (!agentDirty) { setBaseUrl(state.configuration?.agent_base_url || ""); setModel(state.configuration?.agent_model || ""); setBudgets(initialBudgets(state)); setImageInputEnabled(state.configuration?.image_input_enabled === true); setImageInputTokens(state.configuration?.image_input_tokens_per_image ?? 0) }
   }, [savedAgentKey])
   function setReceipt(kind: Kind, value: SettingsReceipt) {
     if (!mounted.current) return
@@ -144,6 +146,8 @@ export function useSettings(services: PanelServices) {
   function changeBaseUrl(value: string) { edits.current.agent++; setBaseUrl(value); setAgentDirty(true); setAgentError(null); setAgentReceipt(null) }
   function changeModel(value: string) { edits.current.agent++; setModel(value); setAgentDirty(true); setAgentError(null); setAgentReceipt(null) }
   function changeApiKey(value: string) { edits.current.agent++; setApiKey(value); setAgentDirty(true); setAgentError(null); setAgentReceipt(null) }
+  function changeImageInputEnabled(value: boolean) { edits.current.agent++; setImageInputEnabled(value); setAgentDirty(true); setAgentError(null); setAgentReceipt(null) }
+  function changeImageInputTokens(value: number | "") { edits.current.agent++; setImageInputTokens(value); setAgentDirty(true); setAgentError(null); setAgentReceipt(null) }
   function changeBudget(key: string, value: number | "") { edits.current.agent++; setBudgets(old => ({ ...old, [key]: value })); setAgentDirty(true); setAgentError(null); setAgentReceipt(null) }
   async function saveBridge() {
     const token = pairingToken.trim()
@@ -153,10 +157,11 @@ export function useSettings(services: PanelServices) {
   async function saveAgent() {
     const invalid = budgetError(budgets, BUDGET_FIELDS, t)
     if (!baseUrl.trim() || !model.trim() || invalid) { setAgentError(new Error(invalid || t("settings.invalidModel"))); return }
-    await save("agent", { base_url: baseUrl.trim(), model: model.trim(), api_key: apiKey.trim(), budgets })
+    if (typeof imageInputTokens !== "number" || !Number.isInteger(imageInputTokens) || imageInputTokens < 0 || imageInputTokens > 1000000 || imageInputEnabled && imageInputTokens === 0) { setAgentError(new Error(t("settings.invalidImageInputTokens"))); return }
+    await save("agent", { base_url: baseUrl.trim(), model: model.trim(), api_key: apiKey.trim(), budgets, image_input_enabled: imageInputEnabled, image_input_tokens_per_image: imageInputTokens })
   }
   return { state, port, changePort, pairingToken, changeToken, baseUrl, changeBaseUrl,
-    model, changeModel, apiKey, changeApiKey, budgets, changeBudget, bridgeDirty, agentDirty,
+    model, changeModel, apiKey, changeApiKey, budgets, changeBudget, imageInputEnabled, changeImageInputEnabled, imageInputTokens, changeImageInputTokens, bridgeDirty, agentDirty,
     savingBridge: submitting === "bridge" || bridgeReceipt?.state === "saving",
     savingAgent: submitting === "agent" || agentReceipt?.state === "saving",
     bridgeError, agentError, bridgeReceipt, agentReceipt, checking,

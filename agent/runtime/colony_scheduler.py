@@ -66,6 +66,7 @@ class ColonyScheduler:
         self._event_cursor = 0
         self._policy_installed = False
         self._installed_policy = None
+        self._installed_observations = None
         self._frontdesk_signal = asyncio.Event()
         self._frontdesk_results = asyncio.Queue()
         self._pending_frontdesk = None
@@ -237,6 +238,8 @@ class ColonyScheduler:
         finally:
             try:
                 if self._event_port is not None and self._event_identity and self._event_identity() is not None:
+                    if "colony_observation.v1" in self._event_port.capabilities:
+                        await self._event_port.push_observations({"source": "planner", "observations": []})
                     if "colony_pause.v1" in self._event_port.capabilities:
                         await self._event_port.push_policy({"source": "frontdesk", "pause_on_letter_defs": []})
             finally:
@@ -246,6 +249,60 @@ class ColonyScheduler:
                 self._watchdog_worker = None
                 if ColonyScheduler._owner is self:
                     ColonyScheduler._owner = None
+
+    async def _sync_observations(self):
+        identity = self._event_identity()
+        if identity is None:
+            return
+        connection, colony, epoch = identity
+        game = self.service.game_session()
+        if game is None or (game.colony_id, game.load_epoch) != (colony, epoch):
+            return
+        state = await self.service.call("colony_work", colony, epoch, connection)
+        tasks = {row["entry_id"] for row in await self.service.call("board", colony)
+                 if row["kind"] == "task" and row["status"] != "closed"}
+        coverage = {row["observation_id"]: row for row in state["observations"]["coverage"]}
+        desired = []
+        for row in state["observations"]["intents"]:
+            if not row["executable"] or row["task_id"] not in tasks:
+                continue
+            observed = coverage[row["observation_id"]]
+            states = observed.get("condition_states", {})
+            if all(states.get(condition["id"]) in {"expired", "exhausted"} for condition in row["conditions"]):
+                continue
+            if (not any(condition["expires_at_tick"] > game.game_tick for condition in row["conditions"])
+                    and observed.get("receipt_id") is None):
+                continue
+            # Keep the immutable group until its native terminal event has been
+            # ingested; removing it at the tick boundary can lose that evidence.
+            desired.append({"observation_id": row["observation_id"], "revision": row["revision"], "conditions": row["conditions"]})
+        directory = getattr(self._event_setup, "directory", None) or {}
+        limits = directory.get("colony_observation", {}).get("limits", {})
+        if (len(desired) > limits.get("observations", 16)
+                or sum(len(condition["target_ids"]) for row in desired for condition in row["conditions"]) > limits.get("targets", 64)):
+            # No implicit target selection: poll the pending terminal events,
+            # then install the full requested set on the next existing cycle.
+            return
+        signature = (identity, desired)
+        if self._installed_observations == signature:
+            return
+        result = await self._event_port.push_observations({"source": "planner", "observations": desired})
+        if self._event_identity() != identity:
+            raise ToolExecutionError("world_changed", "Observation registration belongs to an earlier connection", recoverable=False)
+        registrations = result.get("registrations")
+        if not isinstance(registrations, list):
+            raise ToolExecutionError("observation_ack_invalid", "The native observation response has no registration coverage")
+        expected = {(row["observation_id"], row["revision"]) for row in desired}
+        actual = {(row.get("observation_id"), row.get("revision")) for row in registrations if isinstance(row, dict)}
+        if actual != expected or len(registrations) != len(expected):
+            raise ToolExecutionError("observation_ack_invalid", "Native observation ACKs do not match the requested revisions")
+        for receipt in registrations:
+            seq = await self.service.call("observation_coverage", colony, epoch, game.game_tick, connection, **receipt,
+                                          command_binding_check=lambda: self._event_identity() == identity)
+            if seq is None:
+                self._installed_observations = None
+                return
+        self._installed_observations = copy.deepcopy(signature)
 
     async def _run_events(self):
         """Poll only the negotiated bound port; a change requires a fresh binding."""
@@ -281,6 +338,7 @@ class ColonyScheduler:
                         self._event_port = self._event_identity = None
                     else:
                         self._event_port, self._event_identity = port, identity
+                        self._installed_observations = None
                         self._event_setup = setup
                         connection, colony, epoch = identity()
                         self._event_cursor = await self.service.call("game_event_cursor", colony, epoch, connection)
@@ -295,6 +353,8 @@ class ColonyScheduler:
                         await self._event_port.push_policy({"source": "frontdesk", "pause_on_letter_defs": desired})
                         self._installed_policy = copy.deepcopy(desired)
                         self._policy_installed = True
+                if self._event_port is not None and "colony_observation.v1" in self._event_port.capabilities:
+                    await self._sync_observations()
                 if self._event_port is not None and "colony_events.v1" in self._event_port.capabilities:
                     connection, colony, epoch = self._event_identity()
                     poll_identity = (connection, colony, epoch)
@@ -864,8 +924,12 @@ class ColonyScheduler:
 
             try:
                 setup = await self._event_provider()
-                control = TakeoverControl(self.service, setup.ledger_query, setup.write_identity, setup.write_fields_query)
-                await control.assess()
+                # A modern write guard reads only its resolved fields. An eager
+                # whole-ledger scan would reintroduce the large-colony frame
+                # limit before the planner can choose a bounded operation.
+                if getattr(setup, "scoped_ledger_query", None) is None:
+                    control = TakeoverControl(self.service, setup.ledger_query, setup.write_identity, setup.write_fields_query)
+                    await control.assess()
             except ToolExecutionError as error:
                 await self.service.call("record", colony_id, load_epoch, current_tick(), "plugin",
                                         "takeover.unavailable", {"code": error.code, "message": str(error)})
@@ -941,6 +1005,9 @@ class ColonyScheduler:
              and closed_ticks.get(entry["event_seq"], -1) >= last_tick - 180_000),
             key=lambda entry: entry["event_seq"] if entry["event_seq"] else 0)[-30:]
         context["review_marks"] = await self.service.call("review_marks", colony_id)
+        from ...workspace.work_state import summary as work_summary
+        context["colony_work"] = work_summary(await self.service.call("colony_work", colony_id, load_epoch,
+                                                        getattr(run_scope or game, "connection_epoch", None)))
         context["activation_meaning"] = ("Latest user-selected autoplay goal and constraints; persistent across loads, "
                                          "not a current world observation.")
         context["interrupted_runs"] = interrupted
@@ -1054,6 +1121,12 @@ class ColonyScheduler:
                                          colony_id=game.colony_id, capabilities=capabilities, role="planner",
                                          planner_loop=True)
         session.takeover_service = self.service
+        session.colony_work_service = self.service
+        session.colony_work_game = run_scope or game
+        session.media_store = self.service.media_store
+        from ...media import ImageInputConfig
+        session.image_input = ImageInputConfig(enabled=run_settings.image_input_enabled,
+                                               tokens_per_image=run_settings.image_input_tokens_per_image)
 
         async def progress(payload):
             await self.service.call("record", colony_id, load_epoch, current_tick(require_binding=False),
