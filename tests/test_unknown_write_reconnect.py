@@ -18,24 +18,24 @@ async def test_unknown_write_from_old_connection_halts_same_world(code):
     class Service:
         async def call(self, *args, **kwargs):
             recorded.append(args)
-    scheduler = plugin._colony_scheduler = SimpleNamespace(halted=False, budget=SimpleNamespace(blocked=False), service=Service())
-    plugin._autoplay_waiters = {}
+    scheduler = plugin._autoplay.scheduler = SimpleNamespace(halted=False, budget=SimpleNamespace(blocked=False), service=Service())
+    plugin._autoplay.waiters = {}
     for index, connection in enumerate(("A", "B")):
         future = asyncio.get_running_loop().create_future()
         future._autoplay_binding = (scheduler, connection, "c", "e")
-        plugin._autoplay_waiters[index] = future
+        plugin._autoplay.waiters[index] = future
     async def notification(*args, **kwargs):
         pass
-    plugin._audit_failure_notification = notification
+    plugin._autoplay.audit_failure_notification = notification
     result = {"status": "failed", "audit": {"error_code": code}}
     if code == "write_record_issue":
         result["write_recording"] = {"stage": "result", "mode": "commit", "outcome": "known", "needs_reconciliation": True}
-    await plugin._autoplay_failure("planner", result, old,
+    await plugin._autoplay.failure("planner", result, old,
                                    origin_scheduler=scheduler)
     assert scheduler.halted and scheduler.budget.blocked
-    assert all(f.done() and f.result()["audit"]["error_code"] == code for f in plugin._autoplay_waiters.values())
-    assert plugin._autoplay_fault["origin_connection_epoch"] == "A"
-    assert plugin._autoplay_fault["observed_connection_epoch"] == "B"
+    assert all(f.done() and f.result()["audit"]["error_code"] == code for f in plugin._autoplay.waiters.values())
+    assert plugin._autoplay.fault["origin_connection_epoch"] == "A"
+    assert plugin._autoplay.fault["observed_connection_epoch"] == "B"
     halted = next(args for args in recorded if args[5] == "autoplay.halted")
     assert halted[6]["origin_connection_epoch"] == "A" and halted[6]["observed_connection_epoch"] == "B"
 
@@ -50,14 +50,14 @@ async def test_other_stale_failures_do_not_halt_current_world(case):
     class Service:
         async def call(self, *args, **kwargs):
             pass
-    scheduler = plugin._colony_scheduler = SimpleNamespace(halted=False, budget=SimpleNamespace(blocked=False), service=Service())
+    scheduler = plugin._autoplay.scheduler = SimpleNamespace(halted=False, budget=SimpleNamespace(blocked=False), service=Service())
     origin = SimpleNamespace(halted=False, budget=SimpleNamespace(blocked=False), service=Service()) if case == "new_scheduler" else scheduler
-    plugin._autoplay_waiters = {}
+    plugin._autoplay.waiters = {}
     code = "world_changed" if case == "ordinary_failure" else "write_record_issue" if case == "not_sent" else "undo_outcome_unknown"
     result = {"audit": {"error_code": code}}
     if case == "not_sent":
         result["write_recording"] = {"outcome": "not_sent", "needs_reconciliation": False}
-    await plugin._autoplay_failure("planner", result, old, origin_scheduler=origin)
+    await plugin._autoplay.failure("planner", result, old, origin_scheduler=origin)
     assert not scheduler.halted and not scheduler.budget.blocked
 
 
@@ -114,15 +114,15 @@ async def test_unknown_write_cancels_other_role_not_failure_handler():
     class Service:
         async def call(self, *args, **kwargs):
             pass
-    scheduler = plugin._colony_scheduler = SimpleNamespace(
+    scheduler = plugin._autoplay.scheduler = SimpleNamespace(
         halted=False, budget=SimpleNamespace(blocked=False), service=Service(),
         _worker=asyncio.current_task(), _frontdesk_worker=other)
-    plugin._autoplay_waiters = {}
+    plugin._autoplay.waiters = {}
     async def notification(*args, **kwargs):
         pass
-    plugin._audit_failure_notification = notification
+    plugin._autoplay.audit_failure_notification = notification
     old = SimpleNamespace(colony_id="c", load_epoch="e", game_tick=1, connection_epoch="A")
-    await plugin._autoplay_failure("planner", {"audit": {"error_code": "write_receipt_lost"}}, old,
+    await plugin._autoplay.failure("planner", {"audit": {"error_code": "write_receipt_lost"}}, old,
                                    origin_scheduler=scheduler)
     assert not asyncio.current_task().cancelled()
     with pytest.raises(asyncio.CancelledError):
@@ -156,17 +156,17 @@ async def test_unknown_write_halt_stops_new_connection_model_before_tool(tmp_pat
     scheduler = ColonyScheduler(service, settings(), binding=lambda: ("B", "c", "e"))
     plugin, _ = make_plugin({"neko_rimworld": {}})
     plugin._bridge = SimpleNamespace(session=game, connection_key="B")
-    plugin._colony_scheduler = scheduler
-    plugin._autoplay_waiters = {}
+    plugin._autoplay.scheduler = scheduler
+    plugin._autoplay.waiters = {}
     async def notification(*args, **kwargs):
         pass
-    plugin._audit_failure_notification = notification
+    plugin._autoplay.audit_failure_notification = notification
     scheduler.start()
     try:
         await scheduler.wake(game, source="plugin", text="Plan")
         await asyncio.wait_for(entered.wait(), 3)
         old = SimpleNamespace(colony_id="c", load_epoch="e", game_tick=9, connection_epoch="A")
-        await plugin._autoplay_failure("frontdesk", {"audit": {"error_code": "write_receipt_lost"}}, old,
+        await plugin._autoplay.failure("frontdesk", {"audit": {"error_code": "write_receipt_lost"}}, old,
                                        origin_scheduler=scheduler)
         release.set()
         for _ in range(300):

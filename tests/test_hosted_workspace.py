@@ -67,7 +67,7 @@ def configure(plugin, directory, models, provider=empty_tools):
         model_factory=lambda _: models.pop(0),
         audit_registry=plugin._agent_audit,
         logger=plugin.logger,
-        report_sink=plugin._save_report,
+        report_sink=plugin._report_service.save,
 
     )
 
@@ -245,7 +245,7 @@ async def test_colony_change_while_waiting_for_lock_rejects_original_request(plu
     configure(plugin, tmp_path, [model])
     lock = asyncio.Lock()
     await lock.acquire()
-    plugin._frontdesk_entry_locks = {"colony-A": lock}
+    plugin._consultations._colony_locks = {"colony-A": lock}
     task = asyncio.create_task(plugin.rimworld_consult(question="same", _ctx=host_context(turn="request")))
     await asyncio.sleep(0)
     plugin._bridge.session = SessionDescriptor("colony-B", "load-2", 20, 2)

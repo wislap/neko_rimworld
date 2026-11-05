@@ -29,16 +29,17 @@ async def test_dispatch_exception_records_bounded_diagnostics_and_still_halts(ro
             raise AssertionError(method)
     service = Service()
     plugin = object.__new__(NekoRimworldPlugin)
+    plugin._compose_services()
     plugin._bridge = SimpleNamespace(session=game, connection_key="conn")
-    plugin._autoplay_waiters = {}
-    plugin._autoplay_fault = None
+    plugin._autoplay.waiters = {}
+    plugin._autoplay.fault = None
     plugin.ctx = SimpleNamespace(push_message=lambda **kwargs: {"submitted": True})
     completed = asyncio.Event()
     async def handler(role, result, bound):
-        await plugin._autoplay_failure(role, result, bound, origin_scheduler=scheduler)
+        await plugin._autoplay.failure(role, result, bound, origin_scheduler=scheduler)
         completed.set()
     scheduler = ColonyScheduler(service, None, binding=lambda: ("conn", "c", "e"), failure_handler=handler)
-    plugin._colony_scheduler = scheduler
+    plugin._autoplay.scheduler = scheduler
     scheduler._games["c"] = scheduler._bind_game(game)
     async def crash(*_):
         raise ValueError("private failure text must not leak")
@@ -50,11 +51,11 @@ async def test_dispatch_exception_records_bounded_diagnostics_and_still_halts(ro
     (scheduler._signal if role == "planner" else scheduler._frontdesk_signal).set()
     try:
         await asyncio.wait_for(completed.wait(), 3)
-        assert scheduler.halted and plugin._autoplay_fault["code"] == "execution_failed"
-        assert plugin._autoplay_fault["diagnostic_status"] == ("unconfirmed" if record_failure else "recorded")
+        assert scheduler.halted and plugin._autoplay.fault["code"] == "execution_failed"
+        assert plugin._autoplay.fault["diagnostic_status"] == ("unconfirmed" if record_failure else "recorded")
         records = [x for x in events if x["kind"] == "autoplay.scheduler_exception"]
         if record_failure:
-            assert not records and plugin._autoplay_fault["diagnostic_seq"] is None
+            assert not records and plugin._autoplay.fault["diagnostic_seq"] is None
         else:
             assert len(records) == 1 and records[0]["epoch"] == "e"
             payload = records[0]["payload"]
@@ -63,7 +64,7 @@ async def test_dispatch_exception_records_bounded_diagnostics_and_still_halts(ro
             assert 1 <= len(payload["frames"]) <= 8
             assert all(set(frame) == {"file", "function", "line"} for frame in payload["frames"])
             assert "private failure text" not in json.dumps(payload)
-            assert plugin._autoplay_fault["diagnostic_seq"] is not None
+            assert plugin._autoplay.fault["diagnostic_seq"] is not None
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)

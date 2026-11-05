@@ -56,10 +56,11 @@ async def test_host_submission_is_acknowledged_once_without_claiming_consumption
             self.messages.append(kwargs)
             return {"submitted": True}
     plugin = object.__new__(NekoRimworldPlugin)
+    plugin._compose_services()
     plugin.ctx = Context()
-    plugin._autoplay_waiters = {}
+    plugin._autoplay.waiters = {}
     scheduler = Scheduler()
-    task = asyncio.create_task(plugin._deliver_autoplay(scheduler))
+    task = asyncio.create_task(plugin._autoplay.deliver(scheduler))
     await scheduler.queue.put({"delivery_id": 1, "result": {"status": "ok", "answer": "hello", "workspace": {"turn_id": "4"}, "terminal": {"kind": "reply"}}})
     for _ in range(20):
         if scheduler.acks:
@@ -88,15 +89,16 @@ async def test_failure_pauses_only_endpoint_and_uses_blind_notification(code, ex
             self.messages.append(kwargs)
             return {"submitted": True}
     plugin = object.__new__(NekoRimworldPlugin)
+    plugin._compose_services()
     plugin.ctx = Context()
-    plugin._autoplay_waiters = {}
+    plugin._autoplay.waiters = {}
     service, port = Service(), Port()
-    plugin._colony_scheduler = SimpleNamespace(halted=False, service=service, budget=None)
+    plugin._autoplay.scheduler = SimpleNamespace(halted=False, service=service, budget=None)
     plugin._bridge = SimpleNamespace(session=SimpleNamespace(colony_id="c", load_epoch="e", game_tick=3))
     async def setup(): return SimpleNamespace(write_port=port, write_identity=lambda: ("connection", "c", "e"))
     plugin._load_agent_tools = setup
-    await plugin._autoplay_failure("planner", {"status": "failed", "audit": {"error_code": code}})
-    assert plugin._colony_scheduler.halted
+    await plugin._autoplay.failure("planner", {"status": "failed", "audit": {"error_code": code}})
+    assert plugin._autoplay.scheduler.halted
     assert bool(port.calls) is expected_pause
     if expected_pause:
         assert port.calls == [(True, "policy")]
@@ -142,10 +144,11 @@ async def test_recorded_host_attempt_is_not_replayed_after_restart():
     class Context:
         def push_message(self, **kwargs): raise AssertionError("already attempted")
     plugin = object.__new__(NekoRimworldPlugin)
+    plugin._compose_services()
     plugin.ctx = Context()
-    plugin._autoplay_waiters = {}
+    plugin._autoplay.waiters = {}
     scheduler = Scheduler()
-    task = asyncio.create_task(plugin._delivery_loop(scheduler))
+    task = asyncio.create_task(plugin._autoplay.delivery_loop(scheduler))
     await scheduler.queue.put({"delivery_id": 1, "result": {"status": "ok", "answer": "hello", "workspace": {"turn_id": "4"}, "terminal": {"kind": "reply"}}})
     for _ in range(20):
         if scheduler.acks:
@@ -169,12 +172,13 @@ async def test_user_in_background_inbox_receives_same_result(terminal):
         async def next_frontdesk_result(self): return await self.queue.get()
         async def ack_frontdesk_result(self, ident): self.acks.append(ident)
     plugin = object.__new__(NekoRimworldPlugin)
-    plugin._autoplay_waiters = {8: asyncio.get_running_loop().create_future()}
+    plugin._compose_services()
+    plugin._autoplay.waiters = {8: asyncio.get_running_loop().create_future()}
     scheduler = Scheduler()
-    task = asyncio.create_task(plugin._delivery_loop(scheduler))
+    task = asyncio.create_task(plugin._autoplay.delivery_loop(scheduler))
     result = {"status": "ok", "answer": "hello", "workspace": {"turn_id": "4"}, "terminal": {"kind": terminal}}
     await scheduler.queue.put({"delivery_id": 5, "through_seq": 8, "result": result})
-    assert await asyncio.wait_for(plugin._autoplay_waiters[8], 1) == result
+    assert await asyncio.wait_for(plugin._autoplay.waiters[8], 1) == result
     task.cancel()
     await asyncio.gather(task, return_exceptions=True)
 
@@ -304,9 +308,9 @@ async def test_panel_enable_records_activation_and_starts_one_scheduler(monkeypa
     game = SimpleNamespace(colony_id="colony", load_epoch="epoch", game_tick=10)
     plugin._bridge = SimpleNamespace(session=game, connection_key="connection")
     plugin._agent_settings = SimpleNamespace(configured=True)
-    plugin._autoplay_budget = None
-    plugin._colony_scheduler = None
-    plugin._autoplay_waiters = {}
+    plugin._autoplay.budget = None
+    plugin._autoplay.scheduler = None
+    plugin._autoplay.waiters = {}
     class Journal:
         closed = False
         def __init__(self): self.calls = []
@@ -350,8 +354,8 @@ async def test_panel_enable_records_activation_and_starts_one_scheduler(monkeypa
     assert work.calls[-1] == ("record_autoplay_activation", "colony", "epoch", 10,
         {"goal": "Keep the colony peaceful", "constraints": "No cannibalism or live organ harvesting.",
          "goal_edited": True, "constraints_edited": False})
-    assert plugin._colony_scheduler.resumed is game
-    await plugin._stop_autoplay()
+    assert plugin._autoplay.scheduler.resumed is game
+    await plugin._autoplay.stop()
 
 @pytest.mark.asyncio
 async def test_autoplay_binding_rejects_a_different_colony():
@@ -373,15 +377,16 @@ async def test_late_endpoint_failure_never_pauses_new_connection():
         async def set_paused(self, value, *, role): self.calls.append((value, role))
     port = Port()
     plugin = object.__new__(NekoRimworldPlugin)
+    plugin._compose_services()
     plugin.ctx = Context()
-    plugin._autoplay_waiters = {}
+    plugin._autoplay.waiters = {}
     plugin._bridge = SimpleNamespace(session=SimpleNamespace(colony_id="A", load_epoch="epoch", game_tick=1))
-    plugin._colony_scheduler = SimpleNamespace(halted=False, service=Service(), budget=None)
+    plugin._autoplay.scheduler = SimpleNamespace(halted=False, service=Service(), budget=None)
     async def setup(): return SimpleNamespace(write_port=port, write_identity=lambda: ("new-connection", "A", "epoch"))
     plugin._load_agent_tools = setup
-    await plugin._autoplay_failure("planner", {"audit": {"error_code": "model_transport"}},
+    await plugin._autoplay.failure("planner", {"audit": {"error_code": "model_transport"}},
         SimpleNamespace(colony_id="A", load_epoch="epoch", connection_epoch="old-connection"))
-    assert not port.calls and not plugin._colony_scheduler.halted
+    assert not port.calls and not plugin._autoplay.scheduler.halted
 
 
 @pytest.mark.asyncio
@@ -401,12 +406,13 @@ async def test_old_colony_delivery_is_acknowledged_without_host_push(same_colony
     class Context:
         def push_message(self, **kwargs): raise AssertionError("stale response was pushed")
     plugin = object.__new__(NekoRimworldPlugin)
+    plugin._compose_services()
     plugin.ctx = Context()
     plugin._bridge = SimpleNamespace(session=SimpleNamespace(colony_id="A" if same_colony_new_connection else "B", load_epoch="old" if same_colony_new_connection else "new"), connection_key="new-connection")
     waiter = asyncio.get_running_loop().create_future()
-    plugin._autoplay_waiters = {3: waiter}
+    plugin._autoplay.waiters = {3: waiter}
     scheduler = Scheduler()
-    task = asyncio.create_task(plugin._delivery_loop(scheduler))
+    task = asyncio.create_task(plugin._autoplay.delivery_loop(scheduler))
     await scheduler.queue.put({"delivery_id": 3, "through_seq": 3, "colony_id": "A", "load_epoch": "old", "connection_epoch": "old-connection", "require_connection": True,
                                "result": {"status": "ok", "terminal": {"kind": "reply"}}})
     assert (await asyncio.wait_for(waiter, 1))["audit"]["error_code"] == "world_changed"
@@ -467,16 +473,16 @@ async def test_inbox_host_retry_rejects_reconnected_scope_without_new_dispatch(t
     plugin, _ = make_plugin({})
     plugin._agent_settings = settings()
     plugin._bridge = SimpleNamespace(session=game, connection_key="old")
-    plugin._colony_scheduler = scheduler
-    plugin._autoplay_waiters = {}
+    plugin._autoplay.scheduler = scheduler
+    plugin._autoplay.waiters = {}
     pushes = []
     plugin.ctx = SimpleNamespace(push_message=lambda **kwargs: pushes.append(kwargs) or {"submitted": True})
     scheduler.start()
-    consumer = asyncio.create_task(plugin._deliver_autoplay(scheduler))
+    consumer = asyncio.create_task(plugin._autoplay.deliver(scheduler))
     try:
         await scheduler.wake_frontdesk(game, "game trigger", source="game")
         await asyncio.wait_for(entered.wait(), 5)
-        request = asyncio.create_task(plugin._consultation("User question", {"run_id": "host-id"}, game))
+        request = asyncio.create_task(plugin._consultations._shared("User question", {"run_id": "host-id"}, game))
         for _ in range(500):
             events = await service.call("events", "colony")
             if any(e["kind"] == "user.utterance" for e in events):
@@ -489,16 +495,16 @@ async def test_inbox_host_retry_rejects_reconnected_scope_without_new_dispatch(t
         assert any(e["kind"] == "frontdesk.inbox" for e in events)
         assert any(e["kind"] == "frontdesk.run_binding" and e["payload"]["connection"] == "old" for e in events)
         before = len(model.requests)
-        same = await asyncio.wait_for(plugin._consultation("User question", {"run_id": "host-id"}, game), 1)
+        same = await asyncio.wait_for(plugin._consultations._shared("User question", {"run_id": "host-id"}, game), 1)
         assert same.is_ok()
         plugin._bridge.connection_key = "new"
-        retry = await asyncio.wait_for(plugin._consultation("User question", {"run_id": "host-id"}, game), 1)
+        retry = await asyncio.wait_for(plugin._consultations._shared("User question", {"run_id": "host-id"}, game), 1)
         assert not retry.is_ok() and retry.error.code == "world_changed"
         plugin._bridge.connection_key = "old"
         initial_wake = next(e["payload"]["wake_seq"] for e in events if e["kind"] == "frontdesk.run_binding")
         await service.call("record", "colony", "epoch", 10, "plugin", "autoplay.stale_delivery",
                            {"delivery_id": initial_wake, "reason": "world_changed"})
-        expired = await asyncio.wait_for(plugin._consultation("User question", {"run_id": "host-id"}, game), 1)
+        expired = await asyncio.wait_for(plugin._consultations._shared("User question", {"run_id": "host-id"}, game), 1)
         assert not expired.is_ok() and expired.error.code == "world_changed"
         assert len(model.requests) == before and not pushes
     finally:
@@ -540,18 +546,18 @@ async def test_readonly_retry_rejects_completed_autoplay_run_without_new_model(t
     plugin, _ = make_plugin({})
     plugin._agent_settings = settings()
     plugin._bridge = SimpleNamespace(session=game, connection_key="old")
-    plugin._colony_scheduler = scheduler
+    plugin._autoplay.scheduler = scheduler
     plugin._workspace_service = service
-    plugin._autoplay_waiters = {}
+    plugin._autoplay.waiters = {}
     pushes = []
     plugin.ctx = SimpleNamespace(push_message=lambda **kwargs: pushes.append(kwargs) or {"submitted": True})
     scheduler.start()
-    consumer = asyncio.create_task(plugin._deliver_autoplay(scheduler))
+    consumer = asyncio.create_task(plugin._autoplay.deliver(scheduler))
     try:
         if inbox:
             await scheduler.wake_frontdesk(game, "game trigger", source="game")
             await asyncio.wait_for(entered.wait(), 5)
-        request = asyncio.create_task(plugin._consultation("User question", {"run_id": "host-id"}, game))
+        request = asyncio.create_task(plugin._consultations._shared("User question", {"run_id": "host-id"}, game))
         if not inbox:
             await asyncio.wait_for(entered.wait(), 5)
         for _ in range(500):
@@ -565,8 +571,8 @@ async def test_readonly_retry_rejects_completed_autoplay_run_without_new_model(t
         consumer.cancel()
         await asyncio.gather(consumer, return_exceptions=True)
         await scheduler.close()
-        plugin._colony_scheduler = None
-        result = await asyncio.wait_for(plugin._consultation("User question", {"run_id": "host-id"}, game), 1)
+        plugin._autoplay.scheduler = None
+        result = await asyncio.wait_for(plugin._consultations._shared("User question", {"run_id": "host-id"}, game), 1)
         assert not result.is_ok() and result.error.code == "world_changed"
         assert len(model.requests) == before and not pushes
     finally:
@@ -594,9 +600,9 @@ async def test_readonly_retry_rejects_degraded_scheduled_run_using_binding(tmp_p
     plugin._agent_settings = settings()
     plugin._bridge = SimpleNamespace(session=game)
     plugin._workspace_service = service
-    plugin._colony_scheduler = None
+    plugin._autoplay.scheduler = None
     try:
-        result = await asyncio.wait_for(plugin._consultation("question", {"run_id": "same-id"}, game), 1)
+        result = await asyncio.wait_for(plugin._consultations._shared("question", {"run_id": "same-id"}, game), 1)
         assert not result.is_ok() and result.error.code == "world_changed"
     finally:
         await service.close()
@@ -626,24 +632,25 @@ async def test_deadline_pause_requires_silent_endpoint_and_full_request_limit(ti
         async def set_paused(self, value, *, role): self.calls.append((value, role))
     port = Port()
     plugin = object.__new__(NekoRimworldPlugin)
+    plugin._compose_services()
     plugin.ctx = SimpleNamespace(push_message=lambda **kwargs: {"submitted": True})
     plugin._agent_audit = Registry()
-    plugin._autoplay_waiters = {}
+    plugin._autoplay.waiters = {}
     plugin._bridge = SimpleNamespace(session=SimpleNamespace(colony_id="c", load_epoch="e", game_tick=1))
-    plugin._colony_scheduler = SimpleNamespace(halted=False, budget=None, service=Service(),
+    plugin._autoplay.scheduler = SimpleNamespace(halted=False, budget=None, service=Service(),
                                                 settings=SimpleNamespace(request_timeout_seconds=60))
     async def setup(): return SimpleNamespace(write_port=port, write_identity=lambda: ("connection", "c", "e"))
     plugin._load_agent_tools = setup
-    await plugin._autoplay_failure("planner", {"audit": {"run_id": "run", "error_code": code}})
+    await plugin._autoplay.failure("planner", {"audit": {"run_id": "run", "error_code": code}})
     assert bool(port.calls) is expected
-    assert plugin._autoplay_fault["kind"] == ("endpoint" if expected else "budget" if code == "agent_cumulative_budget" else "execution")
+    assert plugin._autoplay.fault["kind"] == ("endpoint" if expected else "budget" if code == "agent_cumulative_budget" else "execution")
 
 @pytest.mark.asyncio
 async def test_request_deadline_classification_uses_actual_runtime_audit():
     from ..agent.model.model_client import ModelClientError
     from ..agent.runtime.audit import AgentAuditRegistry
     from ..agent.runtime.loop import AgentRuntime
-    from ..entry import _unresponsive_request_deadline
+    from ..autoplay import unresponsive_request_deadline
     from .consultation_setup import semantic_tool_provider
     from .test_agent import FakeLogger, settings
 
@@ -656,7 +663,7 @@ async def test_request_deadline_classification_uses_actual_runtime_audit():
     config = settings()
     result = await runtime.run("Test input", config)
     assert result["audit"]["error_code"] == "model_request_deadline"
-    assert _unresponsive_request_deadline(registry, result["audit"]["run_id"], config.request_timeout_seconds)
+    assert unresponsive_request_deadline(registry, result["audit"]["run_id"], config.request_timeout_seconds)
 
 
 @pytest.mark.asyncio
@@ -666,13 +673,14 @@ async def test_failure_notification_persists_attempt_and_result(tmp_path, mode, 
     game = SimpleNamespace(colony_id="old", load_epoch="old-epoch", game_tick=3, connection_epoch="old-connection")
     service = FrontdeskService(tmp_path / "events.sqlite", None, game_session=lambda: game)
     plugin = object.__new__(NekoRimworldPlugin)
-    plugin._autoplay_fault = {}
+    plugin._compose_services()
+    plugin._autoplay.fault = {}
     def push(**kwargs):
         if mode == "exception":
             raise RuntimeError("host failure")
         return {"submitted": False}
     plugin.ctx = SimpleNamespace() if mode == "no_client" else SimpleNamespace(push_message=push)
-    await plugin._audit_failure_notification(SimpleNamespace(service=service), game, "planner", "failure", "endpoint", "pause unconfirmed")
+    await plugin._autoplay.audit_failure_notification(SimpleNamespace(service=service), game, "planner", "failure", "endpoint", "pause unconfirmed")
     events = [e for e in await service.call("events", "old") if e["kind"] == "autoplay.failure_notification"]
     assert [e["payload"]["phase"] for e in events] == ["attempting", "result"]
     assert events[-1]["payload"]["outcome"] == outcome
@@ -687,14 +695,15 @@ async def test_failure_notification_journal_failure_still_attempts_delivery():
         async def call(self, *args):
             raise RuntimeError("journal failed")
     plugin = object.__new__(NekoRimworldPlugin)
-    plugin._autoplay_fault = {}
+    plugin._compose_services()
+    plugin._autoplay.fault = {}
     sent = []
     plugin.ctx = SimpleNamespace(push_message=lambda **kwargs: sent.append(kwargs) or {"submitted": True})
     game = SimpleNamespace(colony_id="old", load_epoch="epoch", game_tick=3)
-    await plugin._audit_failure_notification(SimpleNamespace(service=Service()), game, "planner", "failure", "endpoint", "pause unconfirmed")
+    await plugin._autoplay.audit_failure_notification(SimpleNamespace(service=Service()), game, "planner", "failure", "endpoint", "pause unconfirmed")
     assert len(sent) == 1
-    assert plugin._autoplay_fault["notification_record"] == "unknown"
-    assert plugin._autoplay_fault["notification"] == "submitted"
+    assert plugin._autoplay.fault["notification_record"] == "unknown"
+    assert plugin._autoplay.fault["notification"] == "submitted"
 
 
 @pytest.mark.asyncio
@@ -704,16 +713,17 @@ async def test_failure_notification_uses_old_binding_after_world_change(tmp_path
     new = SimpleNamespace(colony_id="new", load_epoch="epoch-new", game_tick=9)
     service = FrontdeskService(tmp_path / "events.sqlite", None, game_session=lambda: new)
     plugin = object.__new__(NekoRimworldPlugin)
+    plugin._compose_services()
     plugin.ctx = SimpleNamespace(push_message=lambda **kwargs: {"submitted": True})
     plugin._bridge = SimpleNamespace(session=new)
-    plugin._autoplay_waiters = {}
-    plugin._colony_scheduler = SimpleNamespace(halted=False, budget=None, service=service)
-    await plugin._autoplay_failure("planner", {"audit": {"error_code": "model_transport"}}, bound_game=old)
+    plugin._autoplay.waiters = {}
+    plugin._autoplay.scheduler = SimpleNamespace(halted=False, budget=None, service=service)
+    await plugin._autoplay.failure("planner", {"audit": {"error_code": "model_transport"}}, bound_game=old)
     events = await service.call("events", "old")
     assert [e["kind"] for e in events] == ["autoplay.stale_failure"]
     assert events[0]["load_epoch"] == "epoch-old"
     assert events[0]["payload"]["connection_epoch"] == "connection-old"
-    assert not plugin._colony_scheduler.halted
+    assert not plugin._autoplay.scheduler.halted
     assert not await service.call("events", "new")
     await service.close()
 
@@ -721,31 +731,33 @@ async def test_failure_notification_uses_old_binding_after_world_change(tmp_path
 @pytest.mark.asyncio
 async def test_stale_failure_does_not_halt_current_scheduler():
     plugin = object.__new__(NekoRimworldPlugin)
+    plugin._compose_services()
     old = SimpleNamespace(colony_id="c", load_epoch="old", game_tick=1, connection_epoch="old-conn")
     current = SimpleNamespace(colony_id="c", load_epoch="new", game_tick=1)
     current_scheduler = SimpleNamespace(halted=False, budget=SimpleNamespace(blocked=False))
     plugin._bridge = SimpleNamespace(session=current, connection_key="new-conn")
-    plugin._colony_scheduler = current_scheduler
-    plugin._autoplay_waiters = {}
-    plugin._autoplay_fault = None
-    await plugin._autoplay_failure("planner", {"audit": {"error_code": "execution_failed"}}, old)
+    plugin._autoplay.scheduler = current_scheduler
+    plugin._autoplay.waiters = {}
+    plugin._autoplay.fault = None
+    await plugin._autoplay.failure("planner", {"audit": {"error_code": "execution_failed"}}, old)
     assert not current_scheduler.halted and not current_scheduler.budget.blocked
-    assert plugin._autoplay_fault is None
+    assert plugin._autoplay.fault is None
 
 
 @pytest.mark.asyncio
 async def test_old_scheduler_failure_cannot_halt_new_scheduler_or_waiter():
     plugin = object.__new__(NekoRimworldPlugin)
+    plugin._compose_services()
     game = SimpleNamespace(colony_id="c", load_epoch="e", game_tick=1, connection_epoch="conn")
     old = SimpleNamespace()
     current = SimpleNamespace(halted=False, budget=SimpleNamespace(blocked=False))
     plugin._bridge = SimpleNamespace(session=game, connection_key="conn")
-    plugin._colony_scheduler = current
+    plugin._autoplay.scheduler = current
     waiter = asyncio.get_running_loop().create_future()
     waiter._autoplay_binding = (current, "conn", "c", "e")
-    plugin._autoplay_waiters = {1: waiter}
-    plugin._autoplay_fault = None
-    await plugin._autoplay_failure("planner", {"audit": {"error_code": "execution_failed"}}, game, origin_scheduler=old)
+    plugin._autoplay.waiters = {1: waiter}
+    plugin._autoplay.fault = None
+    await plugin._autoplay.failure("planner", {"audit": {"error_code": "execution_failed"}}, game, origin_scheduler=old)
     assert not current.halted and not current.budget.blocked and not waiter.done()
     waiter.cancel()
 
@@ -758,7 +770,7 @@ async def test_consult_reports_world_changed_during_enqueue():
     plugin._bridge = SimpleNamespace(session=SimpleNamespace(colony_id="c", load_epoch="e", game_tick=1))
     async def stale(*args):
         raise ToolExecutionError("world_changed", "private fixture", recoverable=False)
-    plugin._consultation = stale
+    plugin._consultations._shared = stale
     result = await plugin.rimworld_consult("hello")
     assert not result.is_ok() and result.error.code == "world_changed"
 
@@ -773,7 +785,7 @@ async def test_consult_enqueue_changed_epoch_reports_world_changed(tmp_path):
     old = SimpleNamespace(colony_id="c", load_epoch="old", game_tick=1)
     plugin._bridge = SimpleNamespace(session=old, connection_key="connection")
     plugin._agent_settings = SimpleNamespace(configured=True)
-    plugin._autoplay_waiters = {}
+    plugin._autoplay.waiters = {}
     service = FrontdeskService(tmp_path / "events.sqlite", None, game_session=lambda: plugin._bridge.session)
     entered, release = threading.Event(), threading.Event()
     def block_worker():
@@ -788,7 +800,7 @@ async def test_consult_enqueue_changed_epoch_reports_world_changed(tmp_path):
         async def wake_frontdesk(self, game, question, request_id=None):
             queued.set()
             return await service.call("record_frontdesk_wake", game.colony_id, game.load_epoch, game.game_tick, "user", question)
-    plugin._colony_scheduler = Scheduler()
+    plugin._autoplay.scheduler = Scheduler()
     task = asyncio.create_task(plugin.rimworld_consult("hello"))
     try:
         await asyncio.wait_for(queued.wait(), 2)
@@ -815,26 +827,26 @@ async def test_consult_enqueue_connection_change_returns_world_changed(tmp_path)
     game = SimpleNamespace(colony_id="c", load_epoch="e", game_tick=1)
     plugin._bridge = SimpleNamespace(session=game, connection_key="A")
     plugin._agent_settings = SimpleNamespace(configured=True)
-    plugin._autoplay_waiters = {}
+    plugin._autoplay.waiters = {}
     service = FrontdeskService(tmp_path / "events.sqlite", None, game_session=lambda: plugin._bridge.session)
     scheduler = ColonyScheduler(service, None, binding=lambda: (plugin._bridge.connection_key, "c", "e"))
     scheduler._autoplay_colony = "c"
     scheduler._worker = asyncio.create_task(asyncio.Event().wait())
-    plugin._colony_scheduler = scheduler
+    plugin._autoplay.scheduler = scheduler
     entered, release = threading.Event(), threading.Event()
     def block():
         entered.set()
         release.wait(5)
     blocked = service._executor.submit(block)
     assert await asyncio.to_thread(entered.wait, 2)
-    request = asyncio.create_task(plugin._consultation("hello", {}, game))
+    request = asyncio.create_task(plugin._consultations._shared("hello", {}, game))
     await asyncio.sleep(0)
     plugin._bridge.connection_key = "B"
     release.set()
     try:
         result = await asyncio.wait_for(request, 2)
         assert not result.is_ok() and result.error.code == "world_changed"
-        assert not plugin._autoplay_waiters
+        assert not plugin._autoplay.waiters
         assert not [e for e in await service.call("events", "c") if e["kind"] == "user.utterance"]
     finally:
         release.set()

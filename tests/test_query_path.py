@@ -142,6 +142,8 @@ async def test_plugin_tool_passes_operation_and_response_without_projection():
             return response
 
     plugin = object.__new__(NekoRimworldPlugin)
+
+    plugin._compose_services()
     plugin._bridge = Bridge()
     observation = await plugin._agent_query_tool({"operation": "future_operation", "arguments": {"id": "x"}})
     assert observation.value["response"] == response.to_dict()
