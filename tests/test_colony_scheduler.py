@@ -6,6 +6,7 @@ import pytest
 
 from ..agent.runtime.audit import AgentAuditRegistry
 from ..agent.runtime.colony_scheduler import ColonyScheduler
+from ..agent.runtime.frontdesk_dispatch import frontdesk_colony
 from ..agent.runtime.loop import AgentRuntime
 from ..agent.runtime.frontdesk_service import FrontdeskService
 from .consultation_setup import semantic_tool_provider
@@ -588,7 +589,7 @@ async def test_idle_scheduler_does_not_decode_whole_journal(tmp_path):
     service.call = checked
     scheduler = ColonyScheduler(service, settings())
     await scheduler._run_colony(game)
-    await scheduler._frontdesk_colony(game)
+    await frontdesk_colony(scheduler, game)
     assert "events_by_kind" in calls
     assert "planner_finished_metadata" not in calls
     await service.close()
@@ -611,7 +612,7 @@ async def test_frontdesk_snapshot_excludes_wake_appended_between_queries(tmp_pat
         return result
     service.call = interleave
     scheduler = ColonyScheduler(service, settings())
-    await scheduler._frontdesk_colony(game)
+    await frontdesk_colony(scheduler, game)
     assert inserted and scheduler._pending_frontdesk is None
     assert not any(e["kind"] == "frontdesk.stale_wake" for e in await original("events", "colony"))
     await service.close()

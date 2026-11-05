@@ -8,6 +8,7 @@ import pytest
 from ..agent.runtime.audit import AgentAuditLedger
 from ..agent.runtime.colony_scheduler import ColonyScheduler
 from ..agent.runtime.colony_work import work_tools
+from ..agent.runtime.native_event_intake import sync_observations
 from ..agent.runtime.session import AgentRunSession
 from ..agent.world.construction_geometry import compile_plan, observation_bounds
 from ..agent.world.semantic_tools import SemanticInteraction
@@ -341,24 +342,24 @@ async def test_scheduler_restores_acknowledged_intent_and_revokes_without_second
     scheduler = ColonyScheduler(service, None)
     scheduler._event_port = Port()
     scheduler._event_identity = lambda: ("connection", "colony", "epoch")
-    await scheduler._sync_observations()
-    await scheduler._sync_observations()
+    await sync_observations(scheduler)
+    await sync_observations(scheduler)
     assert len(scheduler._event_port.calls) == 1
     assert (await service.call("colony_work", "colony", "epoch", "connection"))["observations"]["coverage"][0]["status"] == "covered"
     game.game_tick = 1001
-    await scheduler._sync_observations()
+    await sync_observations(scheduler)
     assert len(scheduler._event_port.calls) == 1  # native expiry evidence must arrive before removal
     await service.call("ingest_game_event", "colony", "epoch", 1001, "connection", {
         "cursor": 1, "connection_epoch": "connection", "colony_id": "colony", "load_epoch": "epoch", "game_tick": 1001,
         "kind": "observation", "data": {"kind": "observation", "cursor": 1, "observation_id": "watch", "revision": 1,
             "condition_id": "walls", "receipt_id": "r", "status": "expired", "sample_tick": 1001, "observation": {}}},
         command_binding_check=lambda: True)
-    await scheduler._sync_observations()
+    await sync_observations(scheduler)
     assert scheduler._event_port.calls[-1]["observations"] == []
     await service.call("colony_work_command", "colony", "epoch", 11, "planner", "revoke", {
         "task_id": "task", "observation_id": "watch", "expected_revision": 1, "reason": "Done"},
         connection_epoch="connection", command_binding_check=lambda: True)
-    await scheduler._sync_observations()
+    await sync_observations(scheduler)
     assert scheduler._event_port.calls[-1]["observations"] == []
     await service.close()
 

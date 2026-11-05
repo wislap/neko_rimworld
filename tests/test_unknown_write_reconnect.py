@@ -64,8 +64,9 @@ async def test_other_stale_failures_do_not_halt_current_world(case):
 @pytest.mark.asyncio
 async def test_queued_wake_policy_mutation_rechecks_halt_on_worker(tmp_path):
     from ..agent.runtime.colony_scheduler import ColonyScheduler
-    from ..tool_contracts import ToolExecutionError
     from ..agent.runtime.frontdesk_service import FrontdeskService
+    from ..agent.runtime.scheduler_tools import attention_tools
+    from ..tool_contracts import ToolExecutionError
 
     game = SimpleNamespace(colony_id="c", load_epoch="e", game_tick=1)
     service = FrontdeskService(tmp_path / "events.sqlite", None, game_session=lambda: game)
@@ -77,7 +78,10 @@ async def test_queued_wake_policy_mutation_rechecks_halt_on_worker(tmp_path):
     await service.call("submit", "c", "e", 1, "planner", strategy)
     await service.call("submit", "c", "e", 1, "planner", task_entry)
     scheduler = ColonyScheduler(service, None, binding=lambda: ("B", "c", "e"))
-    tool = scheduler.scheduler_tools(game, "planner")[0]
+    bound = scheduler._bind_game(game)
+    tool = attention_tools(service, game, "planner", binding_check=lambda: scheduler._business_current(bound),
+                           planner_signal=scheduler._signal,
+                           attention_available=scheduler._native_attention_available)[0]
     started, release = threading.Event(), threading.Event()
     def block():
         started.set()
