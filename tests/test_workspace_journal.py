@@ -4,13 +4,15 @@ import sqlite3
 
 import pytest
 
-from plugin.plugins.neko_rimworld.workspace.board import AuthorViolation, BoardError, RevisionConflict
-from plugin.plugins.neko_rimworld.workspace.journal import (
-    Journal,
+from plugin.plugins.neko_rimworld.workspace.board import (
+    AuthorViolation,
+    BoardError,
+    RevisionConflict,
     current_board,
-    open_takeovers,
     review_marks,
 )
+from plugin.plugins.neko_rimworld.workspace.field_takeovers import open_takeovers
+from plugin.plugins.neko_rimworld.workspace.journal import Journal
 
 COLONY = "colony-1"
 # Mod load epochs are GUID strings (Protocol.cs load_epoch).

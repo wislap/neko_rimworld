@@ -51,6 +51,12 @@ def project(events, *, load_epoch, connection_epoch=None, colony_id=None):
                              **e["payload"]} for e in events if e["kind"] == "construction.suggestion"]}
 
 
+def current(ledger, colony_id, load_epoch, connection_epoch=None):
+    """Project the colony's work from the ledger rows this projection reads."""
+    return project(ledger.events_by_kind(colony_id, KINDS), load_epoch=load_epoch,
+                   connection_epoch=connection_epoch, colony_id=colony_id)
+
+
 def summary(state):
     """An index for routine planner input; full geometry/facts stay on demand."""
     return {"format": state["format"], "load_epoch": state["load_epoch"],
