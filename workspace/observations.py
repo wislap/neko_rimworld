@@ -2,7 +2,20 @@
 
 from copy import deepcopy
 
+from ..game.observation_contract import (
+    CONDITION_OPTIONAL_FIELDS,
+    CONDITION_REQUIRED_FIELDS,
+    MAX_CONDITIONS,
+    MAX_NATIVE_TICK,
+    MAX_OBSERVATIONS,
+    MAX_SAMPLE_INTERVAL_TICKS,
+    MAX_SAMPLES,
+    MAX_TARGETS,
+)
 from .ledger import is_integer
+
+# Planner policy on top of the native limits: an observation expires within this horizon.
+MAX_EXPIRY_HORIZON_TICKS = 600000
 
 FORMAT = "observation_intent.v1"
 KINDS = frozenset({"observation.requested", "observation.revoked", "observation.coverage", "observation.fact"})
@@ -112,12 +125,11 @@ def prepare_request(events, *, observation_id, task_id, expected_revision, condi
     if now_tick is not None and (not is_integer(now_tick) or now_tick < 0):
         raise ValueError("now_tick must be a nonnegative native tick")
     conditions = deepcopy(list(conditions))
-    if not 1 <= len(conditions) <= 8:
-        raise ValueError("An observation requires 1..8 conditions")
+    if not 1 <= len(conditions) <= MAX_CONDITIONS:
+        raise ValueError(f"An observation requires 1..{MAX_CONDITIONS} conditions")
     ids, target_count = set(), 0
     for condition in conditions:
-        allowed = {"id", "kind", "map_id", "plan_id", "target_ids", "max_samples", "expires_at_tick", "sample_interval_ticks"}
-        if not isinstance(condition, dict) or set(condition) - allowed:
+        if not isinstance(condition, dict) or set(condition) - CONDITION_REQUIRED_FIELDS - CONDITION_OPTIONAL_FIELDS:
             raise ValueError("Unsupported native observation condition fields")
         identity = _identity(condition.get("id"), "condition id")
         if identity in ids or condition.get("kind") not in supported_kinds:
@@ -133,16 +145,16 @@ def prepare_request(events, *, observation_id, task_id, expected_revision, condi
         for target in targets:
             _identity(target, "target_id")
         target_count += len(targets)
-        if not is_integer(condition.get("max_samples")) or not 1 <= condition["max_samples"] <= 1000:
-            raise ValueError("max_samples must be 1..1000")
+        if not is_integer(condition.get("max_samples")) or not 1 <= condition["max_samples"] <= MAX_SAMPLES:
+            raise ValueError(f"max_samples must be 1..{MAX_SAMPLES}")
         expiry = condition.get("expires_at_tick")
-        if not is_integer(expiry) or expiry < 1:
+        if not is_integer(expiry) or not 1 <= expiry <= MAX_NATIVE_TICK:
             raise ValueError("expires_at_tick must be a positive native tick")
-        if now_tick is not None and not now_tick < expiry <= now_tick + 600000:
-            raise ValueError("Observation expiry must be within 600000 ticks")
+        if now_tick is not None and not now_tick < expiry <= now_tick + MAX_EXPIRY_HORIZON_TICKS:
+            raise ValueError(f"Observation expiry must be within {MAX_EXPIRY_HORIZON_TICKS} ticks")
         interval = condition.get("sample_interval_ticks", 250)
-        if not is_integer(interval) or not 1 <= interval <= 60000:
-            raise ValueError("sample_interval_ticks must be 1..60000")
+        if not is_integer(interval) or not 1 <= interval <= MAX_SAMPLE_INTERVAL_TICKS:
+            raise ValueError(f"sample_interval_ticks must be 1..{MAX_SAMPLE_INTERVAL_TICKS}")
     projected = project(events, binding=binding)
     current = next((row for row in projected["intents"] if row["observation_id"] == observation_id), None)
     if type(expected_revision) is not int or expected_revision != (current["revision"] if current else 0):
@@ -157,7 +169,7 @@ def prepare_request(events, *, observation_id, task_id, expected_revision, condi
                 and (now_tick is None or condition["expires_at_tick"] > now_tick)]
         if live:
             live_others.append(live)
-    if len(live_others) >= 16 or target_count + sum(len(condition["target_ids"]) for live in live_others for condition in live) > 64:
+    if len(live_others) >= MAX_OBSERVATIONS or target_count + sum(len(condition["target_ids"]) for live in live_others for condition in live) > MAX_TARGETS:
         raise ValueError("Active native observation quota exceeded")
     return _event("observation.requested", "planner", observation_id=observation_id, task_id=task_id,
                   revision=expected_revision + 1, conditions=conditions, binding=binding)

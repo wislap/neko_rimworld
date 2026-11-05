@@ -2,8 +2,43 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
+
+PRIVATE_PROTOCOL_KEYS = frozenset({"reasoning_content", "reasoning", "reasoning_details"})
+
+
+def private_protocol_redacted(value: Any) -> Any:
+    """Lossless public fields plus digests of private provider continuation fields.
+
+    This representation is for artifacts only and must never be sent to a model.
+    Its digest differs from the dispatch digest when private fields are present.
+    """
+    if isinstance(value, Mapping):
+        result = {}
+        for key, item in value.items():
+            if (
+                key in PRIVATE_PROTOCOL_KEYS
+                and isinstance(item, Mapping)
+                and item.get("private_protocol_redacted") is True
+            ):
+                result[key] = dict(item)
+            elif key in PRIVATE_PROTOCOL_KEYS:
+                encoded = json.dumps(item, ensure_ascii=False, separators=(",", ":")).encode()
+                result[key] = {
+                    "private_protocol_redacted": True,
+                    "bytes": len(encoded),
+                    "sha256": hashlib.sha256(encoded).hexdigest(),
+                }
+            else:
+                result[key] = private_protocol_redacted(item)
+        return result
+    if isinstance(value, (list, tuple)):
+        return [private_protocol_redacted(item) for item in value]
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,4 +130,4 @@ class ToolResult:
         }
 
 
-__all__ = ["AssistantTurn", "PreparedToolCall", "ToolCall", "ToolResult"]
+__all__ = ["PRIVATE_PROTOCOL_KEYS", "AssistantTurn", "PreparedToolCall", "ToolCall", "ToolResult", "private_protocol_redacted"]

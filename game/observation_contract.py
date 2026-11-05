@@ -8,10 +8,20 @@ from .write_contract import _bad, _fields, _text
 
 OBSERVATION_VERSION = "colony_observation.v1"
 
+# Native wire limits; the planner-side admission in workspace/observations reuses them.
+MAX_OBSERVATIONS = 16
+MAX_CONDITIONS = 8
+MAX_TARGETS = 64
+CONDITION_REQUIRED_FIELDS = frozenset({"id", "kind", "target_ids", "max_samples", "expires_at_tick"})
+CONDITION_OPTIONAL_FIELDS = frozenset({"map_id", "plan_id", "sample_interval_ticks"})
+MAX_SAMPLES = 1000
+MAX_SAMPLE_INTERVAL_TICKS = 60000
+MAX_NATIVE_TICK = 2**31 - 1
+
 
 def validate_observation_request(args):
     _fields(args, ("source", "observations"))
-    if args["source"] != "planner" or not isinstance(args["observations"], list) or len(args["observations"]) > 16:
+    if args["source"] != "planner" or not isinstance(args["observations"], list) or len(args["observations"]) > MAX_OBSERVATIONS:
         _bad()
     groups, targets = set(), 0
     for row in args["observations"]:
@@ -21,12 +31,11 @@ def validate_observation_request(args):
             _bad()
         groups.add(row["observation_id"])
         conditions = row["conditions"]
-        if not isinstance(conditions, list) or not 1 <= len(conditions) <= 8:
+        if not isinstance(conditions, list) or not 1 <= len(conditions) <= MAX_CONDITIONS:
             _bad()
         seen = set()
         for condition in conditions:
-            required = {"id", "kind", "target_ids", "max_samples", "expires_at_tick"}
-            if not isinstance(condition, dict) or not required <= condition.keys() or condition.keys() - required - {"map_id", "plan_id", "sample_interval_ticks"}:
+            if not isinstance(condition, dict) or not CONDITION_REQUIRED_FIELDS <= condition.keys() or condition.keys() - CONDITION_REQUIRED_FIELDS - CONDITION_OPTIONAL_FIELDS:
                 _bad()
             _text(condition["id"], 128)
             _text(condition["kind"], 128)
@@ -43,10 +52,10 @@ def validate_observation_request(args):
             for identifier in identifiers:
                 _text(identifier)
             targets += len(identifiers)
-            for field, minimum, maximum in (("max_samples", 1, 1000), ("expires_at_tick", 1, 2**31 - 1), ("sample_interval_ticks", 1, 60000)):
+            for field, minimum, maximum in (("max_samples", 1, MAX_SAMPLES), ("expires_at_tick", 1, MAX_NATIVE_TICK), ("sample_interval_ticks", 1, MAX_SAMPLE_INTERVAL_TICKS)):
                 if field in condition and (type(condition[field]) is not int or not minimum <= condition[field] <= maximum):
                     _bad()
-    if targets > 64:
+    if targets > MAX_TARGETS:
         _bad()
 
 

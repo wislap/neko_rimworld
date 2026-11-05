@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ..workspace.runtime import FrontdeskService
+from ..agent.runtime.frontdesk_service import FrontdeskService
 from ..workspace.views import WorkspaceViews
 
 

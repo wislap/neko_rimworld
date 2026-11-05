@@ -1,8 +1,32 @@
 """Frontdesk session as a view over the event log: recent turns verbatim, older tool results left to recall."""
 
-from ..agent.context.narrative import narrative_texts
+import json
+
 from ..serialization import canonical as encode
 from .ledger import RUN_EVENT, UTTERANCE_EVENT
+
+
+def narrative_texts(event):
+    """Assistant prose and submitted answer/detail fields of one recorded run."""
+    texts = []
+    for message in event["payload"]["messages"]:
+        if message.get("role") != "assistant":
+            continue
+        if message.get("content"):
+            texts.append({"text": message["content"]})
+        for call in message.get("tool_calls", []):
+            function = call.get("function", {})
+            if function.get("name") != "submit_response" or not function.get("arguments"):
+                continue
+            try:
+                args = json.loads(function["arguments"])
+            except (TypeError, ValueError):
+                continue
+            if isinstance(args, dict):
+                for key in ("answer", "detail"):
+                    if isinstance(args.get(key), str) and args[key]:
+                        texts.append({"tool_call_id": call["id"], "field": key, "text": args[key]})
+    return texts
 
 
 def frontdesk_messages(events, *, now_tick, window_ticks=180_000, progress_by_utterance=None, covered_through_seq=0):

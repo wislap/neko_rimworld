@@ -8,7 +8,7 @@ import hashlib
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Protocol
 
-from ...message_contracts import PreparedToolCall
+from ...message_contracts import PreparedToolCall, private_protocol_redacted
 from ...tool_contracts import UNKNOWN_WRITE_OUTCOME_CODES, ToolExecutionError, ToolSetup, ToolSpec, binding_is_current
 from ..context.situation_context import compile_situation, unavailable_situation
 from ..delivery.handoff import (
@@ -21,7 +21,6 @@ from .audit import (
     AgentAuditLedger,
     AgentAuditRegistry,
     AgentRunState,
-    private_protocol_redacted,
 )
 from .execution_environment import ExecutionEnvironment
 from .prompt import build_runtime_advisory

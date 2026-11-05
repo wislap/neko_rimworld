@@ -10,14 +10,15 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from ..agent.context.narrative import SUMMARY_EVENT, select_narrative, summary_message, summary_request
-from ..agent.runtime.audit import AgentAuditLedger, private_protocol_redacted
-from ..agent.runtime.session import AgentRunSession
-from ..serialization import canonical
-from ..tool_contracts import ToolExecutionError, ToolSpec, binding_is_current
-from .journal import Journal
-from .ledger import FRONTDESK, RUN_EVENT, UTTERANCE_EVENT
-from .session_view import anchor_seq, frontdesk_messages, pinned_utterances, recall, trigger_message
+from ...message_contracts import private_protocol_redacted
+from ...serialization import canonical
+from ...tool_contracts import ToolExecutionError, ToolSpec, binding_is_current
+from ...workspace.journal import Journal
+from ...workspace.ledger import FRONTDESK, RUN_EVENT, UTTERANCE_EVENT
+from ...workspace.session_view import anchor_seq, frontdesk_messages, pinned_utterances, recall, trigger_message
+from ..context.narrative import SUMMARY_EVENT, select_narrative, summary_message, summary_request
+from .audit import AgentAuditLedger
+from .session import AgentRunSession
 
 
 class FrontdeskService:
@@ -195,7 +196,7 @@ class FrontdeskService:
         self._recovered.add(colony)
 
     def capabilities(self, game, utterance_seq, intent_sources=None, *, explicit=False, binding_check=None):
-        from .takeovers import policy_protection_capability
+        from ...workspace.takeovers import policy_protection_capability
 
         connection = getattr(game, "connection_epoch", None)
         if binding_check is None and connection is not None:
@@ -337,7 +338,7 @@ class FrontdeskService:
                 session.colony_work_service = self
                 session.colony_work_game = game
                 session.media_store = self.media_store
-                from ..media import ImageInputConfig
+                from ...media import ImageInputConfig
                 session.image_input = ImageInputConfig(enabled=getattr(settings, "image_input_enabled", False),
                                                        tokens_per_image=getattr(settings, "image_input_tokens_per_image", 0))
                 session.budget = budget
@@ -345,7 +346,7 @@ class FrontdeskService:
                 if trigger_seq is not None:
                     session.messages[session.run_start] = trigger_message(original)
                 if explicit_update_only:
-                    from .takeovers import return_capability
+                    from ...workspace.takeovers import return_capability
 
                     session.explicit_scheduler = True
                     session.capabilities += tuple(scheduler_tools)

@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from ..workspace.planner_completion import validate_planner_completion
-from ..workspace.runtime import FrontdeskService
+from ..agent.write.planner_completion import validate_planner_completion
+from ..agent.runtime.frontdesk_service import FrontdeskService
 from .test_write_service import IDENTITY, catalog, observation, op
 
 

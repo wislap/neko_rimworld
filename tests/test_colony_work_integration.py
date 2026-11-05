@@ -16,7 +16,7 @@ from ..media import MediaStore, prepare_model_messages
 from ..tool_contracts import ToolExecutionError, ToolSetup
 from ..workspace.construction_evidence import native_element
 from ..workspace.journal import Journal
-from ..workspace.runtime import FrontdeskService
+from ..agent.runtime.frontdesk_service import FrontdeskService
 from ..workspace.takeovers import TakeoverControl
 from ..workspace.views import WorkspaceViews
 from .test_agent import turn

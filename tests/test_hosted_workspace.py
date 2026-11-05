@@ -108,7 +108,7 @@ async def test_delivery_failure_reopens_completed_response_without_model_replay(
 
     model = Script([call("submit_response", answer="Retained response.", detail="Retained detail.")])
     configure(plugin, tmp_path, [model])
-    from plugin.plugins.neko_rimworld.workspace.runtime import FrontdeskService
+    from plugin.plugins.neko_rimworld.agent.runtime.frontdesk_service import FrontdeskService
     service = FrontdeskService(tmp_path / "workspaces" / "events.sqlite", plugin._agent_runtime, game_session=lambda: plugin._bridge.session)
     plugin._workspace_service = service
     original = service.call
@@ -145,7 +145,7 @@ async def test_actual_executor_records_each_stage_before_next_model_request(plug
 async def test_same_words_new_request_do_not_replay_undelivered_answer(plugin, tmp_path):
     import sqlite3
 
-    from plugin.plugins.neko_rimworld.workspace.runtime import FrontdeskService
+    from plugin.plugins.neko_rimworld.agent.runtime.frontdesk_service import FrontdeskService
 
     first = Script([call("submit_response", answer="First answer.")])
     second = Script([call("submit_response", answer="Fresh answer.")])
@@ -208,7 +208,7 @@ async def test_concurrent_same_request_recovers_failed_delivery_without_second_m
     import asyncio
     import sqlite3
 
-    from plugin.plugins.neko_rimworld.workspace.runtime import FrontdeskService
+    from plugin.plugins.neko_rimworld.agent.runtime.frontdesk_service import FrontdeskService
 
     started, release = asyncio.Event(), asyncio.Event()
     class BlockingScript(Script):

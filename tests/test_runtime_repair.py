@@ -10,7 +10,8 @@ from plugin.plugins.neko_rimworld.agent.model.model_client import (
     OpenAICompatibleModelClient,
     build_agent_model_settings,
 )
-from plugin.plugins.neko_rimworld.agent.runtime.audit import AgentAuditRegistry, audit_safe, private_protocol_redacted
+from plugin.plugins.neko_rimworld.agent.runtime.audit import AgentAuditRegistry, audit_safe
+from plugin.plugins.neko_rimworld.message_contracts import private_protocol_redacted
 from plugin.plugins.neko_rimworld.agent.runtime.loop import AgentRuntime
 from plugin.plugins.neko_rimworld.message_contracts import AssistantTurn, ToolCall
 from plugin.plugins.neko_rimworld.tool_contracts import ToolExecutionError, ToolSpec

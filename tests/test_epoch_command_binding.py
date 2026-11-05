@@ -6,7 +6,7 @@ import pytest
 
 from plugin.plugins.neko_rimworld.tool_contracts import ToolExecutionError
 from plugin.plugins.neko_rimworld.workspace.journal import Journal, review_marks
-from plugin.plugins.neko_rimworld.workspace.runtime import FrontdeskService
+from plugin.plugins.neko_rimworld.agent.runtime.frontdesk_service import FrontdeskService
 
 from .test_event_load_sample import snapshot
 

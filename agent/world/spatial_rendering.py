@@ -11,9 +11,9 @@ import html
 import io
 from collections.abc import Mapping
 
+from ...game.spatial_observation import SpatialObservationError, observation_cells
 from ...serialization import identity_digest
 from .construction_geometry import ConstructionPlanError, _integer, _point
-from .spatial_observation import SpatialObservationError, observation_cells
 
 RENDER_FORMAT = "construction_render.v1"
 PALETTE = {

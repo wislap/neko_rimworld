@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ..workspace import runtime
+from ..agent.runtime import frontdesk_service as runtime
 
 
 @pytest.mark.asyncio

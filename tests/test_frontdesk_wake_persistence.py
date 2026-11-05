@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from plugin.plugins.neko_rimworld.agent.runtime.colony_scheduler import ColonyScheduler
-from plugin.plugins.neko_rimworld.workspace.runtime import FrontdeskService
+from plugin.plugins.neko_rimworld.agent.runtime.frontdesk_service import FrontdeskService
 
 from .test_plugin import make_plugin
 

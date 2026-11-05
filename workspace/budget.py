@@ -6,7 +6,7 @@ import math
 import uuid
 from dataclasses import dataclass
 
-from ..agent.runtime.audit import private_protocol_redacted
+from ..message_contracts import private_protocol_redacted
 
 
 @dataclass(frozen=True, slots=True)

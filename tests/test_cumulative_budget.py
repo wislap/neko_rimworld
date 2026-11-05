@@ -440,7 +440,7 @@ async def test_activation_seeds_planner_authored_strategy(tmp_path):
     from plugin.plugins.neko_rimworld.agent.runtime.audit import AgentAuditRegistry
     from plugin.plugins.neko_rimworld.agent.runtime.colony_scheduler import ColonyScheduler
     from plugin.plugins.neko_rimworld.agent.runtime.loop import AgentRuntime
-    from plugin.plugins.neko_rimworld.workspace.runtime import FrontdeskService
+    from plugin.plugins.neko_rimworld.agent.runtime.frontdesk_service import FrontdeskService
 
     from .consultation_setup import semantic_tool_provider
     from .test_agent import FakeLogger, settings
@@ -524,7 +524,7 @@ def test_retained_inbox_response_uses_run_anchor_and_exact_identity(tmp_path):
 async def test_frontdesk_projects_latest_activation_across_loads(tmp_path):
     from types import SimpleNamespace
 
-    from plugin.plugins.neko_rimworld.workspace.runtime import FrontdeskService
+    from plugin.plugins.neko_rimworld.agent.runtime.frontdesk_service import FrontdeskService
 
     class Runtime:
         async def execute(self, session, settings):

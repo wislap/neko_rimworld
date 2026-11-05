@@ -8,7 +8,7 @@ import pytest
 from ..agent.runtime.colony_scheduler import ColonyScheduler
 from ..tool_contracts import ToolExecutionError
 from ..workspace.journal import Journal
-from ..workspace.runtime import FrontdeskService
+from ..agent.runtime.frontdesk_service import FrontdeskService
 
 CHOICES = {"goal": "survive", "constraints": "none", "goal_edited": False, "constraints_edited": False}
 

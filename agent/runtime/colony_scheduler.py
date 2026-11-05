@@ -12,13 +12,14 @@ from collections import deque
 from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
+from ...message_contracts import private_protocol_redacted
 from ...serialization import canonical
 from ...tool_contracts import ToolExecutionError, ToolSpec
 from ...workspace.board import entry_schema
 from ...workspace.ledger import PLANNER, consumed_planner_wakes
-from ...workspace.planner_completion import validate_planner_completion
+from ..write.planner_completion import validate_planner_completion
 from ...workspace.session_view import anchor_seq, trigger_message
-from ..runtime.audit import AgentAuditLedger, private_protocol_redacted
+from ..runtime.audit import AgentAuditLedger
 from ..runtime.session import AgentRunSession
 
 

@@ -12,7 +12,7 @@ from ..agent.world.construction_geometry import compile_plan
 from ..game.observation import Observation as NativeObservation
 from ..tool_contracts import ToolExecutionError, ToolSetup
 from ..workspace.journal import Journal as NativeJournal
-from ..workspace.runtime import FrontdeskService
+from ..agent.runtime.frontdesk_service import FrontdeskService
 from ..workspace.takeovers import TakeoverControl, return_capability
 from .test_colony_work_integration import CATALOG, PLAN, seed
 from .test_takeover_control import Journal, Observation

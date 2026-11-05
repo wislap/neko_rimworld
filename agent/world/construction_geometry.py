@@ -10,8 +10,8 @@ import copy
 from collections import deque
 from collections.abc import Mapping
 
+from ...game.spatial_observation import SpatialObservationError, observation_cells
 from ...serialization import identity_digest
-from .spatial_observation import SpatialObservationError, observation_cells
 
 PLAN_FORMAT = "construction_plan.v1"
 CHECK_FORMAT = "construction_check.v1"

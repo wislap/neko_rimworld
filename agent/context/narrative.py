@@ -2,6 +2,7 @@
 
 import json
 
+from ...workspace.session_view import narrative_texts
 from ..model.tokenization import count_tokens
 
 SUMMARY_EVENT = "frontdesk.narrative_summary"
@@ -18,28 +19,6 @@ def select_narrative(events, summary):
         if texts:
             runs.append({"event_seq": event["seq"], "texts": texts})
     return runs
-
-
-def narrative_texts(event):
-    texts = []
-    for message in event["payload"]["messages"]:
-        if message.get("role") != "assistant":
-            continue
-        if message.get("content"):
-            texts.append({"text": message["content"]})
-        for call in message.get("tool_calls", []):
-            function = call.get("function", {})
-            if function.get("name") != "submit_response" or not function.get("arguments"):
-                continue
-            try:
-                args = json.loads(function["arguments"])
-            except (TypeError, ValueError):
-                continue
-            if isinstance(args, dict):
-                for key in ("answer", "detail"):
-                    if isinstance(args.get(key), str) and args[key]:
-                        texts.append({"tool_call_id": call["id"], "field": key, "text": args[key]})
-    return texts
 
 
 def summary_request(summary, runs, threshold=DEFAULT_THRESHOLD):

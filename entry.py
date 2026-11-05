@@ -50,7 +50,7 @@ from .game.state import BridgeStateStore, BridgeStatus, DiagnosticRing, json_saf
 from .knowledge import KnowledgeLibrary
 from .reports import ReportError, ReportStore
 from .tool_contracts import UNKNOWN_WRITE_OUTCOME_CODES, ToolExecutionError, ToolSetup
-from .workspace.runtime import FrontdeskService
+from .agent.runtime.frontdesk_service import FrontdeskService
 from .workspace.session_view import anchor_seq
 from .workspace.views import WorkspaceViews
 

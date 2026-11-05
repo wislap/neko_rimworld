@@ -7,7 +7,7 @@ The caller owns world/connection validation and appends prepare_fact arguments.
 
 from collections.abc import Mapping
 
-from ..agent.world.spatial_observation import SpatialObservationError, observation_cells
+from ..game.spatial_observation import SpatialObservationError, observation_cells
 
 NATIVE_KINDS = {
     "roof": "build_roof",

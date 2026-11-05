@@ -9,7 +9,7 @@ import pytest
 from ..agent.runtime.tools import ToolRegistry
 from ..message_contracts import ToolCall
 from ..tool_contracts import ToolExecutionError, ToolSpec
-from ..workspace.runtime import FrontdeskService
+from ..agent.runtime.frontdesk_service import FrontdeskService
 
 
 def test_flattened_planner_entry_gets_top_level_repair_hint_without_rewrite():

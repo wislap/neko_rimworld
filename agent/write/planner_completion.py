@@ -1,13 +1,13 @@
 """Validate planner completion claims against durable native evidence."""
 
+import uuid
+
+from ...game.write_catalog import validate_write_catalog
+from ...serialization import canonical
+from .verification import verify_op
+
 
 async def validate_planner_completion(service, entry, colony_id, load_epoch, setup, observations):
-    import uuid
-
-    from ..agent.write.verification import verify_op
-    from ..game.write_catalog import validate_write_catalog
-    from ..serialization import canonical
-
     if entry.get("kind") != "task":
         raise ValueError("Only a task with its own commit receipts can be committed or verified")
     ids = entry.get("changesets")

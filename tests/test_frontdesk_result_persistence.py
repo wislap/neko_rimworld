@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from plugin.plugins.neko_rimworld.workspace.journal import Journal
-from plugin.plugins.neko_rimworld.workspace.runtime import FrontdeskService
+from plugin.plugins.neko_rimworld.agent.runtime.frontdesk_service import FrontdeskService
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,7 @@ from enum import StrEnum
 from typing import Any
 
 from ...game.state import redact_text, utc_now
+from ...message_contracts import PRIVATE_PROTOCOL_KEYS, private_protocol_redacted
 from ..model.usage import combine_run_summaries, summarize_usage
 
 _REQUEST_OUTCOMES = frozenset(
@@ -47,37 +48,6 @@ _SENSITIVE_KEYS = frozenset(
     }
 )
 _SENSITIVE_SUFFIXES = ("_api_key", "_access_token", "_private_key", "_secret", "_password", "_proof", "_token")
-_PRIVATE_PROTOCOL_KEYS = frozenset({"reasoning_content", "reasoning", "reasoning_details"})
-
-
-def private_protocol_redacted(value: Any) -> Any:
-    """Lossless public fields plus digests of private provider continuation fields.
-
-    This representation is for artifacts only and must never be sent to a model.
-    Its digest differs from the dispatch digest when private fields are present.
-    """
-    if isinstance(value, Mapping):
-        result = {}
-        for key, item in value.items():
-            if (
-                key in _PRIVATE_PROTOCOL_KEYS
-                and isinstance(item, Mapping)
-                and item.get("private_protocol_redacted") is True
-            ):
-                result[key] = dict(item)
-            elif key in _PRIVATE_PROTOCOL_KEYS:
-                encoded = json.dumps(item, ensure_ascii=False, separators=(",", ":")).encode()
-                result[key] = {
-                    "private_protocol_redacted": True,
-                    "bytes": len(encoded),
-                    "sha256": hashlib.sha256(encoded).hexdigest(),
-                }
-            else:
-                result[key] = private_protocol_redacted(item)
-        return result
-    if isinstance(value, (list, tuple)):
-        return [private_protocol_redacted(item) for item in value]
-    return value
 
 
 class AgentRunState(StrEnum):
@@ -182,7 +152,7 @@ def audit_safe(value: object, *, _depth: int = 0) -> Any:
                 break
             key = _safe_key(raw_key)
             normalized = key.lower().replace("-", "_")
-            if normalized in _PRIVATE_PROTOCOL_KEYS:
+            if normalized in PRIVATE_PROTOCOL_KEYS:
                 result[key] = private_protocol_redacted({key: item})[key]
             elif normalized in _SENSITIVE_KEYS or normalized.endswith(_SENSITIVE_SUFFIXES):
                 result[key] = "<redacted>"

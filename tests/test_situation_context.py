@@ -20,7 +20,7 @@ from plugin.plugins.neko_rimworld.game.query_tools import make_game_tools
 from plugin.plugins.neko_rimworld.game.situation import SituationProvider, SituationSnapshot
 from plugin.plugins.neko_rimworld.message_contracts import AssistantTurn, ToolCall
 from plugin.plugins.neko_rimworld.tool_contracts import ToolExecutionError
-from plugin.plugins.neko_rimworld.workspace.runtime import FrontdeskService
+from plugin.plugins.neko_rimworld.agent.runtime.frontdesk_service import FrontdeskService
 
 from .consultation_setup import consultation_setup
 from .test_runtime_repair import LOG, settings, submit

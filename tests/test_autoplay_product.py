@@ -109,7 +109,7 @@ async def test_failure_pauses_only_endpoint_and_uses_blind_notification(code, ex
 @pytest.mark.asyncio
 async def test_frontdesk_reuses_same_inflight_host_request(tmp_path):
     from ..agent.runtime.colony_scheduler import ColonyScheduler
-    from ..workspace.runtime import FrontdeskService
+    from ..agent.runtime.frontdesk_service import FrontdeskService
 
     game = SimpleNamespace(colony_id="colony", load_epoch="epoch", game_tick=10)
     service = FrontdeskService(tmp_path / "events.sqlite", None, game_session=lambda: game)
@@ -192,7 +192,7 @@ async def test_activation_wakes_planner_and_real_strategy_is_written(tmp_path):
     from ..agent.runtime.audit import AgentAuditRegistry
     from ..agent.runtime.colony_scheduler import ColonyScheduler
     from ..agent.runtime.loop import AgentRuntime
-    from ..workspace.runtime import FrontdeskService
+    from ..agent.runtime.frontdesk_service import FrontdeskService
     from .consultation_setup import semantic_tool_provider
     from .test_agent import FakeLogger, settings
     from .test_capability_composition import Script, call
@@ -417,7 +417,7 @@ async def test_old_colony_delivery_is_acknowledged_without_host_push(same_colony
 
 @pytest.mark.asyncio
 async def test_readonly_view_restores_latest_choices_across_epoch(tmp_path):
-    from ..workspace.runtime import FrontdeskService
+    from ..agent.runtime.frontdesk_service import FrontdeskService
     from ..workspace.views import WorkspaceViews
 
     path = tmp_path / "events.sqlite"
@@ -440,7 +440,7 @@ async def test_inbox_host_retry_rejects_reconnected_scope_without_new_dispatch(t
     from ..agent.runtime.audit import AgentAuditRegistry
     from ..agent.runtime.colony_scheduler import ColonyScheduler
     from ..agent.runtime.loop import AgentRuntime
-    from ..workspace.runtime import FrontdeskService
+    from ..agent.runtime.frontdesk_service import FrontdeskService
     from .consultation_setup import semantic_tool_provider
     from .test_agent import FakeLogger, settings
     from .test_capability_composition import Script, call
@@ -513,7 +513,7 @@ async def test_readonly_retry_rejects_completed_autoplay_run_without_new_model(t
     from ..agent.runtime.audit import AgentAuditRegistry
     from ..agent.runtime.colony_scheduler import ColonyScheduler
     from ..agent.runtime.loop import AgentRuntime
-    from ..workspace.runtime import FrontdeskService
+    from ..agent.runtime.frontdesk_service import FrontdeskService
     from .consultation_setup import semantic_tool_provider
     from .test_agent import FakeLogger, settings
     from .test_capability_composition import Script, call
@@ -579,7 +579,7 @@ async def test_readonly_retry_rejects_completed_autoplay_run_without_new_model(t
 
 @pytest.mark.asyncio
 async def test_readonly_retry_rejects_degraded_scheduled_run_using_binding(tmp_path):
-    from ..workspace.runtime import FrontdeskService
+    from ..agent.runtime.frontdesk_service import FrontdeskService
     from .test_agent import settings
     from .test_plugin import make_plugin
 
@@ -662,7 +662,7 @@ async def test_request_deadline_classification_uses_actual_runtime_audit():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode,outcome", [("no_client", "unknown"), ("reject", "rejected"), ("exception", "unknown")])
 async def test_failure_notification_persists_attempt_and_result(tmp_path, mode, outcome):
-    from ..workspace.runtime import FrontdeskService
+    from ..agent.runtime.frontdesk_service import FrontdeskService
     game = SimpleNamespace(colony_id="old", load_epoch="old-epoch", game_tick=3, connection_epoch="old-connection")
     service = FrontdeskService(tmp_path / "events.sqlite", None, game_session=lambda: game)
     plugin = object.__new__(NekoRimworldPlugin)
@@ -699,7 +699,7 @@ async def test_failure_notification_journal_failure_still_attempts_delivery():
 
 @pytest.mark.asyncio
 async def test_failure_notification_uses_old_binding_after_world_change(tmp_path):
-    from ..workspace.runtime import FrontdeskService
+    from ..agent.runtime.frontdesk_service import FrontdeskService
     old = SimpleNamespace(colony_id="old", load_epoch="epoch-old", game_tick=5, connection_epoch="connection-old")
     new = SimpleNamespace(colony_id="new", load_epoch="epoch-new", game_tick=9)
     service = FrontdeskService(tmp_path / "events.sqlite", None, game_session=lambda: new)
@@ -767,7 +767,7 @@ async def test_consult_reports_world_changed_during_enqueue():
 async def test_consult_enqueue_changed_epoch_reports_world_changed(tmp_path):
     import threading
 
-    from ..workspace.runtime import FrontdeskService
+    from ..agent.runtime.frontdesk_service import FrontdeskService
     from .test_plugin import make_plugin
     plugin, _ = make_plugin({"neko_rimworld": {}})
     old = SimpleNamespace(colony_id="c", load_epoch="old", game_tick=1)
@@ -808,7 +808,7 @@ async def test_consult_enqueue_connection_change_returns_world_changed(tmp_path)
     import threading
 
     from ..agent.runtime.colony_scheduler import ColonyScheduler
-    from ..workspace.runtime import FrontdeskService
+    from ..agent.runtime.frontdesk_service import FrontdeskService
     from .test_plugin import make_plugin
 
     plugin, _ = make_plugin({"neko_rimworld": {}})

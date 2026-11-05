@@ -773,6 +773,15 @@ def test_observation_quota_counts_all_active_targets_but_not_revoked_intents(led
     assert observations.project(events(ledger), binding=BINDING)["intents"][1]["active"]
 
 
+def test_observation_admission_rejects_expiry_beyond_native_tick_range(ledger):
+    from plugin.plugins.neko_rimworld.game.observation_contract import MAX_NATIVE_TICK
+
+    with pytest.raises(ValueError, match="positive native tick"):
+        observations.prepare_request(events(ledger), observation_id="watch", task_id="task", expected_revision=0,
+                                     conditions=[condition(expires_at_tick=MAX_NATIVE_TICK + 1)],
+                                     supported_kinds={"construction"}, binding=BINDING)
+
+
 @pytest.mark.parametrize("mode", ["time_expired", "exhausted"])
 def test_naturally_finished_observations_release_concurrent_target_quota(ledger, mode):
     targets = [f"Blueprint_{index}" for index in range(64)]

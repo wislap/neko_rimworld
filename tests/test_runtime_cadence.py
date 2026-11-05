@@ -8,7 +8,7 @@ import pytest
 from ..agent.runtime.audit import AgentAuditRegistry
 from ..agent.runtime.colony_scheduler import ColonyScheduler
 from ..agent.runtime.loop import AgentRuntime
-from ..workspace.runtime import FrontdeskService
+from ..agent.runtime.frontdesk_service import FrontdeskService
 from .consultation_setup import semantic_tool_provider
 from .scripted_world import ScriptedGameWorld
 from .test_agent import FakeLogger, settings

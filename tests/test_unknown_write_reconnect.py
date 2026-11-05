@@ -65,7 +65,7 @@ async def test_other_stale_failures_do_not_halt_current_world(case):
 async def test_queued_wake_policy_mutation_rechecks_halt_on_worker(tmp_path):
     from ..agent.runtime.colony_scheduler import ColonyScheduler
     from ..tool_contracts import ToolExecutionError
-    from ..workspace.runtime import FrontdeskService
+    from ..agent.runtime.frontdesk_service import FrontdeskService
 
     game = SimpleNamespace(colony_id="c", load_epoch="e", game_tick=1)
     service = FrontdeskService(tmp_path / "events.sqlite", None, game_session=lambda: game)
@@ -130,7 +130,7 @@ async def test_unknown_write_halt_stops_new_connection_model_before_tool(tmp_pat
     from ..agent.runtime.audit import AgentAuditRegistry
     from ..agent.runtime.colony_scheduler import ColonyScheduler
     from ..agent.runtime.loop import AgentRuntime
-    from ..workspace.runtime import FrontdeskService
+    from ..agent.runtime.frontdesk_service import FrontdeskService
     from .consultation_setup import semantic_tool_provider
     from .test_agent import FakeLogger, settings
     from .test_capability_composition import Script, call
