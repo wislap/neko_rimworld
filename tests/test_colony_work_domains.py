@@ -531,13 +531,12 @@ def test_selected_allocation_remains_visible_when_stock_and_demand_change(ledger
     assert report["selected"]["demands"][0]["satisfied"] is None
     assert report["selected"]["stale"]
     assert {row["kind"] for row in report["discrepancies"]} == {"demand_changed", "stock_changed"}
-    assert not report["selected"]["native_lock"]
 
 
 def test_resource_scope_changes_invalidate_choice_without_rewriting_it(ledger):
     chosen = resource_allocation.prepare_selection([], allocation_id="wood", expected_revision=0, snapshot=stock(), demands=demands(),
                                                    shares={"house": {"WoodLog": 60}}, window="now", reason="choose")
-    report = resource_allocation.assess(stock(scope={"selected_sources": ["carried"]}), demands(), selection=chosen)
+    report = resource_allocation.assess(stock(scope={"selected_sources": ["carried"]}), demands(), selection=chosen["payload"])
     assert report["discrepancies"] == [{"kind": "resource_scope_changed", "selected": {"selected_sources": ["map_stock"]}, "current": {"selected_sources": ["carried"]}}]
     assert report["selected"]["demands"][0]["satisfied"] is None
     assert report["selected"]["shares"] == {"house": {"WoodLog": 60}}

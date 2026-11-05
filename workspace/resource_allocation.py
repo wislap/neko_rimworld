@@ -96,9 +96,8 @@ def assess(snapshot, demands, *, selection=None):
                                     "shortfall": combined["shortfalls"].get(resource), "status": "unallocated"})
     selected, discrepancies = None, []
     if selection is not None:
-        choice = selection.get("payload", selection)
-        old_snapshot = choice["snapshot"]
-        refs = {row["id"]: row for row in choice["demands"]}
+        old_snapshot = selection["snapshot"]
+        refs = {row["id"]: row for row in selection["demands"]}
         current = {row["id"]: row for row in demands}
         for identity in set(refs) | set(current):
             if identity not in refs or identity not in current or refs[identity] != current[identity]:
@@ -110,14 +109,14 @@ def assess(snapshot, demands, *, selection=None):
             discrepancies.append({"kind": "resource_scope_changed", "selected": deepcopy(old_snapshot["scope"]), "current": deepcopy(snapshot["scope"])})
         if snapshot["quantities"] != old_snapshot["quantities"] or snapshot["complete"] != old_snapshot["complete"]:
             discrepancies.append({"kind": "stock_changed", "selected_observation_id": old_snapshot["observation_id"], "current_observation_id": snapshot["observation_id"]})
-        shares = choice["shares"]
+        shares = selection["shares"]
         total = _total(shares.values())
         current_stock = _reading(total, snapshot)
-        selected = {"allocation_id": choice["allocation_id"], "revision": choice["revision"], "window": choice["window"],
+        selected = {"allocation_id": selection["allocation_id"], "revision": selection["revision"], "window": selection["window"],
                     "shares": deepcopy(shares), "original_observation_id": old_snapshot["observation_id"],
-                    "current_stock": current_stock, "demands": [], "stale": bool(discrepancies), "native_lock": False}
+                    "current_stock": current_stock, "demands": [], "stale": bool(discrepancies)}
         for identity, demand in current.items():
-            if demand["window"] != choice["window"]:
+            if demand["window"] != selection["window"]:
                 continue
             share = shares.get(identity, {})
             remaining = {resource: max(0, count - share.get(resource, 0)) for resource, count in demand["resources"].items()}
@@ -210,5 +209,5 @@ def prepare_selection(events, *, allocation_id, expected_revision, snapshot, dem
         raise ValueError("Chosen shares require known available stock")
     payload = {"format": FORMAT, "allocation_id": allocation_id, "task_id": task_id, "revision": expected_revision + 1,
                "snapshot": deepcopy(snapshot), "demands": deepcopy(demands), "shares": deepcopy(shares),
-               "window": window, "reason": reason, "native_lock": False}
+               "window": window, "reason": reason}
     return {"kind": "resource.allocation_selected", "source": "planner", "payload": payload}

@@ -146,14 +146,6 @@ class AuthenticationError(ProtocolError):
     """Authentication material or a proof is invalid."""
 
 
-# Compatibility aliases keep call sites expressive without multiplying error
-# policy: error_code remains the machine-readable discriminator.
-DecodeError = ValidationError
-DirectionError = ValidationError
-ReadDeadlineExceeded = FrameError
-WriteDeadlineExceeded = FrameError
-
-
 class Direction(str, Enum):
     MOD_TO_PLUGIN = "mod_to_plugin"
     PLUGIN_TO_MOD = "plugin_to_mod"
@@ -293,7 +285,7 @@ def make_challenge(
 ) -> Envelope:
     validate_auth_phase(hello, authenticated=False, direction=Direction.MOD_TO_PLUGIN)
     if hello.type != HELLO or hello.payload.client_nonce is None:
-        raise DirectionError(INVALID_ENVELOPE, "A challenge can only answer a valid hello message.")
+        raise ValidationError(INVALID_ENVELOPE, "A challenge can only answer a valid hello message.")
     return make_envelope(
         CHALLENGE,
         hello.connection_epoch,
@@ -375,7 +367,7 @@ def validate_direction(envelope: Envelope, direction: Direction | str) -> Envelo
     validate_envelope(envelope)
     parsed_direction = _coerce_direction(direction)
     if envelope.type not in _ALL_DIRECTIONS[parsed_direction]:
-        raise DirectionError(INVALID_ENVELOPE, "Message type is not valid in this peer direction.")
+        raise ValidationError(INVALID_ENVELOPE, "Message type is not valid in this peer direction.")
     return envelope
 
 
@@ -392,7 +384,7 @@ def validate_auth_phase(
     allowed = _POST_AUTH_DIRECTIONS[parsed_direction] if authenticated else _PRE_AUTH_DIRECTIONS[parsed_direction]
     if envelope.type not in allowed:
         phase = "authenticated" if authenticated else "authentication"
-        raise DirectionError(INVALID_ENVELOPE, f"Message type is not valid in the {phase} phase.")
+        raise ValidationError(INVALID_ENVELOPE, f"Message type is not valid in the {phase} phase.")
     return envelope
 
 
@@ -407,9 +399,9 @@ def serialize_envelope(envelope: Envelope, max_frame_bytes: int = MAX_MOD_TO_PLU
             separators=(",", ":"),
         ).encode("utf-8", "strict")
     except (TypeError, ValueError, UnicodeError):
-        raise DecodeError(INVALID_JSON, "Envelope serialization failed.") from None
+        raise ValidationError(INVALID_JSON, "Envelope serialization failed.") from None
     if not encoded:
-        raise DecodeError(INVALID_JSON, "Envelope serialization produced an empty payload.")
+        raise ValidationError(INVALID_JSON, "Envelope serialization produced an empty payload.")
     if len(encoded) > max_frame_bytes:
         raise FrameError(FRAME_TOO_LARGE, f"Encoded frame exceeds the {max_frame_bytes}-byte limit.")
     return encoded
@@ -426,7 +418,7 @@ def decode_envelope(
         max_frame_bytes = min(max_frame_bytes, MAX_HANDSHAKE_FRAME_BYTES)
     _validate_frame_limit(max_frame_bytes)
     if not isinstance(data, (bytes, bytearray, memoryview)):
-        raise DecodeError(INVALID_JSON, "Protocol payload must be bytes.")
+        raise ValidationError(INVALID_JSON, "Protocol payload must be bytes.")
     raw = bytes(data)
     if not raw:
         raise FrameError(EMPTY_FRAME, "Empty JSON payload.")
@@ -435,13 +427,13 @@ def decode_envelope(
     try:
         text = raw.decode("utf-8", "strict")
     except UnicodeDecodeError:
-        raise DecodeError(INVALID_JSON, "Protocol payload is not valid UTF-8.") from None
+        raise ValidationError(INVALID_JSON, "Protocol payload is not valid UTF-8.") from None
     try:
         value = json.loads(text, object_pairs_hook=_unique_object, parse_constant=_reject_json_constant)
     except ProtocolError:
         raise
     except (json.JSONDecodeError, RecursionError, ValueError, TypeError):
-        raise DecodeError(INVALID_JSON, "Invalid protocol JSON.") from None
+        raise ValidationError(INVALID_JSON, "Invalid protocol JSON.") from None
     _validate_json_limits(value)
     envelope = _parse_envelope(value)
     if direction is not None:
@@ -538,7 +530,7 @@ def write_frame(
             _check_deadline(absolute_deadline, writing=True)
             return
         except (socket.timeout, TimeoutError):
-            raise WriteDeadlineExceeded(WRITE_DEADLINE_EXCEEDED, "Frame write deadline exceeded.") from None
+            raise FrameError(WRITE_DEADLINE_EXCEEDED, "Frame write deadline exceeded.") from None
         finally:
             try:
                 destination.settimeout(original_timeout)
@@ -554,7 +546,7 @@ def write_frame(
         try:
             written = writer(view[offset:])
         except (socket.timeout, TimeoutError):
-            raise WriteDeadlineExceeded(WRITE_DEADLINE_EXCEEDED, "Frame write deadline exceeded.") from None
+            raise FrameError(WRITE_DEADLINE_EXCEEDED, "Frame write deadline exceeded.") from None
         _check_deadline(absolute_deadline, writing=True)
         if not isinstance(written, int) or written <= 0:
             raise FrameError(UNEXPECTED_END_OF_STREAM, "Binary stream stopped while writing a frame.")
@@ -565,7 +557,7 @@ def write_frame(
         try:
             flush()
         except (socket.timeout, TimeoutError):
-            raise WriteDeadlineExceeded(WRITE_DEADLINE_EXCEEDED, "Frame write deadline exceeded.") from None
+            raise FrameError(WRITE_DEADLINE_EXCEEDED, "Frame write deadline exceeded.") from None
         _check_deadline(absolute_deadline, writing=True)
 
 
@@ -823,7 +815,7 @@ def _read_exact(source: socket.socket | BinaryIO, count: int, deadline: float) -
                 if received:
                     view[offset : offset + received] = chunk
         except (socket.timeout, TimeoutError) as exc:
-            raise ReadDeadlineExceeded(READ_DEADLINE_EXCEEDED, "Frame read deadline exceeded.") from exc
+            raise FrameError(READ_DEADLINE_EXCEEDED, "Frame read deadline exceeded.") from exc
         _check_deadline(deadline)
         if received <= 0:
             raise FrameError(
@@ -847,8 +839,7 @@ def _check_deadline(deadline: float, *, writing: bool = False) -> None:
     if time.monotonic() >= deadline:
         code = WRITE_DEADLINE_EXCEEDED if writing else READ_DEADLINE_EXCEEDED
         operation = "write" if writing else "read"
-        error_type = WriteDeadlineExceeded if writing else ReadDeadlineExceeded
-        raise error_type(code, f"Frame {operation} deadline exceeded.")
+        raise FrameError(code, f"Frame {operation} deadline exceeded.")
 
 
 def _validate_frame_limit(limit: int) -> None:
@@ -860,24 +851,24 @@ def _unique_object(pairs: Sequence[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
-            raise DecodeError(INVALID_JSON, "JSON object contains duplicate fields.")
+            raise ValidationError(INVALID_JSON, "JSON object contains duplicate fields.")
         result[key] = value
     return result
 
 
 def _reject_json_constant(_value: str) -> Any:
-    raise DecodeError(INVALID_JSON, "JSON contains a non-finite number.")
+    raise ValidationError(INVALID_JSON, "JSON contains a non-finite number.")
 
 
 def _validate_json_limits(value: Any) -> None:
     if not isinstance(value, dict):
-        raise DecodeError(INVALID_JSON, "JSON root must be an object.")
+        raise ValidationError(INVALID_JSON, "JSON root must be an object.")
     pending = [(value, 1)]
     count = 0
     while pending:
         current, depth = pending.pop()
         if depth > MAX_JSON_DEPTH:
-            raise DecodeError(INVALID_JSON, "JSON nesting is too deep.")
+            raise ValidationError(INVALID_JSON, "JSON nesting is too deep.")
         count += 1
         if isinstance(current, dict):
             count += len(current)
@@ -885,13 +876,13 @@ def _validate_json_limits(value: Any) -> None:
         elif isinstance(current, list):
             pending.extend((item, depth + 1) for item in current)
         elif isinstance(current, float) and not math.isfinite(current):
-            raise DecodeError(INVALID_JSON, "JSON numbers must be finite.")
+            raise ValidationError(INVALID_JSON, "JSON numbers must be finite.")
         elif current is not None and not isinstance(current, (str, int, float, bool)):
-            raise DecodeError(INVALID_JSON, "Unsupported JSON value.")
+            raise ValidationError(INVALID_JSON, "Unsupported JSON value.")
         if isinstance(current, dict) and any(not isinstance(key, str) for key in current):
-            raise DecodeError(INVALID_JSON, "JSON keys must be strings.")
+            raise ValidationError(INVALID_JSON, "JSON keys must be strings.")
         if count > MAX_JSON_ITEMS:
-            raise DecodeError(INVALID_JSON, "JSON object graph contains too many items.")
+            raise ValidationError(INVALID_JSON, "JSON object graph contains too many items.")
 
 
 def _coerce_direction(direction: Direction | str) -> Direction:

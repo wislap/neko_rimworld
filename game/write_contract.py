@@ -2,6 +2,8 @@
 
 import re
 
+from ..values import is_nonblank_text
+
 
 def _bad():
     raise ValueError("Invalid write payload.")
@@ -12,8 +14,8 @@ def _fields(value, names):
         _bad()
 
 
-def _text(value, limit=256):
-    if not isinstance(value, str) or not value.strip() or len(value) > limit:
+def _require_text(value, limit=256):
+    if not is_nonblank_text(value) or len(value) > limit:
         _bad()
 
 
@@ -26,7 +28,7 @@ def validate_request(mode, args):
     if mode in ("dry_run", "commit"):
         _fields(args, ("changeset_id", "author", "entry_id", "load_epoch", "idempotency_key", "ops"))
         for name in ("changeset_id", "author", "entry_id", "load_epoch", "idempotency_key"):
-            _text(args[name])
+            _require_text(args[name])
         if args["author"] != "planner":
             _bad()
         _epoch(args["load_epoch"])
@@ -36,8 +38,8 @@ def validate_request(mode, args):
         for op in ops:
             if not isinstance(op, dict) or len(op) > 16 or not {"op", "evidence", "expect", "value"} <= op.keys():
                 _bad()
-            _text(op["op"])
-            _text(op["evidence"])
+            _require_text(op["op"])
+            _require_text(op["evidence"])
             # The Mod's JObject null check treats JSON null as an existing token.
             targets = {k: v for k, v in op.items() if k not in {"op", "evidence", "expect", "value"}}
             if not targets.keys() & {"pawn", "bill", "thing", "worktable", "storage", "research", "map", "policy", "bed", "zone", "area"}:
@@ -47,18 +49,18 @@ def validate_request(mode, args):
             expected, value = op["expect"], op["value"]
             if op["op"] == "add_production_bill":
                 _fields(op, ("op", "worktable", "value", "expect", "evidence"))
-                _text(op['worktable'])
+                _require_text(op['worktable'])
                 _fields(expected, ("bill_ids",))
                 if not isinstance(value, dict) or "recipe" not in value or set(value) - {"recipe", "settings"}:
                     _bad()
                 if "settings" in value and not isinstance(value["settings"], dict):
                     _bad()
-                _text(value["recipe"])
+                _require_text(value["recipe"])
                 identifiers = expected["bill_ids"]
                 if not isinstance(identifiers, list):
                     _bad()
                 for identifier in identifiers:
-                    _text(identifier)
+                    _require_text(identifier)
                 if len(set(identifiers)) != len(identifiers):
                     _bad()
             elif op["op"] in {"place_blueprint", "restart_blueprint", "cancel_blueprint", "create_food_policy", "copy_food_policy", "set_food_policy_content", "delete_food_policy", "remove_production_bill", "copy_production_bill", "create_zone", "create_allowed_area", "remove_zone", "remove_allowed_area", "set_zone_cells", "set_area_cells", "set_area_cell_flags"}:
@@ -68,7 +70,7 @@ def validate_request(mode, args):
                     _bad()
     elif mode == "undo":
         _fields(args, ("token",))
-        _text(args["token"])
+        _require_text(args["token"])
     elif mode == "set_paused":
         guarded = isinstance(args, dict) and "expected_owner" in args
         _fields(args, ("paused", "role", "expected_owner") if guarded else ("paused", "role"))
@@ -104,8 +106,8 @@ keeps each operation's target and envelope exact instead of weakening old ops.
     if name == "cancel_blueprint":
         if value is not False:
             _bad()
-        _text(op["plan_id"], 128)
-        _text(op["element_id"], 128)
+        _require_text(op["plan_id"], 128)
+        _require_text(op["element_id"], 128)
         return
     if name in {"remove_zone", "remove_allowed_area"}:
         if value is not False:
@@ -133,15 +135,15 @@ keeps each operation's target and envelope exact instead of weakening old ops.
         if name == "create_zone" and (value["kind"] not in {"stockpile", "growing"} or not cells):
             _bad()
         if "label" in value:
-            _text(value["label"], 128)
+            _require_text(value["label"], 128)
     elif name in {"create_food_policy", "copy_food_policy"}:
         _fields(value, ("label",))
-        _text(value["label"], 128)
+        _require_text(value["label"], 128)
         if name == "create_food_policy" and op["policy"] != "new":
             _bad()
     elif name == "set_food_policy_content":
         _fields(value, ("label", "filter", "impact"))
-        _text(value["label"], 128)
+        _require_text(value["label"], 128)
         if not isinstance(value["filter"], dict) or not isinstance(value["impact"], dict):
             _bad()
     elif name == "delete_food_policy":
@@ -152,13 +154,13 @@ keeps each operation's target and envelope exact instead of weakening old ops.
         required = {"plan_id", "element_id", "definition", "x", "z", "rotation", "kind"}
         if not required <= value.keys() or value.keys() - required - {"stuff"}:
             _bad()
-        _text(value["element_id"], 128)
-        _text(value["plan_id"], 128)
-        _text(value["definition"])
+        _require_text(value["element_id"], 128)
+        _require_text(value["plan_id"], 128)
+        _require_text(value["definition"])
         if any(type(value[k]) is not int for k in ("x", "z", "rotation")) or not 0 <= value["rotation"] <= 3 or value["kind"] not in {"building", "floor"}:
             _bad()
         if value.get("stuff") is not None:
-            _text(value["stuff"])
+            _require_text(value["stuff"])
 
 
 def validate_result(raw):
@@ -167,8 +169,8 @@ def validate_result(raw):
         _bad()
     if status != "ok":
         _fields(raw, ("status", "error_code", "message", "issues"))
-        _text(raw["error_code"], 128)
-        _text(raw["message"], 2048)
+        _require_text(raw["error_code"], 128)
+        _require_text(raw["message"], 2048)
         return
     _fields(raw, ("status", "data", "issues"))
     data = raw["data"]
@@ -189,17 +191,17 @@ def validate_result(raw):
         names = {"ok": ("status", "preview"), "committed": ("status", "changeset_id", "load_epoch", "readback", "undo_token"), "undone": ("status", "changeset_id", "load_epoch", "readback")}[kind]
         _fields(data, names)
         if kind != "ok":
-            _text(data["changeset_id"], 2**31)
+            _require_text(data["changeset_id"], 2**31)
             _epoch(data["load_epoch"])
         if kind == "committed":
-            _text(data["undo_token"], 2**31)
+            _require_text(data["undo_token"], 2**31)
         rows = data["preview" if kind == "ok" else "readback"]
         if not isinstance(rows, list):
             _bad()
         for row in rows:
             _fields(row, ("op", "object", "field", "expect", "value") if kind == "ok" else ("object", "field", "value"))
-            _text(row["object"])
-            _text(row["field"])
+            _require_text(row["object"])
+            _require_text(row["field"])
             if kind == "ok" and (type(row["op"]) is not int or row["op"] < 0):
                 _bad()
     elif kind == "conflict":
@@ -207,7 +209,7 @@ def validate_result(raw):
         if type(data["op"]) is not int or data["op"] < 0 or (data["at_tick"] is not None and (type(data["at_tick"]) is not int or data["at_tick"] < 0)):
             _bad()
         if data["last_writer"] is not None:
-            _text(data["last_writer"], 2**31)
+            _require_text(data["last_writer"], 2**31)
     elif kind in ("unknown_token", "already_undone"):
         _fields(data, ("status",))
     elif kind == "stale_epoch":

@@ -15,7 +15,7 @@ from ..delivery.handoff import (
     attach_agent_handoff,
 )
 from ..model.model_client import AgentModelSettings, ModelClient, OpenAICompatibleModelClient
-from ..model.model_requests import MAX_MODEL_ATTEMPTS, _canonical_hash, request_model
+from ..model.model_requests import MAX_MODEL_ATTEMPTS, request_model
 from .audit import (
     AgentAuditCapacityError,
     AgentAuditLedger,
@@ -435,7 +435,6 @@ class AgentRuntime:
             requested = await request_model(
                 model, settings, ledger, session, messages, [], finalizing=True, reserve=0,
                 research_deadline=settings.run_budget_seconds, cycle=0,
-                request_sha256=_canonical_hash({"messages": messages, "tools": []}),
                 logger=self._logger, max_attempts=MAX_MODEL_ATTEMPTS,
             )
             if requested.error is not None:
@@ -509,7 +508,6 @@ class AgentRuntime:
                 request_messages = repair_messages
                 ledger.record("length_repair_context", {"game_evidence_replayed": False, "saved_detail_changed": False})
             tool_schemas = tools.schemas()
-            request_sha256 = _canonical_hash({"messages": request_messages, "tools": tool_schemas})
             requested = await request_model(
                 model,
                 settings,
@@ -521,7 +519,6 @@ class AgentRuntime:
                 reserve=reserve,
                 research_deadline=research_deadline,
                 cycle=cycle,
-                request_sha256=request_sha256,
                 logger=self._logger,
                 max_attempts=MAX_MODEL_ATTEMPTS,
             )

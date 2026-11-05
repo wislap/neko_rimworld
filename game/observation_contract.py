@@ -4,9 +4,7 @@ Coverage is accepted only from native acknowledgements, never from a request ech
 The supported condition kinds themselves are advertised by the native catalog.
 """
 
-from .write_contract import _bad, _fields, _text
-
-OBSERVATION_VERSION = "colony_observation.v1"
+from .write_contract import _bad, _fields, _require_text
 
 # Native wire limits; the planner-side admission in workspace/observations reuses them.
 MAX_OBSERVATIONS = 16
@@ -26,7 +24,7 @@ def validate_observation_request(args):
     groups, targets = set(), 0
     for row in args["observations"]:
         _fields(row, ("observation_id", "revision", "conditions"))
-        _text(row["observation_id"], 128)
+        _require_text(row["observation_id"], 128)
         if row["observation_id"] in groups or type(row["revision"]) is not int or row["revision"] < 1:
             _bad()
         groups.add(row["observation_id"])
@@ -37,20 +35,20 @@ def validate_observation_request(args):
         for condition in conditions:
             if not isinstance(condition, dict) or not CONDITION_REQUIRED_FIELDS <= condition.keys() or condition.keys() - CONDITION_REQUIRED_FIELDS - CONDITION_OPTIONAL_FIELDS:
                 _bad()
-            _text(condition["id"], 128)
-            _text(condition["kind"], 128)
+            _require_text(condition["id"], 128)
+            _require_text(condition["kind"], 128)
             if condition["id"] in seen:
                 _bad()
             seen.add(condition["id"])
             if "map_id" in condition:
-                _text(condition["map_id"])
+                _require_text(condition["map_id"])
             if "plan_id" in condition:
-                _text(condition["plan_id"], 128)
+                _require_text(condition["plan_id"], 128)
             identifiers = condition["target_ids"]
             if not isinstance(identifiers, list) or not identifiers or len(identifiers) != len(set(identifiers)):
                 _bad()
             for identifier in identifiers:
-                _text(identifier)
+                _require_text(identifier)
             targets += len(identifiers)
             for field, minimum, maximum in (("max_samples", 1, MAX_SAMPLES), ("expires_at_tick", 1, MAX_NATIVE_TICK), ("sample_interval_ticks", 1, MAX_SAMPLE_INTERVAL_TICKS)):
                 if field in condition and (type(condition[field]) is not int or not minimum <= condition[field] <= maximum):
@@ -79,7 +77,7 @@ def validate_observation_result(data):
             _bad()
         if registration["status"] not in {"registered", "rejected"}:
             _bad()
-        _text(registration["receipt_id"])
+        _require_text(registration["receipt_id"])
         covered = registration["covered_condition_ids"]
         allowed = {row["id"] for row in expected[identifier]["conditions"]}
         if not isinstance(covered, list) or any(not isinstance(item, str) or item not in allowed for item in covered) or len(covered) != len(set(covered)):
@@ -87,4 +85,4 @@ def validate_observation_result(data):
         if registration["status"] == "rejected" and covered:
             _bad()
         if "reason" in registration:
-            _text(registration["reason"], 2048)
+            _require_text(registration["reason"], 2048)

@@ -1,5 +1,6 @@
 """Fixed board skeleton and author rules; pure checks with no storage access."""
 
+from ..values import is_nonblank_text
 from .ledger import FRONTDESK, PLANNER, is_integer
 
 FIELDS = frozenset(
@@ -87,20 +88,20 @@ def check_shape(submission):
     """Reject anything outside the fixed skeleton before any storage lookup."""
     if not isinstance(submission, dict) or set(submission) != FIELDS:
         raise BoardError("Board entries use the fixed skeleton fields")
-    if not _text(submission["entry_id"]) or not _text(submission["kind"], AUTHOR_OF):
+    if not is_nonblank_text(submission["entry_id"]) or not _choice(submission["kind"], AUTHOR_OF):
         raise BoardError("An entry names its id and a known kind")
-    if not _count(submission["expected_revision"]) or not _text(submission["status"], STATUSES):
+    if not _count(submission["expected_revision"]) or not _choice(submission["status"], STATUSES):
         raise BoardError("A revision names the revision it read and a known status")
     if not is_integer(submission["priority"]) or not isinstance(submission["body"], str):
         raise BoardError("Priority is an integer and body is text")
     if submission["review_at_tick"] is not None and not _count(submission["review_at_tick"]):
         raise BoardError("A review tick is a non-negative integer or null")
-    if submission["parent"] is not None and not _text(submission["parent"]):
+    if submission["parent"] is not None and not is_nonblank_text(submission["parent"]):
         raise BoardError("parent must be null for strategy or intent; task requires a non-empty strategy or intent entry id")
     if not isinstance(submission["source"], dict):
         raise BoardError("source must be an object: strategy uses {}, task uses {\"entry_id\":\"...\"}, intent uses {\"event_seq\":...}")
     for name in ("evidence", "changesets"):
-        if not isinstance(submission[name], list) or not all(_text(item) for item in submission[name]):
+        if not isinstance(submission[name], list) or not all(is_nonblank_text(item) for item in submission[name]):
             raise BoardError(f"{name} is a list of identifiers")
     _check_link_shape(submission)
 
@@ -139,12 +140,12 @@ def _check_link_shape(submission):
         raise BoardError("A strategy requires parent=null and source={}")
     if kind == "intent" and (parent is not None or set(source) != {"event_seq"} or not _count(source["event_seq"])):
         raise BoardError("An intent requires parent=null and source={\"event_seq\": <non-negative integer>} citing user words")
-    if kind == "task" and (parent is None or set(source) != {"entry_id"} or not _text(source["entry_id"])):
+    if kind == "task" and (parent is None or set(source) != {"entry_id"} or not is_nonblank_text(source["entry_id"])):
         raise BoardError("A task requires a non-empty parent and source={\"entry_id\": <non-empty entry id>}; both must reference a strategy or intent")
 
 
-def _text(value, allowed=None):
-    return isinstance(value, str) and bool(value.strip()) and (allowed is None or value in allowed)
+def _choice(value, allowed):
+    return is_nonblank_text(value) and value in allowed
 
 
 def _count(value):

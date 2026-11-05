@@ -146,7 +146,7 @@ async def test_each_model_retry_reserves_and_settles(monkeypatch):
     budget = session.budget = Budget()
     settings = build_agent_model_settings(base_url="http://localhost:11434/v1", model="test")
     result = await request_model(Model(), settings, ledger, session, session.messages, [], finalizing=True,
-        reserve=0, research_deadline=900, cycle=1, request_sha256="x",
+        reserve=0, research_deadline=900, cycle=1,
         logger=SimpleNamespace(warning=lambda *args: None, error=lambda *args: None))
     assert result.error is None and len(budget.reserves) == 2
     assert budget.settles == [("1", {}), ("2", {"prompt_tokens": 10, "completion_tokens": 2})]
@@ -285,7 +285,7 @@ async def test_failed_settlement_preserves_full_model_turn_and_input(tmp_path):
     tools = [{"name": "planner_yield"}]
     with pytest.raises(OSError):
         await request_model(model, settings, ledger, session, session.messages, tools, finalizing=True,
-            reserve=0, research_deadline=900, cycle=3, request_sha256="unused",
+            reserve=0, research_deadline=900, cycle=3,
             logger=SimpleNamespace(warning=lambda *args: None, error=lambda *args: None))
     prepared, admitted = captured
     request = prepared["model_request"]
@@ -397,7 +397,7 @@ async def test_cancel_during_settlement_lock_keeps_receipt_and_private_data_in_s
     session.budget, session.budget_scope = budget, ("c", "e", 1)
     settings = build_agent_model_settings(base_url="http://localhost:11434/v1", model="test")
     request = asyncio.create_task(request_model(model, settings, ledger, session, session.messages, [], finalizing=True,
-        reserve=0, research_deadline=900, cycle=1, request_sha256="", logger=SimpleNamespace()))
+        reserve=0, research_deadline=900, cycle=1, logger=SimpleNamespace()))
     await model.started.wait()
     other_model = Model()
     other_ledger = AgentAuditLedger("frontdesk")
@@ -405,7 +405,7 @@ async def test_cancel_during_settlement_lock_keeps_receipt_and_private_data_in_s
     other_session.budget, other_session.budget_scope = budget, ("c", "e", 1)
     other = asyncio.create_task(request_model(other_model, settings, other_ledger, other_session,
         other_session.messages, [], finalizing=True, reserve=0, research_deadline=900, cycle=1,
-        request_sha256="", logger=SimpleNamespace()))
+        logger=SimpleNamespace()))
     await service.reserve_started.wait()
     model.release.set()
     for _ in range(100):
@@ -580,7 +580,7 @@ async def test_block_after_admission_and_before_dispatch_stops_model(tmp_path):
     session.persist_progress = persist
     settings = build_agent_model_settings(base_url="http://localhost:11434/v1", model="test")
     request = asyncio.create_task(request_model(model, settings, ledger, session, session.messages, [],
-        finalizing=True, reserve=0, research_deadline=900, cycle=1, request_sha256="", logger=SimpleNamespace()))
+        finalizing=True, reserve=0, research_deadline=900, cycle=1, logger=SimpleNamespace()))
     await entered.wait()
     budget.blocked = True
     release.set()
