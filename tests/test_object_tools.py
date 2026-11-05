@@ -5,8 +5,8 @@ import pytest
 from plugin.plugins.neko_rimworld.agent.world.look_tools import read_look
 from plugin.plugins.neko_rimworld.agent.world.native_state import NativeStateReader
 from plugin.plugins.neko_rimworld.agent.world.object_identity import canonical_object_identity
+from plugin.plugins.neko_rimworld.agent.world.query_planner import route_object
 from plugin.plugins.neko_rimworld.agent.world.query_surface import SurfaceError
-from plugin.plugins.neko_rimworld.agent.world.semantic_surface import route_object
 from plugin.plugins.neko_rimworld.agent.world.work_assignments import WorkReadings, summarize_work_assignments
 
 

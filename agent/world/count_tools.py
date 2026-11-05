@@ -1,7 +1,7 @@
 """The public population-measure contract."""
 
 from ...schema_serialization import schema_contract
-from .semantic_surface import GROUPINGS, METRICS, POPULATIONS, _object_schema
+from .query_catalog import GROUPINGS, METRICS, POPULATIONS, object_schema
 
 
 def count_spec(directory=None):
@@ -11,7 +11,7 @@ def count_spec(directory=None):
         parameters={
             "type": "object",
             "properties": {
-                "object": _object_schema(directory),
+                "object": object_schema(directory),
                 "metric": {"type": "string", "enum": list(METRICS)},
                 "by": {"type": "string", "enum": list(GROUPINGS)},
                 "detail": {"type": "integer", "minimum": 0, "maximum": 100, "default": 0},

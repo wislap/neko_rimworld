@@ -12,6 +12,7 @@ from collections.abc import Mapping
 
 from ...game.spatial_observation import SpatialObservationError, observation_cells
 from ...serialization import identity_digest
+from .reference_text import is_reference_text
 
 PLAN_FORMAT = "construction_plan.v1"
 CHECK_FORMAT = "construction_check.v1"
@@ -35,7 +36,7 @@ def _integer(value, name, *, minimum=None, maximum=None):
 
 
 def _text(value, name):
-    if not isinstance(value, str) or not value.strip() or len(value) > 256:
+    if not is_reference_text(value):
         raise ConstructionPlanError(f"{name} must be nonempty text of at most 256 characters")
     return value
 

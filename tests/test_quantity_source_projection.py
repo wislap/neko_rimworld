@@ -5,13 +5,10 @@ import json
 
 import pytest
 from plugin.plugins.neko_rimworld.agent.context.model_context import make_pruner
+from plugin.plugins.neko_rimworld.agent.world.query_planner import plan_count, plan_forbidden_count
+from plugin.plugins.neko_rimworld.agent.world.query_rendering import render
 from plugin.plugins.neko_rimworld.agent.world.query_surface import Surface
-from plugin.plugins.neko_rimworld.agent.world.semantic_surface import (
-    normalize_object,
-    plan_count,
-    plan_forbidden_count,
-    render,
-)
+from plugin.plugins.neko_rimworld.agent.world.query_validation import normalize_object
 
 from .test_colony_tools import facts, interaction
 from .test_semantic_tools import catalog

@@ -6,20 +6,13 @@ import copy
 from typing import Any
 
 from .native_state import observed_id_reference
+from .query_catalog import DEF_KINDS, THING_KINDS, capability_values
+from .query_planner import plan_count, plan_forbidden_count, plan_look
+from .query_rendering import render, render_blocked
+from .query_resolution import apply_lookup, interpret_lookup, lookup_spec
 from .query_surface import SurfaceError
-from .semantic_surface import (
-    DEF_KINDS,
-    THING_KINDS,
-    apply_lookup,
-    capability_values,
-    interpret_lookup,
-    lookup_spec,
+from .query_validation import (
     normalize_object,
-    plan_count,
-    plan_forbidden_count,
-    plan_look,
-    render,
-    render_blocked,
     validate_aspects,
     validate_by,
     validate_detail,

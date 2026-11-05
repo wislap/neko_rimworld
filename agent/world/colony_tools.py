@@ -11,6 +11,7 @@ import copy
 
 from ...tool_contracts import ToolSpec
 from .query_surface import SurfaceError
+from .reference_text import MAX_REFERENCE_TEXT
 
 VERSION = "colony_state.v1"
 DOMAINS = {
@@ -53,21 +54,21 @@ def colony_kind(value):
     return ALIASES.get(value, value) if isinstance(value, str) else None
 
 
-def _text(*, max_length=None):
+def _text_schema(*, max_length=None):
     schema = {"type": "string", "minLength": 1, "pattern": r"\S"}
     if max_length is not None:
         schema["maxLength"] = max_length
     return schema
 
 
-def _strings():
-    return {"type": "array", "minItems": 1, "maxItems": 32, "items": _text(max_length=256)}
+def _text_list_schema():
+    return {"type": "array", "minItems": 1, "maxItems": 32, "items": _text_schema(max_length=MAX_REFERENCE_TEXT)}
 
 
 def _reference(*, map_allowed=False):
     return {
         "type": "object", "additionalProperties": False,
-        "properties": {key: _text(max_length=256)
+        "properties": {key: _text_schema(max_length=MAX_REFERENCE_TEXT)
                        for key in (("id", "name", "map") if map_allowed else ("id", "name"))},
         # oneOf already rejects the both-present case: it would match twice.
         "oneOf": [{"required": ["id"]}, {"required": ["name"]}],
@@ -96,32 +97,32 @@ def extend_look_spec(spec, directory):
     props = spec["parameters"]["properties"]
     selectors = {
         "kind": {"enum": [kind for kind in kinds + aliases if kind not in ("resources", "storage")]},
-        "ids": _strings(), "names": _strings(),
-        "id": _text(max_length=256), "name": _text(max_length=256),
+        "ids": _text_list_schema(), "names": _text_list_schema(),
+        "id": _text_schema(max_length=MAX_REFERENCE_TEXT), "name": _text_schema(max_length=MAX_REFERENCE_TEXT),
     }
     if "inspect_planet" in operations:
-        selectors.update(category=_text(), near={"oneOf": [_reference(), {
+        selectors.update(category=_text_schema(), near={"oneOf": [_reference(), {
             "type": "object", "additionalProperties": False, "required": ["kind"],
-            "properties": {"kind": {"const": "map"}, "map": {**_text(), "default": "current"}},
+            "properties": {"kind": {"const": "map"}, "map": {**_text_schema(), "default": "current"}},
         }]})
     if {"inspect_trade", "inspect_resources", "inspect_storage"} & operations:
-        selectors["map"] = {**_text(), "default": "current"}
+        selectors["map"] = {**_text_schema(), "default": "current"}
     props["object"]["oneOf"].append({"type": "object", "additionalProperties": False, "required": ["kind"], "properties": selectors})
     if "inspect_storage" in operations:
         props["object"]["oneOf"].append({"type": "object", "additionalProperties": False,
             "required": ["kind", "map"], "properties": {"kind": {"const": "storage"},
-            "id": _text(max_length=256), "ids": {**_strings(), "maxItems": 1},
-            "map": _text()},
+            "id": _text_schema(max_length=MAX_REFERENCE_TEXT), "ids": {**_text_list_schema(), "maxItems": 1},
+            "map": _text_schema()},
             "oneOf": [{"required": ["id"]}, {"required": ["ids"]}]})
         spec["description"] += " Storage reads require map and exactly one ID; they return one object without pagination. Either storage aspect returns priority and permissions for requested items. Use the returned canonical map_id for storage writes."
         spec["parameters"].setdefault("allOf", []).append({
             "if": {"properties": {"object": {"properties": {"kind": {"const": "storage"}}, "required": ["kind"]}}, "required": ["object"]},
             "then": {"not": {"required": ["limit"]}, "properties": {
                 "aspects": {"items": {"enum": ["priority", "allows"]}},
-                "focus": {"type": "object", "additionalProperties": False, "properties": {"items": _strings()}},
+                "focus": {"type": "object", "additionalProperties": False, "properties": {"items": _text_list_schema()}},
                 "offset": {"const": 0}, "detail": {"const": 0}}}})
     if "inspect_resources" in operations:
-        props["object"]["oneOf"].append({"type": "object", "additionalProperties": False, "required": ["kind"], "properties": {"kind": {"const": "resources"}, "map": {**_text(), "default": "current"}}})
+        props["object"]["oneOf"].append({"type": "object", "additionalProperties": False, "required": ["kind"], "properties": {"kind": {"const": "resources"}, "map": {**_text_schema(), "default": "current"}}})
         spec["parameters"].setdefault("allOf", []).append({"if": {"properties": {"object": {"properties": {"kind": {"const": "resources"}}}}}, "then": {"required": ["focus"], "properties": {"focus": {"required": ["items"]}}}})
     extra_aspects = list(dict.fromkeys(a for kind in kinds for a in DOMAINS[kind][1]))
     props["aspects"]["items"]["enum"] = list(dict.fromkeys(props["aspects"]["items"]["enum"] + extra_aspects))
@@ -133,7 +134,7 @@ def extend_look_spec(spec, directory):
                                      (" Storage has no limit or pagination." if "inspect_storage" in operations else "")}
     item_kinds = [kind for kind in ("traders", "research", "resources", "storage") if "items" in operation_properties(directory, DOMAINS[kind][0])]
     if item_kinds:
-        props["focus"]["properties"]["items"] = _strings()
+        props["focus"]["properties"]["items"] = _text_list_schema()
         props["focus"]["description"] += " focus.items: exact item Def names/labels; storage requires exact Def names."
         if "resources" in item_kinds:
             props["focus"]["description"] += " Required for resources (ground/held/seller quantities)."
@@ -320,7 +321,7 @@ def computation_tools(interaction):
 
 
 def _basket_schema():
-    return {"type": "array", "maxItems": 32, "items": {"type": "object", "additionalProperties": False, "required": ["item", "quantity"], "properties": {"item": _text(), "quantity": {"type": "integer", "minimum": 1, "maximum": 2147483647}}}}
+    return {"type": "array", "maxItems": 32, "items": {"type": "object", "additionalProperties": False, "required": ["item", "quantity"], "properties": {"item": _text_schema(), "quantity": {"type": "integer", "minimum": 1, "maximum": 2147483647}}}}
 
 
 def _basket_rows(rows, name):

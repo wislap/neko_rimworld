@@ -7,13 +7,9 @@ import jsonschema
 import pytest
 from plugin.plugins.neko_rimworld.agent.world.count_tools import count_spec
 from plugin.plugins.neko_rimworld.agent.world.look_tools import look_spec, read_look
+from plugin.plugins.neko_rimworld.agent.world.query_catalog import ASPECTS, KINDS
 from plugin.plugins.neko_rimworld.agent.world.query_surface import SurfaceError
-from plugin.plugins.neko_rimworld.agent.world.semantic_surface import (
-    ASPECTS,
-    KINDS,
-    validate_by,
-    validate_metric,
-)
+from plugin.plugins.neko_rimworld.agent.world.query_validation import validate_by, validate_metric
 
 from .test_object_tools import Reader as BaseReader
 
@@ -51,14 +47,14 @@ async def test_explicit_state_and_query_aspects_agree_with_reader():
             runtime_ok = False
         # The query facts owner validates nonphysical facets before reading; this fake supplies only rows.
         if kind not in ("pawn", "pawns", "colonists", "thing", "things"):
-            from plugin.plugins.neko_rimworld.agent.world.semantic_surface import validate_aspects
+            from plugin.plugins.neko_rimworld.agent.world.query_validation import validate_aspects
 
             try:
                 validate_aspects(kind, [aspect])
                 runtime_ok = True
             except SurfaceError:
                 runtime_ok = False
-        from plugin.plugins.neko_rimworld.agent.world.semantic_surface import supported_aspects
+        from plugin.plugins.neko_rimworld.agent.world.query_validation import supported_aspects
         expected = aspect in (*supported_aspects(kind), *(("state",) if kind in ("pawn", "pawns", "colonists", "thing", "things") else ()))
         assert runtime_ok == expected, (kind, aspect)
         assert schema_ok, (kind, aspect)

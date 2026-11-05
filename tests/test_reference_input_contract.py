@@ -4,12 +4,14 @@ import copy
 
 import pytest
 from jsonschema import ValidationError, validate
-from plugin.plugins.neko_rimworld.agent.world import semantic_surface as s
-from plugin.plugins.neko_rimworld.agent.world.query_surface import Surface
+from plugin.plugins.neko_rimworld.agent.world.query_catalog import IDENTITY_FIELDS, object_schema
+from plugin.plugins.neko_rimworld.agent.world.query_planner import _pawn_entries, _supported, route_object
+from plugin.plugins.neko_rimworld.agent.world.query_surface import Surface, SurfaceError
+from plugin.plugins.neko_rimworld.agent.world.query_validation import normalize_object
 
 
 def test_exact_thing_set_preserves_scope_and_does_not_change_single_thing():
-    obj = s.normalize_object(
+    obj = normalize_object(
         {
             "kind": "things",
             "ids": ["medicine1", "medicine2"],
@@ -18,7 +20,7 @@ def test_exact_thing_set_preserves_scope_and_does_not_change_single_thing():
             "include_fogged": False,
         }
     )
-    assert s.route_object(obj) == (
+    assert route_object(obj) == (
         "things",
         {
             "map_id": "Map_7",
@@ -27,22 +29,22 @@ def test_exact_thing_set_preserves_scope_and_does_not_change_single_thing():
         },
         {"id": {"in": ["medicine1", "medicine2"]}},
     )
-    assert s.route_object(s.normalize_object({"kind": "thing", "id": "medicine1"})) == (
+    assert route_object(normalize_object({"kind": "thing", "id": "medicine1"})) == (
         "thing",
         {"id": "medicine1"},
         None,
     )
-    with pytest.raises(s.SurfaceError, match="exactly one"):
-        s.normalize_object({"kind": "thing", "ids": ["medicine1", "medicine2"]})
+    with pytest.raises(SurfaceError, match="exactly one"):
+        normalize_object({"kind": "thing", "ids": ["medicine1", "medicine2"]})
     for selector in ({"definition": "MedicineIndustrial"}, {"category": "Item"}, {"name": "medicine"}):
-        with pytest.raises(s.SurfaceError):
-            s.normalize_object({"kind": "things", "ids": ["medicine1"], **selector})
+        with pytest.raises(SurfaceError):
+            normalize_object({"kind": "things", "ids": ["medicine1"], **selector})
 
 
 def test_category_enum_is_native_and_only_applies_to_physical_things():
     directory = {"value_domains": {"Verse.ThingCategory": {"values": ["Item", "Building", "Pawn"]}}}
     original = copy.deepcopy(directory)
-    schema = {"type": "object", "properties": {"object": s._object_schema(directory)}}
+    schema = {"type": "object", "properties": {"object": object_schema(directory)}}
     validate({"object": {"kind": "things", "category": "Item"}, "aspects": ["identity"]}, schema)
     with pytest.raises(ValidationError):
         validate({"object": {"kind": "things", "category": "Medicine"}, "aspects": ["identity"]}, schema)
@@ -50,7 +52,7 @@ def test_category_enum_is_native_and_only_applies_to_physical_things():
     validate({"object": {"kind": "thing_defs", "category": "Medicine"}, "aspects": ["identity"]}, schema)
     assert directory == original
     assert "things: ids, names" in schema["properties"]["object"]["description"]
-    assert "enum" not in s._object_schema()["properties"]["category"]
+    assert "enum" not in object_schema()["properties"]["category"]
 
 
 
@@ -69,15 +71,15 @@ def test_identity_positions_and_trait_description_are_capability_gated():
     }
     surface = Surface(directory)
     assert {"status.position.x", "status.position.z", "status.position.map_id"} <= set(
-        s._pawn_entries(surface, "identity", 0)[0]["fields"]
+        _pawn_entries(surface, "identity", 0)[0]["fields"]
     )
-    assert {"position.x", "position.z"} <= set(s._supported(surface, "thing", s.IDENTITY_FIELDS["thing"]))
-    assert "description" in s._pawn_entries(surface, "profile", 5)[-1]["fields"]
+    assert {"position.x", "position.z"} <= set(_supported(surface, "thing", IDENTITY_FIELDS["thing"]))
+    assert "description" in _pawn_entries(surface, "profile", 5)[-1]["fields"]
     directory["field_index"]["Status"] = {}
     directory["field_index"]["Trait"] = {}
     old = Surface(directory)
-    assert s._pawn_entries(old, "identity", 0)[0]["fields"] == ["id"]
-    assert "description" not in s._pawn_entries(old, "profile", 5)[-1]["fields"]
+    assert _pawn_entries(old, "identity", 0)[0]["fields"] == ["id"]
+    assert "description" not in _pawn_entries(old, "profile", 5)[-1]["fields"]
 
 
 def test_pawn_identity_carries_gender_when_the_schema_has_it():
@@ -89,6 +91,6 @@ def test_pawn_identity_carries_gender_when_the_schema_has_it():
             "Profile": {"gender": "String"},
         },
     }
-    assert "profile.gender" in s._pawn_entries(Surface(directory), "identity", 0)[0]["fields"]
+    assert "profile.gender" in _pawn_entries(Surface(directory), "identity", 0)[0]["fields"]
     directory["field_index"]["Profile"] = {}
-    assert "profile.gender" not in s._pawn_entries(Surface(directory), "identity", 0)[0]["fields"]
+    assert "profile.gender" not in _pawn_entries(Surface(directory), "identity", 0)[0]["fields"]

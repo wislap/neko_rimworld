@@ -25,8 +25,8 @@ from .count_tools import count_spec
 from .look_tools import look_spec, read_look
 from .native_state import NativeStateReader, state_contract
 from .query_readings import QueryReadings
+from .query_rendering import pack
 from .query_surface import Surface, SurfaceError
-from .semantic_surface import pack
 from .survey_tools import survey_spec
 from .world_order import order_world_fields
 

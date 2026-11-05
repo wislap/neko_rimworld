@@ -8,7 +8,7 @@ import pytest
 from plugin.plugins.neko_rimworld.agent.context.context_pruning import ContextPruner
 from plugin.plugins.neko_rimworld.agent.context.context_tools import model_tools
 from plugin.plugins.neko_rimworld.agent.world.look_tools import read_look
-from plugin.plugins.neko_rimworld.agent.world.semantic_surface import SurfaceError
+from plugin.plugins.neko_rimworld.agent.world.query_surface import SurfaceError
 from plugin.plugins.neko_rimworld.agent.world.semantic_tools import SemanticInteraction
 from plugin.plugins.neko_rimworld.tests.test_activity import NativeInteraction
 from plugin.plugins.neko_rimworld.tests.test_context_pruning import route
