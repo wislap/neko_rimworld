@@ -79,7 +79,6 @@ async def dispatch(session, model, config=None):
         reserve=0,
         research_deadline=900,
         cycle=1,
-        request_sha256="",
         logger=FakeLogger(),
     )
 

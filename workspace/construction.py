@@ -327,10 +327,10 @@ def prepare_intent(events, *, plan_id, element_ids, intent, reason, load_epoch=N
 
 
 def prepare_fact(events, *, plan_id, element_id, stage, object_id, observation_id, load_epoch,
-                 previous_object_id=None, origin="native", field_identity=None, field_identities=None, native_action_id=None):
+                 previous_object_id=None, field_identity=None, field_identities=None, native_action_id=None):
     current = _current(events, plan_id, load_epoch)
     elements = {row["id"]: row for row in current["elements"]}
-    if element_id not in elements or stage not in STAGES or origin != "native":
+    if element_id not in elements or stage not in STAGES:
         raise ValueError("Expected a current element and a supported native fact")
     is_area = element_id in {row["id"] for row in current["plan"].get("areas", [])}
     definition = _rows(current["plan"])[element_id]
@@ -374,7 +374,7 @@ def prepare_fact(events, *, plan_id, element_id, stage, object_id, observation_i
             raise ValueError("Native lifecycle cannot move backwards")
     return _event("construction.fact", "mod", plan_id=plan_id, revision=current["revision"], element_id=element_id,
                   stage=stage, object_id=object_id, observation_id=observation_id, load_epoch=load_epoch,
-                  previous_object_id=previous_object_id, origin=origin, field_identity=field_identity, field_identities=identities,
+                  previous_object_id=previous_object_id, origin="native", field_identity=field_identity, field_identities=identities,
                   native_action_id=native_action_id, evidence_kind="cells" if is_area or is_terrain and stage == "built" else "thing")
 
 

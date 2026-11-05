@@ -348,39 +348,6 @@ def compile_plan(plan, catalog):
     return result
 
 
-def apply_plan_patch(plan, patch, catalog):
-    """Modify selected expanded elements without regenerating removed room walls.
-
-    Moving/resizing a whole room is a new room-plan compilation. Local edits use
-    remove/upsert/areas, retaining unaffected IDs and the same room annotations.
-    """
-    compiled = compile_plan(plan, catalog)
-    if not isinstance(patch, Mapping) or set(patch) - {"remove", "upsert", "areas"}:
-        raise ConstructionPlanError("Patch accepts remove, upsert and areas")
-    remove = patch.get("remove", [])
-    upsert = patch.get("upsert", [])
-    if not isinstance(remove, list) or not isinstance(upsert, list):
-        raise ConstructionPlanError("Patch element identities must be unique lists")
-    remove = [_text(value, "remove.id") for value in remove]
-    if len(remove) != len(set(remove)):
-        raise ConstructionPlanError("Patch element identities must be unique lists")
-    elements = {item["id"]: item for item in compiled["elements"]}
-    for identifier in remove:
-        _text(identifier, "remove.id")
-        if identifier not in elements:
-            raise ConstructionPlanError("Cannot remove an element absent from this plan: " + identifier)
-        del elements[identifier]
-    ids = [_text(item.get("id"), "upsert.id") for item in upsert if isinstance(item, Mapping)]
-    if len(ids) != len(upsert) or len(ids) != len(set(ids)):
-        raise ConstructionPlanError("Patch upserts require unique element IDs")
-    for item in upsert:
-        elements[item["id"]] = item
-    compiled["elements"] = list(elements.values())
-    if "areas" in patch:
-        compiled["areas"] = patch["areas"]
-    return compile_plan(compiled, catalog)
-
-
 def observation_bounds(plan):
     """World scope including the exterior ring, bounded by native's 64-cell limit."""
     if not isinstance(plan, Mapping) or plan.get("format") != PLAN_FORMAT or plan.get("compiled") is not True:

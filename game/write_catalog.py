@@ -5,6 +5,8 @@ import hashlib
 import json
 import re
 
+from ..values import is_nonblank_text
+
 
 def catalog_digest(directory):
     body = {key: value for key, value in directory.items() if key != 'catalog_id'}
@@ -40,18 +42,14 @@ def _schema(schema):
     return True
 
 
-def _text(value):
-    return isinstance(value, str) and bool(value.strip())
-
-
 def _path(value):
-    return isinstance(value, list) and bool(value) and all(_text(v) for v in value)
+    return isinstance(value, list) and bool(value) and all(is_nonblank_text(v) for v in value)
 
 
 def _expression(value):
     if isinstance(value, dict):
         if set(value) == {'arg'}:
-            return _text(value['arg'])
+            return is_nonblank_text(value['arg'])
         if set(value) == {'value_path'}:
             return _path(value['value_path'])
         return all(isinstance(key, str) and _expression(item) for key, item in value.items())
@@ -117,7 +115,7 @@ def validate_write_catalog(directory):
                 required = extract.get('require')
                 available = extract.get('available')
                 if (not _path(extract.get('complete_path')) or extract.get('complete_value') is not True or
-                        not _text(extract.get('id_field')) or not _text(extract.get('expect_field')) or
+                        not is_nonblank_text(extract.get('id_field')) or not is_nonblank_text(extract.get('expect_field')) or
                         (required is not None and (not isinstance(required, list) or not required)) or
                         any(not isinstance(rule, dict) or not _path(rule.get('path')) or 'value' not in rule or
                             not _expression(rule['value'])
@@ -126,7 +124,7 @@ def validate_write_catalog(directory):
                         'expect_schema' not in item):
                     raise ValueError('Invalid ordered collection evidence descriptor.')
                 if available is not None and (not isinstance(available, dict) or not _path(available.get('path')) or
-                        not _text(available.get('key_field')) or not _text(available.get('value_field')) or
+                        not is_nonblank_text(available.get('key_field')) or not is_nonblank_text(available.get('value_field')) or
                         available.get('value') is not True or
                         not isinstance(available.get('key'), dict) or
                         set(available['key']) != {'value_path'} or not _path(available['key']['value_path'])):

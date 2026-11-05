@@ -4,7 +4,6 @@ import pytest
 
 from plugin.plugins.neko_rimworld.agent.world.construction_geometry import (
     ConstructionPlanError,
-    apply_plan_patch,
     compile_plan,
     inspect_layout,
     observation_bounds,
@@ -156,16 +155,6 @@ def test_layer_coexistence_and_full_footprint_collision(house, catalog):
     assert "footprint_overlap" in codes(inspect_layout(compile_plan(house, catalog)))
 
 
-def test_patch_does_not_regenerate_wall_and_preserves_unaffected_ids(house, catalog):
-    first = compile_plan(house, catalog)
-    changed = apply_plan_patch(first, {"remove": ["wall@0,2"]}, catalog)
-    assert "wall@0,2" not in {item["id"] for item in changed["elements"]}
-    assert len(changed["elements"]) == len(first["elements"]) - 1
-    assert "room_boundary_open" in codes(inspect_layout(changed))
-    with pytest.raises(ConstructionPlanError):
-        apply_plan_patch(first, {"remove": [{}]}, catalog)
-
-
 def test_blocked_native_interaction_and_door_are_found(house, catalog):
     house["elements"] = [
         {"id": "work", "definition": "Bench", "position": {"x": 3, "z": 3}},
@@ -212,17 +201,6 @@ def test_room_overlap_is_reported(house, catalog):
 
 
 def test_impassable_roof_holder_does_not_enclose_room(house, catalog):
-    compiled = compile_plan(house, catalog)
-    changed = apply_plan_patch(
-        compiled,
-        {
-            "upsert": [
-                {"id": "wall@0,2", "definition": "SyntheticRoofHolder", "position": {"x": 0, "z": 2}, "role": "wall"}
-            ]
-        },
-        catalog,
-    )
-    assert "room_boundary_open" in codes(inspect_layout(changed))
     house["rooms"][0]["wall"]["definition"] = "SyntheticRoofHolder"
     assert "room_boundary_open" in codes(inspect_layout(compile_plan(house, catalog)))
 

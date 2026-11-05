@@ -40,7 +40,7 @@ async def test_scope_change_after_reservation_before_dispatch_settles_not_dispat
     session.binding_check = lambda: active["valid"]
     settings = build_agent_model_settings(base_url="http://localhost:11434/v1", model="test")
     task = asyncio.create_task(request_model(model, settings, ledger, session, session.messages, [],
-        finalizing=True, reserve=0, research_deadline=900, cycle=1, request_sha256="", logger=FakeLogger()))
+        finalizing=True, reserve=0, research_deadline=900, cycle=1, logger=FakeLogger()))
     await entered.wait()
     active["valid"] = False
     proceed.set()
@@ -72,7 +72,7 @@ async def test_unexpected_request_failure_preserves_dispatch_accounting(failure_
     settings = build_agent_model_settings(base_url='http://localhost:11434/v1', model='test')
     with pytest.raises(RuntimeError):
         await request_model(Model(), settings, ledger, session, session.messages, [], finalizing=True,
-                            reserve=0, research_deadline=900, cycle=1, request_sha256='', logger=FakeLogger())
+                            reserve=0, research_deadline=900, cycle=1, logger=FakeLogger())
     if failure_point == 'scope':
         assert budget.receipts[0][2]['outcome'] == 'not_dispatched'
     else:
@@ -101,7 +101,7 @@ async def test_scope_failure_settlement_survives_cancellation():
     session.budget, session.budget_scope = Budget(), ('c', 'e', 1)
     settings = build_agent_model_settings(base_url='http://localhost:11434/v1', model='test')
     task = asyncio.create_task(request_model(Model(), settings, ledger, session, session.messages, [],
-        finalizing=True, reserve=0, research_deadline=900, cycle=1, request_sha256='', logger=FakeLogger()))
+        finalizing=True, reserve=0, research_deadline=900, cycle=1, logger=FakeLogger()))
     await entered.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError): await task
@@ -142,7 +142,7 @@ async def test_pending_scope_cannot_dispatch_after_other_settlement_blocks_budge
     session.budget, session.budget_scope = budget, ('c', 'e', 1)
     settings = build_agent_model_settings(base_url='http://localhost:11434/v1', model='test')
     task = asyncio.create_task(request_model(model, settings, ledger, session, session.messages, [],
-        finalizing=True, reserve=0, research_deadline=900, cycle=1, request_sha256='', logger=FakeLogger()))
+        finalizing=True, reserve=0, research_deadline=900, cycle=1, logger=FakeLogger()))
     await entered.wait()
     class OtherModel:
         async def complete(self, *args, **kwargs):
@@ -152,7 +152,7 @@ async def test_pending_scope_cannot_dispatch_after_other_settlement_blocks_budge
     other_session.budget, other_session.budget_scope, other_session.role = budget, ('c', 'e', 1), 'other'
     with pytest.raises(OSError):
         await request_model(OtherModel(), settings, other_ledger, other_session, other_session.messages, [],
-                            finalizing=True, reserve=0, research_deadline=900, cycle=1, request_sha256='', logger=FakeLogger())
+                            finalizing=True, reserve=0, research_deadline=900, cycle=1, logger=FakeLogger())
     proceed.set()
     result = await task
     assert result.error.code == 'agent_cumulative_budget'
@@ -185,7 +185,7 @@ async def test_rejected_admission_scope_exit_failure_does_not_settle_twice():
     settings = build_agent_model_settings(base_url='http://localhost:11434/v1', model='test')
     with pytest.raises(RuntimeError, match='scope exit failed'):
         await request_model(Model(), settings, ledger, session, session.messages, [], finalizing=True,
-                            reserve=0, research_deadline=900, cycle=1, request_sha256='', logger=FakeLogger())
+                            reserve=0, research_deadline=900, cycle=1, logger=FakeLogger())
     assert budget.settlements == 1
 
 @pytest.mark.asyncio
@@ -206,7 +206,7 @@ async def test_admission_failure_does_not_repeat_its_pending_settlement():
     settings = build_agent_model_settings(base_url='http://localhost:11434/v1', model='test')
     with pytest.raises(OSError, match='settlement failed'):
         await request_model(SimpleNamespace(), settings, ledger, session, session.messages, [], finalizing=True,
-                            reserve=0, research_deadline=900, cycle=1, request_sha256='', logger=FakeLogger())
+                            reserve=0, research_deadline=900, cycle=1, logger=FakeLogger())
     assert budget.settlements == 1
 
 @pytest.mark.asyncio
@@ -226,7 +226,7 @@ async def test_unbudgeted_scope_exit_retains_received_response(exit_kind):
     settings = build_agent_model_settings(base_url='http://localhost:11434/v1', model='test')
     with pytest.raises(asyncio.CancelledError if exit_kind == 'cancel' else RuntimeError):
         await request_model(Model(), settings, ledger, session, session.messages, [], finalizing=True,
-                            reserve=0, research_deadline=900, cycle=1, request_sha256='', logger=FakeLogger())
+                            reserve=0, research_deadline=900, cycle=1, logger=FakeLogger())
     assert session.received_model_turn.content == 'retained answer'
     assert session.model_receipt_unconfirmed is True
     from ..agent.runtime.loop import AgentRuntime
@@ -244,6 +244,6 @@ async def test_unbudgeted_success_clears_temporary_response_marker():
     session = AgentRunSession.create(ledger=ledger, question='q')
     settings = build_agent_model_settings(base_url='http://localhost:11434/v1', model='test')
     result = await request_model(Model(), settings, ledger, session, session.messages, [], finalizing=True,
-                                 reserve=0, research_deadline=900, cycle=1, request_sha256='', logger=FakeLogger())
+                                 reserve=0, research_deadline=900, cycle=1, logger=FakeLogger())
     assert result.turn.content == 'success'
     assert session.model_receipt_unconfirmed is False

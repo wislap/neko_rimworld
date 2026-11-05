@@ -77,7 +77,6 @@ async def request_model(
     reserve,
     research_deadline,
     cycle,
-    request_sha256,
     logger,
     max_attempts=MAX_MODEL_ATTEMPTS,
 ):
