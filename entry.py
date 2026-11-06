@@ -69,6 +69,7 @@ PLUGIN_VERSION = "3.4.0"
 # The transport must allow that operation to return its partial result.
 FRAME_READ_OPERATIONS = frozenset({
     "survey_space", "inspect_route", "inspect_state", "inspect_actions", "inspect_threats", "read_situation",
+    "read_colony_vitals",
     "inspect_planet", "inspect_factions", "inspect_quests", "inspect_trade", "inspect_research",
     "evaluate_journey", "evaluate_trade",
 })
