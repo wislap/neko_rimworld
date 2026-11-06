@@ -323,6 +323,13 @@ def project(events, *, epoch, now_tick, policy):
             deferred_signals[:] = [signal for signal in deferred_signals if signal not in received]
         elif kind == "planner.received":
             active_work_ids.extend(data.get("work_ids", []))
+            # A focus review delivered into a running planner is consumed like
+            # a started one, so it neither reruns nor blocks the next focus.
+            consumed.update(data.get("work_ids", []))
+            if pending_focus in consumed:
+                day = (tick - activation["game_tick"]) // ticks["day"]
+                focus_started[day] = focus_started.get(day, 0) + 1
+                pending_focus = None
             active_signal_seqs.extend(seq for seq in data.get("signal_seqs", []) if seq in pending_signals)
             received = set(data.get("signal_seqs", []))
             pending_signals[:] = [signal for signal in pending_signals if signal not in received]

@@ -167,6 +167,25 @@ def test_focus_daily_limit_counts_started_runs_and_retains_excess():
     assert len([x for x in state["items"] if x["payload"]["id"].startswith("focus:")]) == 4
 
 
+def test_low_food_focus_received_by_running_planner_is_consumed_once():
+    policy, _ = load_policy()
+    low_food = {"category": "alert", "edge": "appeared", "priority": "High", "runtime_type": "RimWorld.Alert_LowFood"}
+    assert classify(policy, {**low_food, "source_id": "x"})["level"] == "focus"
+    events = [event(1, 0, "autoplay.activation"), event(2, 100, "planner.started", {"work_ids": [], "signal_seqs": []}),
+              event(3, 1000, "attention.signal", {**low_food, "source_id": "food"})]
+    state = project(events, epoch="e", now_tick=3500, policy=policy)
+    assert state["pending_focus"] == "focus:3"
+    events.append(event(4, 3600, "planner.received", {"work_ids": ["focus:3"], "signal_seqs": [3]}))
+    state = project(events, epoch="e", now_tick=3600, policy=policy)
+    assert state["pending_focus"] is None
+    events.append(event(5, 3700, "planner.finished"))
+    assert project(events, epoch="e", now_tick=3700, policy=policy)["pending_focus"] is None
+    starvation = {"category": "alert", "edge": "appeared", "priority": "High",
+                  "runtime_type": "RimWorld.Alert_StarvationColonists", "source_id": "starve"}
+    events.append(event(6, 4000, "attention.signal", starvation))
+    assert project(events, epoch="e", now_tick=6500, policy=policy)["pending_focus"] == "focus:6"
+
+
 def test_disable_and_load_emit_lease_expiry_once():
     policy, _ = load_policy()
     events = [event(1, 0, "autoplay.activation")]

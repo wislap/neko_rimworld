@@ -137,6 +137,55 @@ async def test_busy_planner_delivers_interrupt_without_losing_earlier_daily(tmp_
         await service.close()
 
 
+@pytest.mark.asyncio
+async def test_busy_planner_receives_focus_review_and_consumes_it(tmp_path):
+    from ..agent.runtime.audit import AgentAuditRegistry
+    from ..agent.runtime.loop import AgentRuntime
+    from .consultation_setup import semantic_tool_provider
+    from .test_agent import FakeLogger, settings
+    from .test_capability_composition import Script, call
+
+    game = SimpleNamespace(colony_id="c", load_epoch="e", game_tick=0)
+    entered, release = asyncio.Event(), asyncio.Event()
+    class Model(Script):
+        async def complete(self, messages, tools, *, timeout):
+            if not self.requests:
+                entered.set()
+                await release.wait()
+            return await super().complete(messages, tools, timeout=timeout)
+    model = Model([call("planner_board", {"action": "read"}),
+                   call("planner_yield", {"handoff": "continue"}),
+                   call("planner_yield", {"handoff": "done"})])
+    runtime = AgentRuntime(audit_registry=AgentAuditRegistry(), logger=FakeLogger(),
+                           model_factory=lambda _: model, tools_provider=semantic_tool_provider())
+    service = FrontdeskService(tmp_path / "events.sqlite", runtime, game_session=lambda: game)
+    await service.call("record_autoplay_activation", "c", "e", 0, CHOICES)
+    scheduler = ColonyScheduler(service, settings())
+    scheduler.start()
+    try:
+        scheduler.resume(game)
+        await asyncio.wait_for(entered.wait(), 5)
+        game.game_tick = 1000
+        await service.call("ingest_game_event", "c", "e", 1000, "conn", native(1, 1000, "letter", {"def": "NegativeEvent"}))
+        game.game_tick = 3500
+        await service.call("ingest_game_event", "c", "e", 3500, "conn", native(2, 3500, "heartbeat", {}))
+        release.set()
+        for _ in range(500):
+            events = await service.call("events", "c")
+            if any(e["kind"] == "planner.finished" for e in events):
+                break
+            await asyncio.sleep(.01)
+        focus = next(e for e in events if e["kind"] == "planner.wake"
+                     and str(e["payload"].get("work_id", "")).startswith("focus:"))
+        received = [e for e in events if e["kind"] == "planner.received"]
+        assert received and focus["seq"] in received[0]["payload"]["wake_seqs"], scheduler.error
+        assert (await service.call("attention_state", "c", "e", 3500))["pending_focus"] is None
+    finally:
+        release.set()
+        await scheduler.close()
+        await service.close()
+
+
 def test_capability_gate_and_failed_normalization_roll_back(tmp_path):
     journal = Journal(tmp_path / "events.sqlite")
     journal.record_autoplay_activation("c", "e", 0, CHOICES)

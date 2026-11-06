@@ -6,7 +6,8 @@
     "RimWorld.Alert_StarvationColonists": "GetReport checks food.Starving; defaultPriority High",
     "RimWorld.Alert_Heatstroke": "GetReport checks visible heatstroke; defaultPriority High",
     "RimWorld.Alert_ToxicBuildup": "GetReport: free colonist ToxicBuildup severity >= 0.6; High; Biotech",
-    "RimWorld.Alert_Exhaustion": "GetReport: free colonist RestCategory.Exhausted; High"
+    "RimWorld.Alert_Exhaustion": "GetReport: free colonist RestCategory.Exhausted; High",
+    "RimWorld.Alert_LowFood": "Observed native priority High (v34-whole-acceptance-20261105-v1 seq 963); unanswered before starvation"
   },
   "interrupt_letters": {
     "ThreatBig": "Core/Defs/Misc/LetterDefs/StandardLetters.xml",
