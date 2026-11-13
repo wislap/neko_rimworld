@@ -1,9 +1,9 @@
-# N.E.K.O RimWorld v3.3 runtime architecture
+# N.E.K.O RimWorld runtime architecture
 
 The host sees `rimworld_consult(question)`. The plugin owns an independent,
 read-only consultation with the configured model. Explicit autoplay adds guarded native configuration writes.
-Product metadata uses `3.3.0`; this describes the current source implementation,
-not a published/deployed release or a content-quality certification. Protocol
+Current Mod and plugin source metadata uses `3.4.0`. Package publication,
+deployment and content-quality evaluation are tracked independently. Protocol
 versions and SDK support ranges retain their independent contracts.
 The native query contract is in [DATA_PATH.md](DATA_PATH.md).
 

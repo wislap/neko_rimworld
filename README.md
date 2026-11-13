@@ -1,4 +1,4 @@
-# N.E.K.O RimWorld v3.3
+# N.E.K.O RimWorld v3.4
 
 Read-only consultation and explicitly enabled colony configuration management through the local RimWorld Mod and an independent model.
 
@@ -22,11 +22,11 @@ English as the fallback. These local changes are not a published release.
 
 The working source adds persistent construction plans, resource allocations,
 shared food-policy impact records and bounded observation coverage to the existing
-consultation/autoplay path. This section describes the implementation in this
-checkout. It does not announce a published v3.4 package, change the version
-metadata or claim a completed live-game/provider run for these additions. Use a
-matching rebuilt Mod and plugin; updating plugin source alone does not replace
-the game DLL. The installation links below still identify their named releases.
+consultation/autoplay path. This section describes the 3.4.0 source. The local
+candidate has native and text-provider evidence for housing and production. The
+seven-day acceptance run completed construction and failed to sustain food supply.
+A matching rebuilt Mod and plugin are required to run this source. The installation
+links below identify the available releases.
 
 Start in the existing character conversation. For example, ask to inspect a site
 and propose a small house with a bedroom, dining space and a clear entrance, or
@@ -99,8 +99,7 @@ not establish those gameplay outcomes.
 
 ## v3.3 source and release background
 
-The source version is `3.3.0` (displayed as **v3.3**), aligned with the Mod and
-bench. It includes the selected situation background, world/faction/quest/trade/
+The v3.3 baseline includes the selected situation background, world/faction/quest/trade/
 research consultation, exact definition reads, resource-source separation and
 loaded-journey comparisons. Package publication and deployment are separate from this source version. Download a matching Mod/plugin pair from the release pages only when the named assets are available. Protocol versions and
 SDK support ranges are independent.
