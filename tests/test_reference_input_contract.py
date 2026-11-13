@@ -4,6 +4,7 @@ import copy
 
 import pytest
 from jsonschema import ValidationError, validate
+
 from plugin.plugins.neko_rimworld.agent.world.query_catalog import IDENTITY_FIELDS, object_schema
 from plugin.plugins.neko_rimworld.agent.world.query_planner import _pawn_entries, _supported, route_object
 from plugin.plugins.neko_rimworld.agent.world.query_surface import Surface, SurfaceError

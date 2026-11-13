@@ -62,7 +62,8 @@ async def test_unexpected_request_failure_preserves_dispatch_accounting(failure_
     class Model:
         @asynccontextmanager
         async def request_scope(self):
-            if failure_point == 'scope': raise RuntimeError('scope failed')
+            if failure_point == 'scope':
+                raise RuntimeError('scope failed')
             yield
         async def complete(self, *args, **kwargs): raise RuntimeError('transport unknown')
     budget = Budget()
@@ -104,15 +105,16 @@ async def test_scope_failure_settlement_survives_cancellation():
         finalizing=True, reserve=0, research_deadline=900, cycle=1, logger=FakeLogger()))
     await entered.wait()
     task.cancel()
-    with pytest.raises(asyncio.CancelledError): await task
+    with pytest.raises(asyncio.CancelledError):
+        await task
     release.set()
     await asyncio.wait_for(finished.wait(), 1)
 
 @pytest.mark.asyncio
 async def test_pending_scope_cannot_dispatch_after_other_settlement_blocks_budget(tmp_path):
+    from ..message_contracts import AssistantTurn
     from ..workspace.budget import BudgetSettings, ColonyBudget
     from ..workspace.journal import Journal
-    from ..message_contracts import AssistantTurn
     class Service:
         def __init__(self):
             self.journal = Journal(tmp_path / 'events.sqlite')
@@ -175,8 +177,10 @@ async def test_rejected_admission_scope_exit_failure_does_not_settle_twice():
     class Model:
         @asynccontextmanager
         async def request_scope(self):
-            try: yield
-            finally: raise RuntimeError('scope exit failed')
+            try:
+                yield
+            finally:
+                raise RuntimeError('scope exit failed')
         async def complete(self, *args, **kwargs): raise AssertionError('must not dispatch')
     budget = Budget()
     ledger = AgentAuditLedger('q')
@@ -217,7 +221,8 @@ async def test_unbudgeted_scope_exit_retains_received_response(exit_kind):
         @asynccontextmanager
         async def request_scope(self):
             yield
-            if exit_kind == 'cancel': raise asyncio.CancelledError()
+            if exit_kind == 'cancel':
+                raise asyncio.CancelledError()
             raise RuntimeError('scope exit failed')
         async def complete(self, *args, **kwargs):
             return AssistantTurn('provider-id', 'test', 'stop', 'retained answer', usage={'prompt_tokens': 7, 'completion_tokens': 3})

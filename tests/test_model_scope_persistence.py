@@ -5,9 +5,9 @@ from types import SimpleNamespace
 import pytest
 
 from ..agent.runtime.audit import AgentAuditLedger, AgentAuditRegistry
+from ..agent.runtime.frontdesk_service import FrontdeskService
 from ..agent.runtime.loop import AgentRuntime
 from ..message_contracts import AssistantTurn, ToolCall
-from ..agent.runtime.frontdesk_service import FrontdeskService
 from .consultation_setup import semantic_tool_provider
 from .test_agent import FakeLogger, settings
 

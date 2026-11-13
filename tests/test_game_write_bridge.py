@@ -314,7 +314,7 @@ def test_write_response_mode_correlation(mode, response_kind):
 @pytest.mark.parametrize("mode", ["commit", "undo"])
 @pytest.mark.parametrize("matching_epoch", [True, False])
 def test_write_success_data_epoch_matches_session(mode, matching_epoch):
-    from plugin.plugins.neko_rimworld.game.bridge import BridgeProtocolError, BridgeWriteUnconfirmed
+    from plugin.plugins.neko_rimworld.game.bridge import BridgeWriteUnconfirmed
 
     session = SessionDescriptor("2" * 32, "3" * 32, 1, 0)
     changeset = {
@@ -363,6 +363,7 @@ def test_write_success_data_epoch_matches_session(mode, matching_epoch):
 async def test_dispatched_write_loss_is_unknown_through_real_bridge_service(mode, failure):
     import asyncio
     import copy
+
     from ..agent.write.service import WriteService
     from ..game.write_port import BridgeGameWritePort
     from ..tool_contracts import ToolExecutionError

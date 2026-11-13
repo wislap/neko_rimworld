@@ -4,10 +4,10 @@ import json
 import pytest
 
 from plugin.plugins.neko_rimworld.agent.world.construction_geometry import compile_plan, inspect_layout
-from plugin.plugins.neko_rimworld.serialization import identity_digest
-from plugin.plugins.neko_rimworld.game.spatial_observation import SpatialObservationError, observation_cells
 from plugin.plugins.neko_rimworld.agent.world.spatial_rendering import build_render_spec, render_scene_svg
 from plugin.plugins.neko_rimworld.game import protocol as wire
+from plugin.plugins.neko_rimworld.game.spatial_observation import SpatialObservationError, observation_cells
+from plugin.plugins.neko_rimworld.serialization import identity_digest
 from plugin.plugins.neko_rimworld.workspace import construction
 from plugin.plugins.neko_rimworld.workspace.area_evidence import facts as area_facts
 

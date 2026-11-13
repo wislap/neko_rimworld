@@ -6,12 +6,14 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import pytest
-from plugin.plugins.neko_rimworld.agent.delivery.handoff import count_handoff_tokens, validate_submission
 from utils.result_parser import parse_plugin_result
+
+from plugin.plugins.neko_rimworld.agent.delivery.handoff import count_handoff_tokens, validate_submission
 
 
 def test_text_budget_fits_the_real_host_parser_without_truncation():
     from config import TASK_DETAIL_MAX_TOKENS
+
     from plugin.plugins.neko_rimworld.agent.delivery.handoff import HANDOFF_TOKEN_BUDGET
 
     assert HANDOFF_TOKEN_BUDGET <= TASK_DETAIL_MAX_TOKENS

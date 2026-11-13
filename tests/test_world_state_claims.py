@@ -1,6 +1,7 @@
 import copy
 
 import pytest
+
 from plugin.plugins.neko_rimworld.agent.delivery.claims import check_claims
 
 from .test_claim_refresh import TEXT, capacities, receipts, result

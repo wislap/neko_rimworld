@@ -7,8 +7,8 @@ import pytest
 from ..agent.runtime.audit import AgentAuditRegistry
 from ..agent.runtime.colony_scheduler import ColonyScheduler
 from ..agent.runtime.frontdesk_dispatch import frontdesk_colony
-from ..agent.runtime.loop import AgentRuntime
 from ..agent.runtime.frontdesk_service import FrontdeskService
+from ..agent.runtime.loop import AgentRuntime
 from .consultation_setup import semantic_tool_provider
 from .test_agent import FakeLogger, settings, turn
 from .test_capability_composition import Script, call

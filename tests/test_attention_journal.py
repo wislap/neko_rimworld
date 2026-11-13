@@ -6,10 +6,10 @@ from types import SimpleNamespace
 import pytest
 
 from ..agent.runtime.colony_scheduler import ColonyScheduler
+from ..agent.runtime.frontdesk_service import FrontdeskService
 from ..agent.runtime.scheduler_tools import attention_tools
 from ..tool_contracts import ToolExecutionError
 from ..workspace.journal import Journal
-from ..agent.runtime.frontdesk_service import FrontdeskService
 
 CHOICES = {"goal": "survive", "constraints": "none", "goal_edited": False, "constraints_edited": False}
 

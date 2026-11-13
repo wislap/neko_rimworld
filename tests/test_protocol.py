@@ -6,6 +6,7 @@ import struct
 import time
 
 import pytest
+
 from plugin.plugins.neko_rimworld.game import protocol as wire
 
 TOKEN = "0123456789abcdef0123456789abcdef"

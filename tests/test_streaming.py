@@ -6,6 +6,7 @@ from dataclasses import replace
 
 import httpx
 import pytest
+
 from plugin.plugins.neko_rimworld.agent.model.model_client import (
     AgentModelSettings,
     ModelClientError,

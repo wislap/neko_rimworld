@@ -3,6 +3,7 @@
 import copy
 
 import pytest
+
 from plugin.plugins.neko_rimworld.agent.world.look_tools import look_spec
 from plugin.plugins.neko_rimworld.agent.world.query_planner import route_object
 from plugin.plugins.neko_rimworld.agent.world.query_rendering import pack, render_blocked
@@ -69,6 +70,7 @@ def test_pawn_map_and_single_id_route_without_dropping_scope():
 @pytest.mark.asyncio
 async def test_look_reader_rejects_wrong_kind_aspect_before_guessing():
     from jsonschema import validate
+
     from plugin.plugins.neko_rimworld.agent.world.look_tools import read_look
     from plugin.plugins.neko_rimworld.agent.world.query_surface import SurfaceError
 

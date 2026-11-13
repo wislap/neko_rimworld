@@ -110,13 +110,15 @@ async def test_pause_result_recording_failure_preserves_known_receipt(monkeypatc
         capabilities = {'colony_pause.v1'}
         async def set_paused(self, *args, **kwargs): return {'paused': True}
     async def persist(payload):
-        if 'pause_result' in payload: raise OSError('record failure')
+        if 'pause_result' in payload:
+            raise OSError('record failure')
     monkeypatch.setattr(environment, 'semantic_interaction_factory', lambda *args: object())
     session = AgentRunSession.create(ledger=AgentAuditLedger('q'), question='q')
     session.role, session.explicit_scheduler = 'frontdesk', True
     session.persist_progress = persist
     tool = environment.ExecutionEnvironment(ToolSetup((), write_port=Port()), session, None).write_tools[0]
-    with pytest.raises(OSError): await tool.handler({'paused': True})
+    with pytest.raises(OSError):
+        await tool.handler({'paused': True})
     result = AgentRuntime._attach_handoff({'status': 'degraded'}, session)
     assert result['write_recording'] == {'stage': 'result', 'mode': 'set_paused', 'outcome': 'known', 'needs_reconciliation': True}
     assert result['write_outcomes'][-1]['receipt'] == {'paused': True}
@@ -137,13 +139,15 @@ async def test_pause_transport_preserves_dispatch_boundary(monkeypatch, failure_
     session.persist_progress = persist
     tool = environment.ExecutionEnvironment(ToolSetup((), write_port=Port()), session, None).write_tools[0]
     if failure_kind == 'not_dispatched':
-        with pytest.raises(ToolExecutionError) as error: await tool.handler({'paused': True})
+        with pytest.raises(ToolExecutionError) as error:
+            await tool.handler({'paused': True})
         assert error.value.code == 'write_not_dispatched'
         assert error.value.details['outcome'] == 'not_sent'
         assert session.write_record_issue is None
         assert session.write_outcomes[-1]['outcome'] == 'not_sent'
     else:
-        with pytest.raises(BridgeQueryTimeout): await tool.handler({'paused': True})
+        with pytest.raises(BridgeQueryTimeout):
+            await tool.handler({'paused': True})
         assert session.write_record_issue == 'unknown'
         assert session.write_record_context['outcome'] == 'unknown'
     assert records == [{'pause_request': {'paused': True, 'role': 'frontdesk'}}]

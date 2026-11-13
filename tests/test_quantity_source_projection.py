@@ -4,6 +4,7 @@ import copy
 import json
 
 import pytest
+
 from plugin.plugins.neko_rimworld.agent.context.model_context import make_pruner
 from plugin.plugins.neko_rimworld.agent.world.query_planner import plan_count, plan_forbidden_count
 from plugin.plugins.neko_rimworld.agent.world.query_rendering import render

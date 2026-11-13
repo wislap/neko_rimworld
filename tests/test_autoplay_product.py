@@ -195,8 +195,8 @@ async def test_budget_save_preserves_existing_values():
 async def test_activation_wakes_planner_and_real_strategy_is_written(tmp_path):
     from ..agent.runtime.audit import AgentAuditRegistry
     from ..agent.runtime.colony_scheduler import ColonyScheduler
-    from ..agent.runtime.loop import AgentRuntime
     from ..agent.runtime.frontdesk_service import FrontdeskService
+    from ..agent.runtime.loop import AgentRuntime
     from .consultation_setup import semantic_tool_provider
     from .test_agent import FakeLogger, settings
     from .test_capability_composition import Script, call
@@ -445,8 +445,8 @@ async def test_readonly_view_restores_latest_choices_across_epoch(tmp_path):
 async def test_inbox_host_retry_rejects_reconnected_scope_without_new_dispatch(tmp_path):
     from ..agent.runtime.audit import AgentAuditRegistry
     from ..agent.runtime.colony_scheduler import ColonyScheduler
-    from ..agent.runtime.loop import AgentRuntime
     from ..agent.runtime.frontdesk_service import FrontdeskService
+    from ..agent.runtime.loop import AgentRuntime
     from .consultation_setup import semantic_tool_provider
     from .test_agent import FakeLogger, settings
     from .test_capability_composition import Script, call
@@ -518,8 +518,8 @@ async def test_inbox_host_retry_rejects_reconnected_scope_without_new_dispatch(t
 async def test_readonly_retry_rejects_completed_autoplay_run_without_new_model(tmp_path, inbox):
     from ..agent.runtime.audit import AgentAuditRegistry
     from ..agent.runtime.colony_scheduler import ColonyScheduler
-    from ..agent.runtime.loop import AgentRuntime
     from ..agent.runtime.frontdesk_service import FrontdeskService
+    from ..agent.runtime.loop import AgentRuntime
     from .consultation_setup import semantic_tool_provider
     from .test_agent import FakeLogger, settings
     from .test_capability_composition import Script, call

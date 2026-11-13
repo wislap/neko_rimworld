@@ -7,10 +7,10 @@ import pytest
 
 from ..agent.runtime.audit import AgentAuditLedger
 from ..agent.runtime.colony_work import work_tools
+from ..agent.runtime.frontdesk_service import FrontdeskService
 from ..agent.runtime.session import AgentRunSession
 from ..tool_contracts import ToolExecutionError, ToolSetup
 from ..workspace.journal import Journal
-from ..agent.runtime.frontdesk_service import FrontdeskService
 from .test_colony_work_integration import adopt, native_intent, observation
 
 

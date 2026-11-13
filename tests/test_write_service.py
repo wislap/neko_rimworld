@@ -469,6 +469,7 @@ async def test_native_retry_audits_distinct_request_ids_and_same_key():
 
 async def test_native_undo_timeout_is_unknown_nonrecoverable_and_not_retried():
     import json
+
     from ..agent.runtime.tools import ToolRegistry
     from ..game.bridge import BridgeQueryTimeout
     from ..game.protocol import SessionDescriptor
@@ -515,7 +516,8 @@ async def test_undo_timeout_audit_failure_retains_unknown_scope_and_token():
             kwargs["audit_dispatch"]("b" * 32, 3, kwargs["cancel_event"])
             raise BridgeQueryTimeout("lost")
     async def record(event):
-        if event["stage"] == "result": raise OSError("journal unavailable")
+        if event["stage"] == "result":
+            raise OSError("journal unavailable")
     port = BridgeGameWritePort(Bridge(), IDENTITY[0], SessionDescriptor(IDENTITY[1], IDENTITY[2], 1, 1))
     service = WriteService(catalog(), [], port, lambda: IDENTITY, record=record)
     with pytest.raises(ToolExecutionError) as error:
@@ -535,7 +537,8 @@ async def test_scope_change_while_recording_retry_keeps_unknown():
             raise ReceiptLost(data['idempotency_key'])
     port = LostPort()
     async def record(event):
-        if event['stage'] == 'retry': identity[0] = 'new-connection'
+        if event['stage'] == 'retry':
+            identity[0] = 'new-connection'
     service = WriteService(catalog(), [observation()], port, lambda: identity, record=record)
     with pytest.raises(ToolExecutionError) as error:
         await service.commit({'entry_id': 'task', 'ops': [op()]})
@@ -560,7 +563,8 @@ async def test_queued_audit_scope_change_is_not_dispatched():
     events = []
     async def record(event):
         events.append(copy.deepcopy(event))
-        if event['stage'] == 'queued': identity[0] = 'new-connection'
+        if event['stage'] == 'queued':
+            identity[0] = 'new-connection'
     port = BridgeGameWritePort(bridge, IDENTITY[0], SessionDescriptor(IDENTITY[1], IDENTITY[2], 1, 1))
     service = WriteService(catalog(), [observation()], port, lambda: identity, record=record)
     with pytest.raises(ToolExecutionError) as error:
@@ -580,7 +584,8 @@ async def test_known_retry_receipt_is_not_misclassified_when_audit_fails():
                 raise ReceiptLost(data['idempotency_key'])
             return {'status': 'committed', 'undo_token': 'known'}
     async def record(event):
-        if event['stage'] == 'result': raise OSError('journal unavailable')
+        if event['stage'] == 'result':
+            raise OSError('journal unavailable')
     port = PortAfterLost()
     service = WriteService(catalog(), [observation()], port, lambda: IDENTITY, record=record)
     with pytest.raises(ToolExecutionError) as error:
@@ -604,7 +609,8 @@ async def test_first_native_lost_receipt_audit_failure_stays_unknown():
             raise BridgeQueryTimeout('lost')
     bridge = Bridge()
     async def record(event):
-        if event['stage'] == 'result': raise OSError('audit unavailable')
+        if event['stage'] == 'result':
+            raise OSError('audit unavailable')
     port = BridgeGameWritePort(bridge, IDENTITY[0], SessionDescriptor(IDENTITY[1], IDENTITY[2], 1, 1))
     service = WriteService(catalog(), [observation()], port, lambda: IDENTITY, record=record)
     with pytest.raises(ToolExecutionError) as error:
@@ -628,7 +634,8 @@ async def test_queued_audit_failure_reports_not_sent_using_real_bridge_port():
             self.sent += 1
             raise AssertionError('must not send')
     async def record(event):
-        if event['stage'] == 'queued': raise OSError('audit unavailable')
+        if event['stage'] == 'queued':
+            raise OSError('audit unavailable')
     bridge = Bridge()
     port = BridgeGameWritePort(bridge, IDENTITY[0], SessionDescriptor(IDENTITY[1], IDENTITY[2], 1, 1))
     service = WriteService(catalog(), [observation()], port, lambda: IDENTITY, record=record)

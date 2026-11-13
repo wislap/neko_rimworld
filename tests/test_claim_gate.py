@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pytest
+
 from plugin.plugins.neko_rimworld.agent.delivery.handoff import (
     SubmissionDraft,
     SubmissionPatchError,

@@ -598,9 +598,11 @@ async def test_colony_text_schema_rejects_same_values_as_handler(obj, focus):
     aspects = {"research": ["progress"], "storage": ["priority"], "traders": ["identity"],
                "world_objects": ["identity"], "resources": ["quantity"]}[obj["kind"]]
     args = {"object": obj, "aspects": aspects}
-    if focus is not None: args["focus"] = focus
+    if focus is not None:
+        args["focus"] = focus
     assert not Draft202012Validator(schema).is_valid(args)
-    with pytest.raises(ToolExecutionError): await tool.handler(args)
+    with pytest.raises(ToolExecutionError):
+        await tool.handler(args)
     assert calls == []
 
 
@@ -615,7 +617,8 @@ async def test_basket_item_schema_preserves_internal_spaces_and_no_length_cap():
     base = {"trader": {"id": "trader"}, "negotiator": {"id": "pawn"}}
     blank = {**base, "buy": [{"item": "   ", "quantity": 1}]}
     assert not Draft202012Validator(schema).is_valid(blank)
-    with pytest.raises(ToolExecutionError): await tool.handler(blank)
+    with pytest.raises(ToolExecutionError):
+        await tool.handler(blank)
     for name in ("Simple meal", "x" * 257):
         args = {**base, "buy": [{"item": name, "quantity": 1}]}
         assert Draft202012Validator(schema).is_valid(args)

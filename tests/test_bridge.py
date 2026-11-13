@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 import pytest
+
 from plugin.plugins.neko_rimworld.game.bridge import (
     BridgeQueryTimeout,
     BridgeServer,

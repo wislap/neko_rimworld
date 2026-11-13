@@ -133,8 +133,8 @@ async def test_unknown_write_cancels_other_role_not_failure_handler():
 async def test_unknown_write_halt_stops_new_connection_model_before_tool(tmp_path):
     from ..agent.runtime.audit import AgentAuditRegistry
     from ..agent.runtime.colony_scheduler import ColonyScheduler
-    from ..agent.runtime.loop import AgentRuntime
     from ..agent.runtime.frontdesk_service import FrontdeskService
+    from ..agent.runtime.loop import AgentRuntime
     from .consultation_setup import semantic_tool_provider
     from .test_agent import FakeLogger, settings
     from .test_capability_composition import Script, call

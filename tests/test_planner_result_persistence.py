@@ -5,8 +5,8 @@ import threading
 
 import pytest
 
-from plugin.plugins.neko_rimworld.workspace.journal import Journal
 from plugin.plugins.neko_rimworld.agent.runtime.frontdesk_service import FrontdeskService
+from plugin.plugins.neko_rimworld.workspace.journal import Journal
 
 
 def completion(start, cursor):

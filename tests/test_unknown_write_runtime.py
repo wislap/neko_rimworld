@@ -5,9 +5,9 @@ import pytest
 from ..agent.runtime.audit import AgentAuditLedger, AgentAuditRegistry
 from ..agent.runtime.loop import AgentRuntime
 from ..agent.runtime.session import AgentRunSession
-from ..message_contracts import AssistantTurn, ToolCall
 from ..agent.write.service import WriteService
 from ..game.bridge import BridgeQueryTimeout
+from ..message_contracts import AssistantTurn, ToolCall
 from ..tool_contracts import ReceiptLost, ToolSpec
 from .consultation_setup import semantic_tool_provider
 from .test_agent import FakeLogger, settings
@@ -73,8 +73,8 @@ async def test_unknown_write_stops_model_and_preserves_tool_result(code):
 ])
 def test_recording_issue_has_structured_effect(stage, mode, event, expected):
     from ..agent.runtime.audit import AgentAuditLedger
-    from ..agent.runtime.session import AgentRunSession
     from ..agent.runtime.loop import AgentRuntime
+    from ..agent.runtime.session import AgentRunSession
     session = AgentRunSession.create(ledger=AgentAuditLedger('q'), question='q')
     session.write_record_issue = stage
     session.write_record_context = {'stage': stage, 'mode': mode, **event}

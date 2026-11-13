@@ -439,8 +439,8 @@ async def test_activation_seeds_planner_authored_strategy(tmp_path):
 
     from plugin.plugins.neko_rimworld.agent.runtime.audit import AgentAuditRegistry
     from plugin.plugins.neko_rimworld.agent.runtime.colony_scheduler import ColonyScheduler
-    from plugin.plugins.neko_rimworld.agent.runtime.loop import AgentRuntime
     from plugin.plugins.neko_rimworld.agent.runtime.frontdesk_service import FrontdeskService
+    from plugin.plugins.neko_rimworld.agent.runtime.loop import AgentRuntime
 
     from .consultation_setup import semantic_tool_provider
     from .test_agent import FakeLogger, settings

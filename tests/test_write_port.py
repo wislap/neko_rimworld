@@ -4,7 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from plugin.plugins.neko_rimworld.game.bridge import BridgeNotConnected, BridgeNotDispatched, BridgeQueryTimeout, BridgeServer
+from plugin.plugins.neko_rimworld.game.bridge import (
+    BridgeNotConnected,
+    BridgeNotDispatched,
+    BridgeQueryTimeout,
+    BridgeServer,
+)
 from plugin.plugins.neko_rimworld.game.protocol import SessionDescriptor
 from plugin.plugins.neko_rimworld.game.write_port import BridgeGameWritePort
 from plugin.plugins.neko_rimworld.tool_contracts import ReceiptLost, ToolExecutionError

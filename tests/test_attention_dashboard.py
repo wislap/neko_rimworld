@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from ..workspace.journal import Journal
 from ..agent.runtime.frontdesk_service import FrontdeskService
+from ..workspace.journal import Journal
 from .test_attention_journal import CHOICES, native
 from .test_plugin import make_plugin
 
