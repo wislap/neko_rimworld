@@ -6,7 +6,6 @@ from typing import Any
 
 import httpx
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.model import model_requests
 from plugin.plugins.neko_rimworld.agent.model.model_client import (
     AgentModelSettings,

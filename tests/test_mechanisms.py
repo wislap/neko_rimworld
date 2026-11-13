@@ -6,7 +6,6 @@ import json
 import sqlite3
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.reference.mechanism_tools import compose_implementation_knowledge
 from plugin.plugins.neko_rimworld.game.query_tools import make_game_tools
 from plugin.plugins.neko_rimworld.mechanisms.store import MechanismStore

@@ -1,7 +1,6 @@
 import copy
 
 import pytest
-
 from plugin.plugins.neko_rimworld.workspace import construction
 from plugin.plugins.neko_rimworld.workspace.area_evidence import facts
 

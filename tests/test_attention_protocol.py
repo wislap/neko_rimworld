@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from plugin.plugins.neko_rimworld.game import protocol
 from plugin.plugins.neko_rimworld.game.bridge import BridgeServer
 from plugin.plugins.neko_rimworld.tests.test_bridge import TOKEN

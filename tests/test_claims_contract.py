@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.delivery.claims import check_claims
 from plugin.plugins.neko_rimworld.agent.delivery.handoff import SubmissionDraft
 

@@ -5,7 +5,6 @@ import json
 from dataclasses import replace
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.model.model_client import ModelClientError
 from plugin.plugins.neko_rimworld.agent.runtime import loop
 from plugin.plugins.neko_rimworld.agent.runtime.audit import AgentAuditLedger, AgentAuditRegistry

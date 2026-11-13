@@ -1,7 +1,6 @@
 import threading
 
 import pytest
-
 from plugin.plugins.neko_rimworld.game.bridge import BridgeEventGap, BridgeNotConnected, BridgeServer
 from plugin.plugins.neko_rimworld.game.protocol import (
     GAME_EVENT,

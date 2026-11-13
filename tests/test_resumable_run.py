@@ -5,7 +5,6 @@ import json
 from dataclasses import replace
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.runtime.audit import AgentAuditLedger, AgentAuditRegistry
 from plugin.plugins.neko_rimworld.agent.runtime.loop import AgentRuntime
 from plugin.plugins.neko_rimworld.agent.runtime.session import AgentRunSession

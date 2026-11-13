@@ -5,7 +5,6 @@ import copy
 from pathlib import Path
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.context.model_context import model_size
 from plugin.plugins.neko_rimworld.agent.runtime.tools import ToolRegistry
 from plugin.plugins.neko_rimworld.agent.world.object_identity import canonical_object_identity

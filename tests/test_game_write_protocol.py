@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from plugin.plugins.neko_rimworld.game.protocol import ValidationError, decode_envelope
 
 VECTORS = json.loads((Path(__file__).parent / "fixtures/colony-write-v1/vectors.json").read_text())

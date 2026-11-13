@@ -7,7 +7,6 @@ from plugin.plugins.neko_rimworld.message_contracts import AssistantTurn, ToolCa
 
 def test_named_schema_definitions_are_factored_without_changing_valid_calls():
     import jsonschema
-
     from plugin.plugins.neko_rimworld.schema_serialization import canonical, compact_schema
     ref = {'type':'object','additionalProperties':False,'required':['id'],
            'properties':{'id':{'type':'string','minLength':1,'maxLength':256},'map':{'type':'string','minLength':1,'maxLength':256}}}

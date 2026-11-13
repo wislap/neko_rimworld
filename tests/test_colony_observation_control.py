@@ -4,7 +4,6 @@ import asyncio
 import copy
 
 import pytest
-
 from plugin.plugins.neko_rimworld.game.bridge import BridgeProtocolError, BridgeServer
 from plugin.plugins.neko_rimworld.game.observation_contract import (
     validate_observation_request,

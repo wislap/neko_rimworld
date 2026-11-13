@@ -3,7 +3,6 @@ import copy
 
 import jsonschema
 import pytest
-
 from plugin.plugins.neko_rimworld.workspace.board import BoardError, check_revision, check_shape, entry_schema
 
 

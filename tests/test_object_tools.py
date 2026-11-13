@@ -2,7 +2,6 @@ import copy
 from types import SimpleNamespace
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.world.look_tools import read_look
 from plugin.plugins.neko_rimworld.agent.world.native_state import NativeStateReader
 from plugin.plugins.neko_rimworld.agent.world.object_identity import canonical_object_identity

@@ -1,7 +1,6 @@
 import threading
 
 import pytest
-
 from plugin.plugins.neko_rimworld.game.bridge import BridgeQueryTimeout, BridgeServer, BridgeUnsupportedError
 from plugin.plugins.neko_rimworld.game.protocol import (
     SESSION_OPEN,

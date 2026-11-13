@@ -4,7 +4,6 @@ import copy
 from types import SimpleNamespace
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.world.activity import SemanticActivityDataSource
 from plugin.plugins.neko_rimworld.agent.world.look_tools import read_look
 

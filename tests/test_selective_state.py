@@ -3,7 +3,6 @@ import json
 from types import SimpleNamespace
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.context.context_pruning import ContextPruner
 from plugin.plugins.neko_rimworld.agent.world.activity import make_activity_tool
 from plugin.plugins.neko_rimworld.agent.world.look_tools import read_look
@@ -88,7 +87,6 @@ async def test_matrix_preserves_full_three_by_three_capacity():
 
 def test_model_schema_preserves_matrix_and_rejects_withdrawn_batch():
     import jsonschema
-
     from plugin.plugins.neko_rimworld.agent.context.context_tools import model_tools
     tool=make_activity_tool(NativeInteraction())
     schema=model_tools([tool.schema()])[0]['function']['parameters']

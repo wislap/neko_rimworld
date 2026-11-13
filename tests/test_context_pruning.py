@@ -3,7 +3,6 @@ import copy
 import json
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.context.context_pruning import ContextPruner, prune
 from plugin.plugins.neko_rimworld.agent.context.model_context import make_pruner
 from plugin.plugins.neko_rimworld.agent.runtime.tools import ToolRegistry

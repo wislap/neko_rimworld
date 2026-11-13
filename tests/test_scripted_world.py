@@ -1,7 +1,6 @@
 """Write transactions on the scripted world: DESIGN 5.5 rules 1-6 and the three injected faults."""
 
 import pytest
-
 from plugin.plugins.neko_rimworld.tests.scripted_world import ScriptedGameWorld
 from plugin.plugins.neko_rimworld.tool_contracts import GameWritePort, ReceiptLost, ToolExecutionError
 

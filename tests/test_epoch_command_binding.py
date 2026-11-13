@@ -3,7 +3,6 @@ import threading
 from types import SimpleNamespace
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.runtime.frontdesk_service import FrontdeskService
 from plugin.plugins.neko_rimworld.tool_contracts import ToolExecutionError
 from plugin.plugins.neko_rimworld.workspace.board import review_marks

@@ -1,7 +1,6 @@
 import copy
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.world.construction_geometry import (
     ConstructionPlanError,
     compile_plan,

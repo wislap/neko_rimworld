@@ -3,7 +3,6 @@
 import inspect
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.delivery.handoff import (
     SubmissionDraft,
     make_submission_tool,

@@ -2,7 +2,6 @@ import hashlib
 from pathlib import Path
 
 import pytest
-
 from plugin.plugins.neko_rimworld.workspace import attention_policy
 from plugin.plugins.neko_rimworld.workspace.attention_policy import classify, load_policy, normalize_attention_event
 from plugin.plugins.neko_rimworld.workspace.cadence import project, validate_declaration

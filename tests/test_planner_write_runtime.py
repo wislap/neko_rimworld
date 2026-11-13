@@ -5,7 +5,6 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.runtime.audit import (
     AgentAuditCapacityError,
     AgentAuditLedger,

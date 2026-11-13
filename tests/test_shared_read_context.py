@@ -3,7 +3,6 @@ import json
 
 import jsonschema
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.context.context_pruning import ContextPruner, _record_view
 from plugin.plugins.neko_rimworld.schema_serialization import remove_redundant_constraints
 

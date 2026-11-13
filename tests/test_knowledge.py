@@ -6,7 +6,6 @@ from pathlib import Path
 from queue import Queue
 
 import pytest
-
 from plugin.plugins.neko_rimworld import knowledge
 from plugin.plugins.neko_rimworld.knowledge import IndexedKnowledgeView, KnowledgeLibrary
 

@@ -4,7 +4,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.write.service import WriteService, _substitute
 from plugin.plugins.neko_rimworld.game.query_tools import COLONY_OPERATIONS, make_game_tools
 from plugin.plugins.neko_rimworld.game.write_catalog import catalog_digest

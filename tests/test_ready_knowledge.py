@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.reference.wiki_tools import WikiStore
 from plugin.plugins.neko_rimworld.knowledge import KnowledgeLibrary
 

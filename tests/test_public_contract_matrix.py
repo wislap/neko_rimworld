@@ -5,7 +5,6 @@ import itertools
 
 import jsonschema
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.world.count_tools import count_spec
 from plugin.plugins.neko_rimworld.agent.world.look_tools import look_spec, read_look
 from plugin.plugins.neko_rimworld.agent.world.query_catalog import ASPECTS, KINDS

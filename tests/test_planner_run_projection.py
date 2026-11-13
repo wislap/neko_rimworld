@@ -1,7 +1,6 @@
 import copy
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.runtime.prompt import build_system_prompt
 from plugin.plugins.neko_rimworld.workspace.views import planner_run_input
 

@@ -6,7 +6,6 @@ import json
 from types import SimpleNamespace
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.delivery.handoff import SubmissionPatchError
 from plugin.plugins.neko_rimworld.agent.model.model_client import build_agent_model_settings
 from plugin.plugins.neko_rimworld.agent.runtime.audit import AgentAuditLedger, AgentAuditRegistry

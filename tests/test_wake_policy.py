@@ -1,5 +1,4 @@
 import pytest
-
 from plugin.plugins.neko_rimworld.workspace.journal import Journal
 
 

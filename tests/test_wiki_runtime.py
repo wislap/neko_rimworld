@@ -7,7 +7,6 @@ import json
 from dataclasses import replace
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.reference.wiki_tools import wiki_spec
 from plugin.plugins.neko_rimworld.agent.runtime.audit import AgentAuditLedger, AgentAuditRegistry
 from plugin.plugins.neko_rimworld.agent.runtime.loop import AgentRuntime

@@ -78,7 +78,6 @@ async def test_receipt_survives_storage_failure_and_flushes_before_admission(tmp
     from types import SimpleNamespace
 
     import pytest
-
     from plugin.plugins.neko_rimworld.workspace.budget import ColonyBudget
 
     class Service:
@@ -168,7 +167,6 @@ async def test_settlement_keeps_original_scope_and_full_response_on_failure(tmp_
     from types import SimpleNamespace
 
     import pytest
-
     from plugin.plugins.neko_rimworld.workspace.budget import ColonyBudget
 
     class Service:
@@ -204,7 +202,6 @@ async def test_cancelled_admission_records_not_dispatched(tmp_path):
     from types import SimpleNamespace
 
     import pytest
-
     from plugin.plugins.neko_rimworld.workspace.budget import ColonyBudget
 
     class Service:
@@ -249,7 +246,6 @@ async def test_failed_settlement_preserves_full_model_turn_and_input(tmp_path):
     from types import SimpleNamespace
 
     import pytest
-
     from plugin.plugins.neko_rimworld.agent.model.model_client import build_agent_model_settings
     from plugin.plugins.neko_rimworld.agent.model.model_requests import _canonical_hash, request_model
     from plugin.plugins.neko_rimworld.agent.runtime.audit import AgentAuditLedger
@@ -362,7 +358,6 @@ async def test_cancel_during_settlement_lock_keeps_receipt_and_private_data_in_s
     from types import SimpleNamespace
 
     import pytest
-
     from plugin.plugins.neko_rimworld.agent.model.model_client import build_agent_model_settings
     from plugin.plugins.neko_rimworld.agent.model.model_requests import request_model
     from plugin.plugins.neko_rimworld.agent.runtime.audit import AgentAuditLedger

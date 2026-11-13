@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.delivery.handoff import attach_agent_handoff
 from plugin.plugins.neko_rimworld.agent.model.model_client import AgentModelSettings, build_agent_model_settings
 from plugin.plugins.neko_rimworld.agent.runtime.audit import AgentAuditLedger, AgentAuditRegistry, AgentRunState

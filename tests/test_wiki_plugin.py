@@ -9,7 +9,6 @@ from queue import Queue
 from types import SimpleNamespace
 
 import pytest
-
 from plugin.plugins.neko_rimworld import NekoRimworldPlugin
 from plugin.plugins.neko_rimworld.game.query_tools import make_game_tools
 from plugin.plugins.neko_rimworld.knowledge import KnowledgeLibrary

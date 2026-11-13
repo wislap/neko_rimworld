@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pytest
 from jsonschema import Draft202012Validator
-
 from plugin.plugins.neko_rimworld.agent.context.model_context import make_pruner
 from plugin.plugins.neko_rimworld.agent.runtime.audit import AgentAuditLedger, AgentAuditRegistry
 from plugin.plugins.neko_rimworld.agent.runtime.loop import AgentRuntime

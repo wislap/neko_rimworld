@@ -5,7 +5,6 @@ import json
 
 import jsonschema
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.context.context_pruning import ContextPruner
 from plugin.plugins.neko_rimworld.agent.context.context_tools import model_tools
 from plugin.plugins.neko_rimworld.agent.world.look_tools import read_look

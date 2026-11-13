@@ -2,7 +2,6 @@ import copy
 import json
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.context.context_pruning import ContextPruner
 
 

@@ -3,7 +3,6 @@ import io
 import xml.etree.ElementTree as ET
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.world.construction_geometry import (
     ConstructionPlanError,
     compile_plan,

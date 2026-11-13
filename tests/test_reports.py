@@ -4,7 +4,6 @@ import asyncio
 import json
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.delivery.handoff import (
     SubmissionDraft,
     SubmissionPatchError,

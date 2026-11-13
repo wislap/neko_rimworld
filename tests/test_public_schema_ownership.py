@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.context.context_tools import model_tools
 from plugin.plugins.neko_rimworld.agent.delivery.handoff import SubmissionDraft, make_submission_tool
 from plugin.plugins.neko_rimworld.agent.world.native_state import state_contract

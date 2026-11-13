@@ -1,5 +1,4 @@
 import pytest
-
 from plugin.plugins.neko_rimworld.tool_contracts import ToolExecutionError
 from plugin.plugins.neko_rimworld.workspace.takeovers import TakeoverControl, return_capability
 

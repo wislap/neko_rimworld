@@ -3,7 +3,6 @@
 import sqlite3
 
 import pytest
-
 from plugin.plugins.neko_rimworld.workspace.board import (
     AuthorViolation,
     BoardError,

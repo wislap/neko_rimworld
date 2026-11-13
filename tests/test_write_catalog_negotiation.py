@@ -4,7 +4,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from plugin.plugins.neko_rimworld.game.observation import Observation
 from plugin.plugins.neko_rimworld.game.query_tools import CatalogTools
 

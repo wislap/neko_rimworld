@@ -5,7 +5,6 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.runtime.audit import AgentAuditRegistry
 from plugin.plugins.neko_rimworld.agent.runtime.loop import AgentRuntime
 from plugin.plugins.neko_rimworld.agent.world.semantic_tools import semantic_interaction_factory

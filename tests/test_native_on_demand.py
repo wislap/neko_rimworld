@@ -9,7 +9,6 @@ import copy
 from types import SimpleNamespace
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.world.native_state import state_contract
 from plugin.plugins.neko_rimworld.agent.world.semantic_tools import SemanticInteraction
 from plugin.plugins.neko_rimworld.tool_contracts import WORLD_OBSERVATION_VERSION

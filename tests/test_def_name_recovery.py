@@ -10,7 +10,6 @@ import copy
 from types import SimpleNamespace
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.world.def_names import (
     DefNameResolver,
     tokens,

@@ -8,7 +8,6 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.context.situation_context import compile_situation
 from plugin.plugins.neko_rimworld.agent.delivery.claims import check_claims
 from plugin.plugins.neko_rimworld.agent.runtime.audit import AgentAuditLedger, AgentAuditRegistry

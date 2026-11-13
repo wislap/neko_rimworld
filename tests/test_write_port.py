@@ -3,7 +3,6 @@ import threading
 from types import SimpleNamespace
 
 import pytest
-
 from plugin.plugins.neko_rimworld.game.bridge import (
     BridgeNotConnected,
     BridgeNotDispatched,

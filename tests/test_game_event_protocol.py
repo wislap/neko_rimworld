@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from plugin.plugins.neko_rimworld.game import protocol
 
 VECTORS = json.loads((Path(__file__).parent / "fixtures/colony-events-v1/vectors.json").read_text(encoding="utf-8"))

@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.delivery.handoff import SubmissionDraft, SubmissionPatchError
 from plugin.plugins.neko_rimworld.agent.model.model_client import (
     OpenAICompatibleModelClient,

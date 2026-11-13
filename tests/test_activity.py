@@ -4,7 +4,6 @@ import json
 from types import SimpleNamespace
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.runtime.tools import ToolRegistry
 from plugin.plugins.neko_rimworld.agent.world.activity import make_activity_tool
 from plugin.plugins.neko_rimworld.agent.world.look_tools import read_look

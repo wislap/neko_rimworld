@@ -1,7 +1,6 @@
 """Business contracts replay through the actual append-only EventLedger."""
 
 import pytest
-
 from plugin.plugins.neko_rimworld.workspace import construction, observations, policy_scope, resource_allocation
 from plugin.plugins.neko_rimworld.workspace.ledger import EventLedger
 

@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from plugin.plugins.neko_rimworld import NekoRimworldPlugin
 from plugin.plugins.neko_rimworld.agent.runtime.audit import MAX_AUDIT_DEPTH, AgentAuditRegistry, audit_safe
 from plugin.plugins.neko_rimworld.agent.runtime.loop import AgentRuntime

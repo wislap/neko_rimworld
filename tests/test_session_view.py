@@ -4,7 +4,6 @@ import json
 import sqlite3
 
 import pytest
-
 from plugin.plugins.neko_rimworld.serialization import canonical
 from plugin.plugins.neko_rimworld.workspace.journal import Journal
 from plugin.plugins.neko_rimworld.workspace.session_view import (

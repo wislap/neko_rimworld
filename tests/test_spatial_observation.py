@@ -2,7 +2,6 @@ import copy
 import json
 
 import pytest
-
 from plugin.plugins.neko_rimworld.agent.world.construction_geometry import compile_plan, inspect_layout
 from plugin.plugins.neko_rimworld.agent.world.spatial_rendering import build_render_spec, render_scene_svg
 from plugin.plugins.neko_rimworld.game import protocol as wire
