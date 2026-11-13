@@ -1,0 +1,21 @@
+{
+  "version": "vitals_policy.v1",
+  "source": "rimworld-bench/planning/V3.5-COLONY-VITALS-DESIGN.md §7.2; defaults set after the 2026-11-05 offline back-computation",
+  "food": {
+    "days_edible_watch": 2.0,
+    "days_edible_danger": 1.0,
+    "unroofed_share_watch": 0.5,
+    "unroofed_hit_points_watch": 0.5
+  },
+  "life": {
+    "danger_counts": ["downed", "life_threatening"],
+    "watch_counts": ["starving", "needs_tend"],
+    "watch_bleeding": true
+  },
+  "shelter": {
+    "watch_counts": ["without_bed", "beds_unroofed", "uncomfortable_temperature"]
+  },
+  "labor": {
+    "danger_uncovered_work": true
+  }
+}

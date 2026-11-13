@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import json
 
 from ..model.tokenization import count_tokens
+from .native_background import compact_json as _json
+from .native_background import unavailable_background
 
 TOKEN_BUDGET = 1_000
+SITUATION_HEADER = "Game situation snapshot (sampled background data):\n"
 SECTIONS = ("threats", "conditions", "alerts", "quests", "events")
-
-
-def _json(value):
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
 def _items(data):
@@ -124,7 +122,7 @@ def compile_situation(snapshot):
                 view["sections"][name]["omitted_items"] = omitted
             else:
                 view["sections"][name].pop("omitted_items", None)
-        return "Game situation snapshot (sampled background data):\n" + _json(view)
+        return SITUATION_HEADER + _json(view)
 
     # Keep every section visible and retain native order within each section.
     # A long high-priority/new entry gets a small traceable fact before omission;
@@ -184,20 +182,4 @@ def compile_situation(snapshot):
 
 
 def unavailable_situation(code, message, *, observation=None):
-    """A disclosed source failure, never a fabricated empty or current snapshot."""
-    failure = {"status": "unavailable", "error_code": code, "message": message}
-    content = "Game situation snapshot (sampled background data):\n" + _json(failure)
-    # Native errors are bounded on the wire, but disclose only their stable code
-    # if an exceptional diagnostic cannot fit. Full error stays in the audit.
-    if count_tokens(content)[0] > TOKEN_BUDGET:
-        failure.pop("message")
-        content = "Game situation snapshot (sampled background data):\n" + _json(failure)
-    tokens, method = count_tokens(content)
-    return {
-        **failure,
-        "observation_id": observation.get("observation_id") if observation else None,
-        "raw_sha256": hashlib.sha256(_json(observation).encode()).hexdigest() if observation else None,
-        "projection_sha256": hashlib.sha256(content.encode()).hexdigest(),
-        "cache_hit": False, "sample": None, "checked_tick": None,
-        "content": content, "tokens": tokens, "tokenizer": method, "token_budget": TOKEN_BUDGET,
-    }
+    return unavailable_background(SITUATION_HEADER, TOKEN_BUDGET, code, message, observation=observation)

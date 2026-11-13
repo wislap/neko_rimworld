@@ -8,19 +8,21 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+
 from plugin.plugins.neko_rimworld.agent.context.situation_context import compile_situation
 from plugin.plugins.neko_rimworld.agent.delivery.claims import check_claims
 from plugin.plugins.neko_rimworld.agent.runtime.audit import AgentAuditLedger, AgentAuditRegistry
+from plugin.plugins.neko_rimworld.agent.runtime.frontdesk_service import FrontdeskService
 from plugin.plugins.neko_rimworld.agent.runtime.loop import AgentRuntime
 from plugin.plugins.neko_rimworld.agent.runtime.session import AgentRunSession
 from plugin.plugins.neko_rimworld.agent.world.semantic_tools import semantic_interaction_factory
+from plugin.plugins.neko_rimworld.game.native_snapshot import NativeSnapshot
 from plugin.plugins.neko_rimworld.game.observation import Observation
 from plugin.plugins.neko_rimworld.game.protocol import QUERY_RESULT, Payload, SessionDescriptor, make_envelope
 from plugin.plugins.neko_rimworld.game.query_tools import make_game_tools
-from plugin.plugins.neko_rimworld.game.situation import SituationProvider, SituationSnapshot
+from plugin.plugins.neko_rimworld.game.situation import SituationProvider
 from plugin.plugins.neko_rimworld.message_contracts import AssistantTurn, ToolCall
 from plugin.plugins.neko_rimworld.tool_contracts import ToolExecutionError
-from plugin.plugins.neko_rimworld.agent.runtime.frontdesk_service import FrontdeskService
 
 from .consultation_setup import consultation_setup
 from .test_runtime_repair import LOG, settings, submit
@@ -73,9 +75,9 @@ def test_projection_budget_direct_quest_sources_unknown_and_raw_retention():
         "conditions": [{"id": str(i), "label": "Conditions " * 30} for i in range(100)],
     })
     original = observation.to_dict()
-    compiled = compile_situation(SituationSnapshot(observation, True, 20))
+    compiled = compile_situation(NativeSnapshot(observation, True, 20))
     assert compiled["tokens"] <= 1_000 and compiled["cache_hit"]
-    assert compiled == compile_situation(SituationSnapshot(observation, True, 20))
+    assert compiled == compile_situation(NativeSnapshot(observation, True, 20))
     assert observation.value == original
     view = json.loads(compiled["content"].split("\n", 1)[1])
     quest = view["sections"]["quests"]["items"][0]
@@ -218,7 +220,7 @@ def test_snapshot_scope_describes_sampled_map_and_keeps_native_order():
     observation = native(items={"alerts": [{"id": "urgent", "label": "Critical", "priority": "Critical"},
                                            {"id": "minor", "label": "Low", "priority": "Low"}]})
     observation.value["response"]["payload"]["data"]["sections"]["alerts"]["scope"] = "Global cross-map UI cache."
-    compiled = compile_situation(SituationSnapshot(observation, True, 99))
+    compiled = compile_situation(NativeSnapshot(observation, True, 99))
     view = json.loads(compiled["content"].split("\n", 1)[1])
     assert view["map_at_sample"]["id"] == "Map_1" and "map" not in view
     assert "cross-map" in view["sections"]["alerts"]["scope"]
@@ -271,7 +273,7 @@ def test_partial_source_reasons_and_error_reach_model_background():
     alerts = observation.value["response"]["payload"]["data"]["sections"]["alerts"]
     alerts.update(status="partial", reasons=["native_report_not_observed"],
                   error={"code": "unsupported_native_layout", "message": "Unsupported report."})
-    compiled = compile_situation(SituationSnapshot(observation, False, 10))
+    compiled = compile_situation(NativeSnapshot(observation, False, 10))
     view = json.loads(compiled["content"].split("\n", 1)[1])
     assert view["sections"]["alerts"]["reasons"] == ["native_report_not_observed"]
     assert view["sections"]["alerts"]["error"]["code"] == "unsupported_native_layout"
@@ -317,7 +319,7 @@ def test_long_native_text_never_reverses_priority_or_recency(length, name, leadi
     rows = [{**leading, "label": "危" * length}, trailing]
     observation = native(items={name: rows})
     original = observation.to_dict()
-    compiled = compile_situation(SituationSnapshot(observation, False, 10))
+    compiled = compile_situation(NativeSnapshot(observation, False, 10))
     view = json.loads(compiled["content"].split("\n", 1)[1])
     selected = view["sections"][name]["items"]
     assert compiled["tokens"] <= 1_000
@@ -332,7 +334,7 @@ def test_oversized_entry_keeps_traceable_native_cues_and_stops_before_skipping_s
     rows = [{"id": str(index), "label": "Urgent " * 12, "priority": "Critical" if index == 0 else "Low",
              "large_native_detail": "原始事实" * 1200} for index in range(30)]
     observation = native(items={"alerts": rows})
-    compiled = compile_situation(SituationSnapshot(observation, False, 10))
+    compiled = compile_situation(NativeSnapshot(observation, False, 10))
     selected = json.loads(compiled["content"].split("\n", 1)[1])["sections"]["alerts"]
     assert selected["items"][0]["id"] == "0"
     assert selected["items"][0]["priority"] == "Critical"
@@ -352,7 +354,7 @@ def test_verbose_early_columns_leave_room_for_later_native_leading_entries():
         "quests": [{"id": "Quest_1", "label": "Ongoing", "state": "Ongoing", "description": "任务" * 200}],
         "events": [{"id": "newest", "label": "Recent event", "created_tick": 10}],
     })
-    compiled = compile_situation(SituationSnapshot(observation, False, 10))
+    compiled = compile_situation(NativeSnapshot(observation, False, 10))
     sections = json.loads(compiled["content"].split("\n", 1)[1])["sections"]
     assert compiled["tokens"] <= 1_000
     assert all(sections[name]["items"] for name in ("threats", "conditions", "alerts", "quests", "events"))
@@ -372,7 +374,7 @@ def test_grouped_quest_scope_does_not_apply_native_current_quest_filter_to_event
     data["map"]["source"] = "Verse.Map"
     data["clock"]["source"] = "Verse.TickManager"
     original = observation.to_dict()
-    compiled = compile_situation(SituationSnapshot(observation, False, 10))
+    compiled = compile_situation(NativeSnapshot(observation, False, 10))
     view = json.loads(compiled["content"].split("\n", 1)[1])
     quests = view["sections"]["quests"]
     assert "scope" not in quests and quests["native_scope"] == native_scope
